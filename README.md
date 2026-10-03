@@ -5,6 +5,12 @@ account's weekly, Fable and 5-hour usage, picks the account whose weekly window 
 soonest (keeping reserves on accounts that have one), and applies the choice to CPA through
 the Management API (`priority` for the main bucket, `excluded_models` for Fable).
 
+While the chosen account's 5-hour window is running, every other usable account's 5-hour
+window is started with a 1-token Haiku request (`[anchor]` in the config), so a switch lands
+on a window that resets sooner. If a probe shows Haiku did not start the shared window, that
+account switches to anchoring with `fallback_model`. Design:
+`docs/superpowers/specs/2026-10-03-session-anchoring-design.md`.
+
 Design: `docs/superpowers/specs/2026-10-03-cpa-balancer-design.md`
 
 ## Commands
