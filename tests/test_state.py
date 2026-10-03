@@ -21,3 +21,14 @@ def test_round_trip(tmp_path):
     save_state(state, path)
     assert load_state(path) == state
     assert not path.with_suffix(".tmp").exists()
+
+
+def test_round_trip_anchor_fields(tmp_path):
+    from cpa_balancer.models import SESSION, Reading
+    path = tmp_path / "state.json"
+    state = State(probes={G: ProbeState(last_anchor=NOW, anchor_retry_after=NOW + timedelta(minutes=5),
+                                        anchor_main_model=True,
+                                        anchor_reading=Reading(0, None, NOW, "anchor")),
+                          W: ProbeState(readings={SESSION: Reading(0, None, NOW, "probe")})})
+    save_state(state, path)
+    assert load_state(path) == state

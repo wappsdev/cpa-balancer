@@ -1,6 +1,6 @@
 """Config file loading."""
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_CONFIG = Path.home() / ".config" / "cpa-balancer" / "config.toml"
@@ -28,6 +28,13 @@ class Thresholds:
 
 
 @dataclass(frozen=True)
+class AnchorConfig:
+    enabled: bool = True
+    model: str = "claude-haiku-4-5-20251001"
+    fallback_model: str = "claude-sonnet-5-5"
+
+
+@dataclass(frozen=True)
 class Config:
     enabled: bool
     mode: str
@@ -41,6 +48,7 @@ class Config:
     baseline: dict[str, int]
     state_path: Path
     log_path: Path
+    anchor: AnchorConfig = field(default_factory=AnchorConfig)
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> Config:
@@ -74,4 +82,5 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Config:
         baseline=baseline,
         state_path=Path(paths.get("state", STATE_DIR / "state.json")).expanduser(),
         log_path=Path(paths.get("log", STATE_DIR / "balancer.log")).expanduser(),
+        anchor=AnchorConfig(**data.get("anchor", {})),
     )

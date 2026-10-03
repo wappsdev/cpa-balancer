@@ -68,3 +68,13 @@ def test_requires_baseline_for_every_account(tmp_path):
 def test_requires_main_models(tmp_path):
     with pytest.raises(ConfigError, match="main"):
         load_config(write(tmp_path, VALID.replace('models = ["claude-opus-5-5"]', "models = []")))
+
+
+def test_anchor_section_defaults_and_overrides(tmp_path):
+    cfg = load_config(write(tmp_path, VALID))
+    assert cfg.anchor.enabled is True
+    assert cfg.anchor.model == "claude-haiku-4-5-20251001"
+    assert cfg.anchor.fallback_model == "claude-sonnet-5-5"
+    cfg = load_config(write(tmp_path, VALID + '\n[anchor]\nenabled = false\nmodel = "m"\n'))
+    assert cfg.anchor.enabled is False
+    assert cfg.anchor.model == "m"

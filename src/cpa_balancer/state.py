@@ -12,6 +12,10 @@ class ProbeState:
     last_probe: datetime | None = None
     retry_after: datetime | None = None
     readings: dict[str, Reading] = field(default_factory=dict)
+    last_anchor: datetime | None = None
+    anchor_retry_after: datetime | None = None
+    anchor_main_model: bool = False
+    anchor_reading: Reading | None = None
 
 
 @dataclass
@@ -46,9 +50,13 @@ def load_state(path: Path) -> State:
         active={b: (v["account"], _dt(v["since"])) for b, v in raw.get("active", {}).items()},
         probes={
             account: ProbeState(
-                _dt(p.get("last_probe")),
-                _dt(p.get("retry_after")),
-                {b: _reading_from_json(r) for b, r in p.get("readings", {}).items()},
+                last_probe=_dt(p.get("last_probe")),
+                retry_after=_dt(p.get("retry_after")),
+                readings={b: _reading_from_json(r) for b, r in p.get("readings", {}).items()},
+                last_anchor=_dt(p.get("last_anchor")),
+                anchor_retry_after=_dt(p.get("anchor_retry_after")),
+                anchor_main_model=bool(p.get("anchor_main_model", False)),
+                anchor_reading=_reading_from_json(p["anchor_reading"]) if p.get("anchor_reading") else None,
             )
             for account, p in raw.get("probes", {}).items()
         },
@@ -65,6 +73,10 @@ def save_state(state: State, path: Path) -> None:
                 "last_probe": _iso(p.last_probe),
                 "retry_after": _iso(p.retry_after),
                 "readings": {b: _reading_to_json(r) for b, r in p.readings.items()},
+                "last_anchor": _iso(p.last_anchor),
+                "anchor_retry_after": _iso(p.anchor_retry_after),
+                "anchor_main_model": p.anchor_main_model,
+                "anchor_reading": _reading_to_json(p.anchor_reading) if p.anchor_reading else None,
             }
             for account, p in state.probes.items()
         },
