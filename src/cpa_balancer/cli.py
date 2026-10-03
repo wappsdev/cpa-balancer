@@ -60,6 +60,7 @@ def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prob
         return RunResult(None, {}, todo, _write(client, todo, cfg, dry_run))
 
     creds = {c["name"]: c for c in client.credentials() if c.get("name") in managed}
+    weekly_buckets = (MAIN, FABLE) if cfg.fable_models else (MAIN,)
 
     def snapshots() -> dict[str, AccountSnapshot]:
         return {
@@ -72,9 +73,11 @@ def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prob
         if dry_run:
             return False
         ps = state.probes.setdefault(account, ProbeState())
-        observed = [r.observed_at for r in snap.readings.values() if r.source != "estimate"]
+        # Data is only as fresh as the oldest weekly bucket; a missing bucket counts as stale.
+        weekly = [snap.readings.get(b) for b in weekly_buckets]
+        reference = None if None in weekly else min(r.observed_at for r in weekly)
         if not due(now=now, last_probe=ps.last_probe, retry_after=ps.retry_after,
-                   newest_observed=max(observed, default=None),
+                   newest_observed=reference,
                    reset_estimated=any(r.source == "estimate" for r in snap.readings.values()),
                    switching_to=switching_to):
             return False

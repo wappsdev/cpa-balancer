@@ -40,7 +40,8 @@ def no_probe(path, now):
     raise AssertionError(f"unexpected probe of {path.name}")
 
 
-FRESH = [cred(W, main=10, main_reset_h=140), cred(G, main=52, main_reset_h=90)]
+FRESH = [cred(W, main=10, main_reset_h=140, fable=1, fable_reset_h=140),
+         cred(G, main=52, main_reset_h=90, fable=0, fable_reset_h=90)]
 
 
 def test_apply_mode_writes_priorities_and_is_idempotent(tmp_path):
@@ -66,7 +67,8 @@ def test_shadow_mode_decides_but_never_writes(tmp_path):
 
 def test_stale_account_is_probed_and_probe_data_used(tmp_path):
     cfg = setup(tmp_path)
-    creds = [cred(W, main=10, main_reset_h=140), cred(G, main=52, main_reset_h=90, age_min=120)]
+    creds = [cred(W, main=10, main_reset_h=140, fable=1, fable_reset_h=140),
+             cred(G, main=52, main_reset_h=90, fable=0, fable_reset_h=90, age_min=120)]
     probed = []
 
     def prober(path, now):
@@ -77,6 +79,24 @@ def test_stale_account_is_probed_and_probe_data_used(tmp_path):
     assert probed == [G]
     assert result.decision.main.account == W          # fresh probe shows G past its 85 % reserve cap
     assert load_state(cfg.state_path).probes[G].last_probe == NOW
+
+
+def test_missing_weekly_bucket_triggers_probe_even_with_fresh_session_data(tmp_path):
+    cfg = setup(tmp_path)
+    w = cred(W, main=10, main_reset_h=140, fable=1, fable_reset_h=140)
+    g = cred(G)                                   # only a fresh credential-level 5h reading, no weekly data
+    g["quota"] = {"observed_at": NOW.isoformat(),
+                  "signals": {"Anthropic-Ratelimit-Unified-5h-Utilization": "0.0",
+                              "Anthropic-Ratelimit-Unified-5h-Reset": str(int(NOW.timestamp()) + 3600)}}
+    probed = []
+
+    def prober(path, now):
+        probed.append(path.name)
+        return ProbeResult({MAIN: reading(52, 90, age_min=0), "fable": reading(0, 90, age_min=0)}, None, None)
+
+    result = run_cycle(cfg, FakeClient(cfg, [w, g]), NOW, prober=prober)
+    assert probed == [G]
+    assert result.decision.main.account == G      # resets sooner than W once its data is known
 
 
 def test_dry_run_neither_probes_nor_saves(tmp_path):
