@@ -4,13 +4,14 @@ import fcntl
 import json
 import logging
 import sys
-from dataclasses import dataclass
+import tomllib
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from .apply import Patch, baseline_patches, patches
-from .config import DEFAULT_CONFIG, Config, load_config
+from .config import DEFAULT_CONFIG, Config, ConfigError, load_config
 from .cpa_client import CpaClient, CpaError, management_key
 from .models import FABLE, MAIN, SESSION, AccountSnapshot, Decision
 from .policy import decide
@@ -27,6 +28,16 @@ class RunResult:
     snapshots: dict[str, AccountSnapshot]
     patches: list[Patch]
     applied: bool
+
+
+def _present(cfg: Config) -> Config:
+    """Drop accounts whose auth file is gone (e.g. re-login renamed it) so one cycle cannot crash."""
+    missing = {a.auth_file for a in cfg.accounts if not (cfg.auth_dir / a.auth_file).exists()}
+    if not missing:
+        return cfg
+    log.error("auth file missing, account skipped: %s", ", ".join(sorted(missing)))
+    return replace(cfg, accounts=tuple(a for a in cfg.accounts if a.auth_file not in missing),
+                   baseline={k: v for k, v in cfg.baseline.items() if k not in missing})
 
 
 def _disk_fields(cfg: Config) -> dict[str, dict]:
@@ -52,6 +63,7 @@ def _write(client, todo: list[Patch], cfg: Config, dry_run: bool) -> bool:
 
 
 def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prober=probe) -> RunResult:
+    cfg = _present(cfg)
     state = load_state(cfg.state_path)
     managed = [a.auth_file for a in cfg.accounts]
     disk = _disk_fields(cfg)
@@ -117,6 +129,7 @@ def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prob
 
 
 def set_disabled(cfg: Config, client, disabled: bool) -> list[Patch]:
+    cfg = _present(cfg)
     state = load_state(cfg.state_path)
     state.disabled = disabled
     save_state(state, cfg.state_path)
@@ -175,7 +188,11 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_parser(name)
     args = parser.parse_args(argv)
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except (ConfigError, FileNotFoundError, tomllib.TOMLDecodeError) as e:
+        print(f"cpa-balancer: config error: {e}", file=sys.stderr)
+        return 2
     _setup_logging(cfg, interactive=sys.stderr.isatty())
     lock_path = cfg.state_path.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)

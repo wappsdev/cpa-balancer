@@ -1,6 +1,6 @@
 import json
 
-from cpa_balancer.cli import format_status, run_cycle, set_disabled
+from cpa_balancer.cli import format_status, main, run_cycle, set_disabled
 from cpa_balancer.models import MAIN
 from cpa_balancer.state import load_state
 from cpa_balancer.usage_probe import ProbeResult
@@ -127,3 +127,24 @@ def test_status_explains_choice(tmp_path):
     assert f"main  -> {G}" in text
     assert "earliest reset" in text
     assert f"{W} (reserve=no)" in text
+
+
+def test_missing_auth_file_skips_that_account_instead_of_crashing(tmp_path, caplog):
+    cfg = setup(tmp_path)
+    (cfg.auth_dir / G).unlink()
+    client = FakeClient(cfg, FRESH)
+    with caplog.at_level("ERROR", logger="cpa_balancer"):
+        result = run_cycle(cfg, client, NOW, prober=no_probe)
+    assert result.decision.main.account == W
+    assert client.patched == [(W, {"priority": 100})]
+    assert any(G in r.getMessage() for r in caplog.records)
+
+
+def test_config_errors_exit_with_a_one_line_message(tmp_path, capsys):
+    assert main(["--config", str(tmp_path / "missing.toml"), "status"]) == 2
+    bad = tmp_path / "bad.toml"
+    bad.write_text("mode = [")
+    assert main(["--config", str(bad), "status"]) == 2
+    err = capsys.readouterr().err
+    assert err.count("cpa-balancer: config error:") == 2
+    assert "Traceback" not in err
