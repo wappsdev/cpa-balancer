@@ -96,3 +96,60 @@ def test_cooldown_in_cpa_blocks_only_that_bucket():
 def test_disabled_account_is_not_chosen():
     d = run([snap(W, main=reading(10, 140)), snap(G, main=reading(52, 90), unavailable=True)])
     assert d.main.account == W
+
+
+from dataclasses import replace  # noqa: E402
+
+from cpa_balancer.config import AnchorConfig  # noqa: E402
+from cpa_balancer.models import SESSION, Reading  # noqa: E402
+from cpa_balancer.policy import anchor_did_not_start_window, anchor_targets  # noqa: E402
+
+CLOSED = Reading(0, None, NOW, "probe")
+
+
+def targets(snaps, last=None, retry=None, cfg=CFG):
+    by_name = {s.auth_file: s for s in snaps}
+    decision = decide(by_name, cfg, NOW, {}, ())
+    return anchor_targets(decision, by_name, cfg, NOW, last or {}, retry or {})
+
+
+ACTIVE_G = snap(G, main=reading(52, 90), session=reading(30, 3))
+
+
+def test_anchors_idle_account_while_active_window_runs():
+    assert targets([ACTIVE_G, snap(W, main=reading(10, 140))]) == [W]
+    assert targets([ACTIVE_G, snap(W, main=reading(10, 140), session=CLOSED)]) == [W]
+
+
+def test_no_anchor_when_other_window_already_runs():
+    assert targets([ACTIVE_G, snap(W, main=reading(10, 140), session=reading(5, 2))]) == []
+
+
+def test_no_anchor_without_work_on_the_active_account():
+    assert targets([snap(G, main=reading(52, 90), session=CLOSED), snap(W, main=reading(10, 140))]) == []
+    assert targets([snap(G, main=reading(52, 90)), snap(W, main=reading(10, 140))]) == []
+
+
+def test_no_anchor_on_weekly_exhausted_account():
+    assert targets([ACTIVE_G, snap(W, main=reading(99.5, 140))]) == []
+
+
+def test_anchor_spacing_and_retry_after():
+    idle = snap(W, main=reading(10, 140))
+    assert targets([ACTIVE_G, idle], last={W: NOW - timedelta(minutes=9)}) == []
+    assert targets([ACTIVE_G, idle], last={W: NOW - timedelta(minutes=10)}) == [W]
+    assert targets([ACTIVE_G, idle], retry={W: NOW + timedelta(minutes=1)}) == []
+
+
+def test_anchor_disabled_in_config():
+    off = replace(CFG, anchor=AnchorConfig(enabled=False))
+    assert targets([ACTIVE_G, snap(W, main=reading(10, 140))], cfg=off) == []
+
+
+def test_detects_that_haiku_did_not_start_the_window():
+    anchored = Reading(0, NOW + timedelta(hours=3), NOW - timedelta(hours=2), "anchor")
+    assert anchor_did_not_start_window(CLOSED, anchored, NOW - timedelta(hours=2)) is True
+    assert anchor_did_not_start_window(reading(1, 3, age_min=0), anchored, NOW - timedelta(hours=2)) is False
+    expired = Reading(0, NOW - timedelta(minutes=1), NOW - timedelta(hours=5), "anchor")
+    assert anchor_did_not_start_window(CLOSED, expired, NOW - timedelta(hours=5)) is False
+    assert anchor_did_not_start_window(CLOSED, None, None) is False

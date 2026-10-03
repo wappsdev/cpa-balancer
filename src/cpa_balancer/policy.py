@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 
 from .config import Account, Config, Thresholds
-from .models import FABLE, MAIN, SESSION, AccountSnapshot, Choice, Decision
+from .models import FABLE, MAIN, SESSION, AccountSnapshot, Choice, Decision, Reading
 
 FAR = timedelta(hours=48)
 NEAR = timedelta(hours=12)
@@ -88,3 +88,46 @@ def decide(snaps: dict[str, AccountSnapshot], cfg: Config, now: datetime,
         order = (main.account, *rest)
     warnings = tuple(f"{bucket}: {c.reason}" for bucket, c in ((MAIN, main), (FABLE, fable)) if c.relaxed)
     return Decision(main, fable, order, warnings)
+
+
+ANCHOR_SPACING = timedelta(minutes=10)
+
+
+def _window_running(r: Reading | None, now: datetime) -> bool:
+    return r is not None and r.resets_at is not None and r.resets_at > now
+
+
+def anchor_targets(decision: Decision, snaps: dict[str, AccountSnapshot], cfg: Config, now: datetime,
+                   last_anchor: dict[str, datetime | None],
+                   retry_after: dict[str, datetime | None]) -> list[str]:
+    """Accounts whose 5-hour window should be started now (see spec: anchoring rule)."""
+    active = decision.main.account
+    if not cfg.anchor.enabled or active is None or active not in snaps:
+        return []
+    if not _window_running(snaps[active].readings.get(SESSION), now):
+        return []  # no work going on
+    out = []
+    for account in cfg.accounts:
+        name = account.auth_file
+        snap = snaps.get(name)
+        if name == active or snap is None or snap.unavailable:
+            continue
+        if _window_running(snap.readings.get(SESSION), now):
+            continue
+        weekly = snap.readings.get(MAIN)
+        if weekly is None or weekly.util >= cfg.thresholds.final_cap:
+            continue
+        last, wait = last_anchor.get(name), retry_after.get(name)
+        if (last is not None and now - last < ANCHOR_SPACING) or (wait is not None and now < wait):
+            continue
+        out.append(name)
+    return out
+
+
+def anchor_did_not_start_window(probe_session: Reading | None, anchor_reading: Reading | None,
+                                last_anchor: datetime | None) -> bool:
+    """A probe taken after an anchor shows a closed window that the anchor said would still run."""
+    return (probe_session is not None and probe_session.resets_at is None
+            and last_anchor is not None and probe_session.observed_at > last_anchor
+            and anchor_reading is not None and anchor_reading.resets_at is not None
+            and anchor_reading.resets_at > probe_session.observed_at)
