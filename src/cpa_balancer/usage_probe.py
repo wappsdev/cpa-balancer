@@ -28,11 +28,12 @@ def parse_usage(body: dict, now: datetime) -> dict[str, Reading]:
         kind = limit.get("kind")
         model = ((limit.get("scope") or {}).get("model") or {}).get("display_name") or ""
         bucket = FABLE if kind == "weekly_scoped" and model.lower() == "fable" else KIND_TO_BUCKET.get(kind)
-        if bucket is None or limit.get("percent") is None or not limit.get("resets_at"):
+        resets = limit.get("resets_at")
+        if bucket is None or limit.get("percent") is None or (not resets and bucket != SESSION):
             continue
         out[bucket] = Reading(
             util=float(limit["percent"]),
-            resets_at=datetime.fromisoformat(limit["resets_at"]),
+            resets_at=datetime.fromisoformat(resets) if resets else None,  # None: no running session window
             observed_at=now,
             source="probe",
         )

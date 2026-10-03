@@ -81,3 +81,11 @@ def test_probe_429_records_retry_after_without_leaking_token(tmp_path):
 def test_probe_without_token(tmp_path):
     result = probe(_auth(tmp_path, token=""), NOW, lambda req, timeout: None)
     assert result.error == "no access_token in auth file"
+
+
+def test_parse_usage_reads_a_closed_session_window():
+    body = {"limits": [{"kind": "session", "percent": 0, "resets_at": None, "is_active": False}]}
+    r = parse_usage(body, NOW)[SESSION]
+    assert r.util == 0
+    assert r.resets_at is None
+    assert r.source == "probe"

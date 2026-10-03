@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from .models import FABLE, MAIN, SESSION, AccountSnapshot, Reading
 
 PREFIX = "Anthropic-Ratelimit-Unified-"
-PERIODS = {MAIN: timedelta(days=7), FABLE: timedelta(days=7), SESSION: timedelta(hours=5)}
+PERIODS = {MAIN: timedelta(days=7), FABLE: timedelta(days=7)}
 
 
 def _reading(signals: dict, window: str, observed_at: datetime) -> Reading | None:
@@ -53,16 +53,18 @@ def merge(*sources: dict[str, Reading]) -> dict[str, Reading]:
 
 
 def roll_forward(readings: dict[str, Reading], now: datetime) -> dict[str, Reading]:
-    """A window whose reset time has passed is empty; estimate its next reset."""
+    """Weekly windows run on a fixed schedule; a 5-hour window only runs after use."""
     out: dict[str, Reading] = {}
     for bucket, r in readings.items():
-        if r.resets_at > now:
+        if r.resets_at is None or r.resets_at > now:
             out[bucket] = r
-            continue
-        resets_at = r.resets_at
-        while resets_at <= now:
-            resets_at += PERIODS[bucket]
-        out[bucket] = Reading(util=0.0, resets_at=resets_at, observed_at=now, source="estimate")
+        elif bucket == SESSION:
+            out[bucket] = Reading(util=0.0, resets_at=None, observed_at=now, source="estimate")
+        else:
+            resets_at = r.resets_at
+            while resets_at <= now:
+                resets_at += PERIODS[bucket]
+            out[bucket] = Reading(util=0.0, resets_at=resets_at, observed_at=now, source="estimate")
     return out
 
 

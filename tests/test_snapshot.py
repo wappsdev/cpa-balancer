@@ -53,3 +53,16 @@ def test_build_snapshot_merges_probe_data_and_cooldowns():
     assert snapshot.readings[MAIN].util == 58     # probe is newer than the 90-min-old header
     assert snapshot.cooling_models == frozenset({MAIN_MODEL})
     assert snapshot.unavailable is True
+
+
+def test_passed_session_window_becomes_closed():
+    passed = Reading(40, NOW - timedelta(minutes=1), NOW - timedelta(hours=2), "header")
+    out = roll_forward({SESSION: passed}, NOW)
+    assert out[SESSION].util == 0
+    assert out[SESSION].resets_at is None
+    assert out[SESSION].source == "estimate"
+
+
+def test_closed_session_reading_is_kept_as_is():
+    closed = Reading(0, None, NOW - timedelta(minutes=3), "probe")
+    assert roll_forward({SESSION: closed}, NOW)[SESSION] == closed

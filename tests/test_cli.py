@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 
 from cpa_balancer.cli import format_status, main, run_cycle, set_disabled
 from cpa_balancer.models import MAIN
@@ -148,3 +149,13 @@ def test_config_errors_exit_with_a_one_line_message(tmp_path, capsys):
     err = capsys.readouterr().err
     assert err.count("cpa-balancer: config error:") == 2
     assert "Traceback" not in err
+
+
+def test_status_renders_a_closed_session_window(tmp_path):
+    cfg = setup(tmp_path)
+    w = cred(W, main=10, main_reset_h=140, fable=1, fable_reset_h=140)
+    w["quota"] = {"observed_at": (NOW - timedelta(hours=6)).isoformat(),
+                  "signals": {"Anthropic-Ratelimit-Unified-5h-Utilization": "0.4",
+                              "Anthropic-Ratelimit-Unified-5h-Reset": str(int(NOW.timestamp()) - 3600)}}
+    result = run_cycle(cfg, FakeClient(cfg, [w, FRESH[1]]), NOW, dry_run=True, prober=no_probe)
+    assert "session closed" in format_status(cfg, result, NOW)

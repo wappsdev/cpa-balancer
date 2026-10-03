@@ -9,12 +9,15 @@ SESSION = "session"
 
 @dataclass(frozen=True)
 class Reading:
-    """One quota observation: utilization in percent, window reset time, when it was seen."""
+    """One quota observation: utilization in percent, window reset time, when it was seen.
+
+    `resets_at` is None only for the 5-hour (session) bucket: the window is not running.
+    """
 
     util: float
-    resets_at: datetime
+    resets_at: datetime | None
     observed_at: datetime
-    source: str  # "header" | "probe" | "estimate"
+    source: str  # "header" | "probe" | "anchor" | "estimate"
 
 
 @dataclass(frozen=True)

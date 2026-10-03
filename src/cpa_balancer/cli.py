@@ -163,6 +163,9 @@ def format_status(cfg: Config, result: RunResult, now: datetime) -> str:
                 lines.append(f"  {bucket:7} no data")
                 continue
             age = int((now - r.observed_at).total_seconds() // 60)
+            if r.resets_at is None:
+                lines.append(f"  {bucket:7} closed  ({r.source}, {age} min old)")
+                continue
             lines.append(f"  {bucket:7} {r.util:5.1f}%  resets {r.resets_at:%Y-%m-%d %H:%M} UTC"
                          f"  ({r.source}, {age} min old)")
     lines += [f"pending: {p.auth_file} {p.fields}" for p in result.patches]
