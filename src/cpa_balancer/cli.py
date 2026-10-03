@@ -14,9 +14,10 @@ from .apply import Patch, baseline_patches, patches
 from .config import DEFAULT_CONFIG, Config, ConfigError, load_config
 from .cpa_client import CpaClient, CpaError, management_key
 from .models import FABLE, MAIN, SESSION, AccountSnapshot, Decision
-from .policy import decide
-from .snapshot import build_snapshot
-from .state import ProbeState, load_state, save_state
+from .anchor import anchor
+from .policy import anchor_did_not_start_window, anchor_targets, decide
+from .snapshot import build_snapshot, merge
+from .state import ProbeState, State, load_state, save_state
 from .usage_probe import due, probe
 
 log = logging.getLogger("cpa_balancer")
@@ -62,7 +63,33 @@ def _write(client, todo: list[Patch], cfg: Config, dry_run: bool) -> bool:
     return True
 
 
-def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prober=probe) -> RunResult:
+def _anchor(cfg: Config, state: State, decision: Decision, snaps: dict[str, AccountSnapshot], now: datetime,
+            dry_run: bool, anchorer) -> None:
+    targets = anchor_targets(decision, snaps, cfg, now,
+                             {a: p.last_anchor for a, p in state.probes.items()},
+                             {a: p.anchor_retry_after for a, p in state.probes.items()})
+    for account in targets:
+        if dry_run or cfg.mode == "shadow":
+            log.info("would anchor %s", account)
+            continue
+        ps = state.probes.setdefault(account, ProbeState())
+        model = cfg.anchor.fallback_model if ps.anchor_main_model else cfg.anchor.model
+        result = anchorer(cfg.auth_dir / account, now, use_main_model=ps.anchor_main_model,
+                          model=cfg.anchor.model, fallback_model=cfg.anchor.fallback_model)
+        ps.last_anchor = now
+        ps.anchor_retry_after = result.retry_after
+        if result.error:
+            log.warning("anchor %s failed: %s", account, result.error)
+            continue
+        if result.reading is not None:
+            ps.anchor_reading = result.reading
+        window = (f"resets {result.reading.resets_at:%H:%M} UTC"
+                  if result.reading and result.reading.resets_at else "no window header")
+        log.info("anchored %s with %s (%s)", account, model, window)
+
+
+def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prober=probe,
+              anchorer=anchor) -> RunResult:
     cfg = _present(cfg)
     state = load_state(cfg.state_path)
     managed = [a.auth_file for a in cfg.accounts]
@@ -75,11 +102,14 @@ def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prob
     weekly_buckets = (MAIN, FABLE) if cfg.fable_models else (MAIN,)
 
     def snapshots() -> dict[str, AccountSnapshot]:
-        return {
-            a: build_snapshot(creds[a], state.probes.get(a, ProbeState()).readings,
-                              cfg.main_models, cfg.fable_models, now)
-            for a in managed if a in creds
-        }
+        out = {}
+        for a in managed:
+            if a not in creds:
+                continue
+            ps = state.probes.get(a, ProbeState())
+            extra = merge(ps.readings, {SESSION: ps.anchor_reading} if ps.anchor_reading else {})
+            out[a] = build_snapshot(creds[a], extra, cfg.main_models, cfg.fable_models, now)
+        return out
 
     def maybe_probe(account: str, snap: AccountSnapshot, switching_to: bool) -> bool:
         if dry_run:
@@ -100,6 +130,11 @@ def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prob
             log.warning("probe %s failed: %s", account, result.error)
             return False
         ps.readings = result.readings
+        if not ps.anchor_main_model and anchor_did_not_start_window(
+                result.readings.get(SESSION), ps.anchor_reading, ps.last_anchor):
+            ps.anchor_main_model = True
+            log.warning("anchor %s: Haiku did not start the 5-hour window; using %s from now on",
+                        account, cfg.anchor.fallback_model)
         return True
 
     snaps = snapshots()
@@ -123,6 +158,7 @@ def run_cycle(cfg: Config, client, now: datetime, *, dry_run: bool = False, prob
     for warning in decision.warnings:
         log.warning(warning)
     applied = _write(client, todo, cfg, dry_run)
+    _anchor(cfg, state, decision, snaps, now, dry_run, anchorer)
     if not dry_run:
         save_state(state, cfg.state_path)
     return RunResult(decision, snaps, todo, applied)
@@ -142,7 +178,7 @@ def set_disabled(cfg: Config, client, disabled: bool) -> list[Patch]:
     return todo
 
 
-def format_status(cfg: Config, result: RunResult, now: datetime) -> str:
+def format_status(cfg: Config, result: RunResult, now: datetime, state: State | None = None) -> str:
     d = result.decision
     if d is None:
         return "balancer disabled: baseline priorities in effect"
@@ -168,6 +204,10 @@ def format_status(cfg: Config, result: RunResult, now: datetime) -> str:
                 continue
             lines.append(f"  {bucket:7} {r.util:5.1f}%  resets {r.resets_at:%Y-%m-%d %H:%M} UTC"
                          f"  ({r.source}, {age} min old)")
+        ps = state.probes.get(account.auth_file) if state else None
+        if ps and ps.last_anchor:
+            model = cfg.anchor.fallback_model if ps.anchor_main_model else cfg.anchor.model
+            lines.append(f"  anchor: last {ps.last_anchor:%Y-%m-%d %H:%M} UTC with {model}")
     lines += [f"pending: {p.auth_file} {p.fields}" for p in result.patches]
     return "\n".join(lines)
 
@@ -211,7 +251,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "run":
                 run_cycle(cfg, client, now, dry_run=args.dry_run)
             elif args.command == "status":
-                print(format_status(cfg, run_cycle(cfg, client, now, dry_run=True), now))
+                print(format_status(cfg, run_cycle(cfg, client, now, dry_run=True), now,
+                                    load_state(cfg.state_path)))
             else:
                 set_disabled(cfg, client, args.command == "disable")
         except CpaError as e:

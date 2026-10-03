@@ -159,3 +159,75 @@ def test_status_renders_a_closed_session_window(tmp_path):
                               "Anthropic-Ratelimit-Unified-5h-Reset": str(int(NOW.timestamp()) - 3600)}}
     result = run_cycle(cfg, FakeClient(cfg, [w, FRESH[1]]), NOW, dry_run=True, prober=no_probe)
     assert "session closed" in format_status(cfg, result, NOW)
+
+
+from cpa_balancer.anchor import AnchorResult  # noqa: E402
+from cpa_balancer.models import SESSION, Reading  # noqa: E402
+from cpa_balancer.state import ProbeState, State, save_state  # noqa: E402
+
+WORKING = [cred(W, main=10, main_reset_h=140, fable=1, fable_reset_h=140),
+           cred(G, main=52, main_reset_h=90, fable=0, fable_reset_h=90, session=30, session_reset_h=3)]
+OPENED = Reading(0, NOW + timedelta(hours=5), NOW, "anchor")
+
+
+def no_anchor(path, now, **kwargs):
+    raise AssertionError(f"unexpected anchor of {path.name}")
+
+
+def test_anchors_the_idle_account_while_the_active_one_works(tmp_path):
+    cfg = setup(tmp_path)
+    calls = []
+
+    def anchorer(path, now, **kwargs):
+        calls.append((path.name, kwargs["use_main_model"], kwargs["model"]))
+        return AnchorResult(OPENED, None, None)
+
+    result = run_cycle(cfg, FakeClient(cfg, WORKING), NOW, prober=no_probe, anchorer=anchorer)
+    assert result.decision.main.account == G
+    assert calls == [(W, False, cfg.anchor.model)]
+    ps = load_state(cfg.state_path).probes[W]
+    assert ps.last_anchor == NOW
+    assert ps.anchor_reading == OPENED
+    # the anchored window is now visible, so the next cycle does not anchor again
+    run_cycle(cfg, FakeClient(cfg, WORKING), NOW + timedelta(minutes=11), prober=no_probe, anchorer=no_anchor)
+
+
+def test_shadow_mode_never_anchors(tmp_path):
+    cfg = setup(tmp_path, mode="shadow")
+    run_cycle(cfg, FakeClient(cfg, WORKING), NOW, prober=no_probe, anchorer=no_anchor)
+
+
+def test_anchor_failure_keeps_the_cycle_and_records_retry_after(tmp_path):
+    cfg = setup(tmp_path)
+
+    def anchorer(path, now, **kwargs):
+        return AnchorResult(None, NOW + timedelta(minutes=5), "HTTP 429")
+
+    result = run_cycle(cfg, FakeClient(cfg, WORKING), NOW, prober=no_probe, anchorer=anchorer)
+    assert result.applied is True
+    ps = load_state(cfg.state_path).probes[W]
+    assert ps.anchor_retry_after == NOW + timedelta(minutes=5)
+    assert ps.anchor_reading is None
+
+
+def test_closed_window_after_haiku_anchor_switches_account_to_main_model(tmp_path):
+    cfg = setup(tmp_path)
+    save_state(State(probes={W: ProbeState(
+        last_anchor=NOW - timedelta(hours=2),
+        anchor_reading=Reading(0, NOW + timedelta(hours=3), NOW - timedelta(hours=2), "anchor"))}), cfg.state_path)
+    creds = [cred(W, main=10, main_reset_h=140, age_min=120), cred(G, main=52, main_reset_h=90, fable=0)]
+
+    def prober(path, now):
+        return ProbeResult({MAIN: reading(10, 140, age_min=0), "fable": reading(1, 140, age_min=0),
+                            SESSION: Reading(0, None, NOW, "probe")}, None, None)
+
+    run_cycle(cfg, FakeClient(cfg, creds), NOW, prober=prober, anchorer=no_anchor)
+    assert load_state(cfg.state_path).probes[W].anchor_main_model is True
+
+
+def test_status_shows_anchor_state(tmp_path):
+    cfg = setup(tmp_path)
+    state = State(probes={W: ProbeState(last_anchor=NOW - timedelta(minutes=10), anchor_main_model=True)})
+    result = run_cycle(cfg, FakeClient(cfg, FRESH), NOW, dry_run=True, prober=no_probe)
+    text = format_status(cfg, result, NOW, state)
+    assert f"anchor: last {NOW - timedelta(minutes=10):%Y-%m-%d %H:%M} UTC with {cfg.anchor.fallback_model}" in text
