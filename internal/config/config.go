@@ -41,6 +41,7 @@ type Buckets struct {
 
 type Config struct {
 	Enabled    bool       `yaml:"enabled" json:"enabled"`
+	Paused     bool       `yaml:"paused" json:"paused"` // stay loaded, delegate every pick, no probes or anchors
 	Mode       string     `yaml:"mode" json:"mode"`
 	StatePath  string     `yaml:"state_path" json:"state_path"`
 	Accounts   []Account  `yaml:"accounts" json:"accounts"`
@@ -68,8 +69,8 @@ func Parse(raw []byte) (Config, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
-	if cfg.Mode != "apply" && cfg.Mode != "shadow" {
-		return Config{}, fmt.Errorf("mode must be apply or shadow, got %q", cfg.Mode)
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
 	}
 	if strings.HasPrefix(cfg.StatePath, "~/") {
 		home, err := os.UserHomeDir()
@@ -79,6 +80,46 @@ func Parse(raw []byte) (Config, error) {
 		cfg.StatePath = filepath.Join(home, cfg.StatePath[2:])
 	}
 	return cfg, nil
+}
+
+// Validate checks the rules the settings form also enforces.
+func (c Config) Validate() error {
+	if c.Mode != "apply" && c.Mode != "shadow" {
+		return fmt.Errorf("mode must be apply or shadow, got %q", c.Mode)
+	}
+	th := c.Thresholds
+	for _, p := range []struct {
+		name  string
+		value float64
+	}{{"reserve_cap_far", th.ReserveCapFar}, {"reserve_cap_near", th.ReserveCapNear}, {"final_cap", th.FinalCap}, {"session_cap", th.SessionCap}} {
+		if p.value < 0 || p.value > 100 {
+			return fmt.Errorf("%s must be within 0-100, got %v", p.name, p.value)
+		}
+	}
+	if th.ReserveCapFar > th.ReserveCapNear || th.ReserveCapNear > th.FinalCap {
+		return fmt.Errorf("caps must satisfy reserve_cap_far <= reserve_cap_near <= final_cap, got %v / %v / %v",
+			th.ReserveCapFar, th.ReserveCapNear, th.FinalCap)
+	}
+	if th.MinDwellMinutes < 0 {
+		return fmt.Errorf("min_dwell_minutes must not be negative")
+	}
+	if th.StaleHours <= 0 {
+		return fmt.Errorf("stale_hours must be positive")
+	}
+	if len(c.Accounts) == 0 {
+		return fmt.Errorf("at least one account is required")
+	}
+	if len(c.Buckets.Main) == 0 {
+		return fmt.Errorf("the main bucket needs at least one model")
+	}
+	seen := map[string]bool{}
+	for _, a := range c.Accounts {
+		if a.AuthFile == "" || seen[a.AuthFile] {
+			return fmt.Errorf("account auth files must be unique and non-empty, got %q", a.AuthFile)
+		}
+		seen[a.AuthFile] = true
+	}
+	return nil
 }
 
 func (c Config) Managed(authFile string) bool {

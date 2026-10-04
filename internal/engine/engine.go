@@ -11,6 +11,7 @@ import (
 
 	"github.com/adnankurt/cpa-balancer/internal/anchor"
 	"github.com/adnankurt/cpa-balancer/internal/config"
+	"github.com/adnankurt/cpa-balancer/internal/history"
 	"github.com/adnankurt/cpa-balancer/internal/policy"
 	"github.com/adnankurt/cpa-balancer/internal/probe"
 	"github.com/adnankurt/cpa-balancer/internal/quota"
@@ -36,6 +37,7 @@ type Engine struct {
 	cfg  config.Config // immutable; reconfigure builds a new engine
 	host Host
 	now  func() time.Time
+	rec  *history.Recorder // shared across engines; nil disables history
 
 	tickMu      sync.Mutex // serializes Tick
 	mu          sync.RWMutex
@@ -49,13 +51,13 @@ type Engine struct {
 
 var delegate = pluginapi.SchedulerPickResponse{DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Handled: true}
 
-func New(cfg config.Config, host Host, now func() time.Time) *Engine {
+func New(cfg config.Config, host Host, now func() time.Time, rec *history.Recorder) *Engine {
 	st, err := state.Load(cfg.StatePath)
 	if err != nil {
 		host.Log("warn", "cpa-balancer: state not loaded, starting empty: "+err.Error())
 		st = state.New()
 	}
-	e := &Engine{cfg: cfg, host: host, now: now, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}}
+	e := &Engine{cfg: cfg, host: host, now: now, rec: rec, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}}
 	e.mu.Lock()
 	e.recompute(now())
 	e.mu.Unlock()
@@ -86,11 +88,21 @@ func (e *Engine) recompute(now time.Time) {
 			Unavailable: e.credentials[a.AuthFile].unavailable,
 		}
 	}
+	for name, snap := range snaps {
+		for b, r := range snap.Readings {
+			if old, ok := e.snaps[name].Readings[b]; ok && r.Source == "estimate" && old.Source != "estimate" {
+				e.rec.AddEvent(history.Event{At: now, Kind: "reset", Account: name, Bucket: string(b)})
+			}
+		}
+	}
 	d := policy.Decide(snaps, e.cfg, now, e.st.Active)
 	for _, x := range []struct {
 		b quota.Bucket
 		c policy.Choice
 	}{{quota.Main, d.Main}, {quota.Fable, d.Fable}} {
+		if e.cfg.Paused {
+			break // nothing is applied while paused, so nothing is recorded as a change
+		}
 		prev := e.st.Active[x.b]
 		if prev.Account == x.c.Account {
 			if prev.Provisional != x.c.Provisional {
@@ -105,6 +117,7 @@ func (e *Engine) recompute(now time.Time) {
 			e.switchedTo[x.c.Account] = true
 		}
 		e.st.AddChange(state.Change{At: now, Bucket: x.b, From: prev.Account, To: x.c.Account, Reason: x.c.Reason})
+		e.rec.AddEvent(history.Event{At: now, Kind: "switch", Bucket: string(x.b), From: prev.Account, To: x.c.Account, Reason: x.c.Reason})
 		e.host.Log("info", fmt.Sprintf("cpa-balancer: %s %q -> %q (%s)", x.b, prev.Account, x.c.Account, x.c.Reason))
 		e.dirty = true
 	}
@@ -117,6 +130,12 @@ func (e *Engine) OnUsage(rec pluginapi.UsageRecord) {
 		return
 	}
 	now := e.now()
+	traffic := history.Traffic{Requests: 1, InputTokens: rec.Detail.InputTokens, OutputTokens: rec.Detail.OutputTokens,
+		CacheReadTokens: rec.Detail.CacheReadTokens}
+	if rec.Failed {
+		traffic.Failed = 1
+	}
+	e.rec.AddTraffic(now, rec.AuthID, rec.Model, traffic)
 	readings := quota.FromHeaders(rec.ResponseHeaders, rec.Model, e.cfg.Buckets.Main, e.cfg.Buckets.Fable, now)
 	if len(readings) == 0 {
 		return
@@ -146,7 +165,7 @@ func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPic
 		return delegate
 	}
 	b, ok := e.bucketOf(req.Model)
-	if e.cfg.Mode != "apply" || !isClaude(req) || !ok {
+	if e.cfg.Mode != "apply" || e.cfg.Paused || !isClaude(req) || !ok {
 		return delegate
 	}
 	e.mu.RLock()
@@ -169,6 +188,14 @@ func (e *Engine) Tick() {
 	defer e.tickMu.Unlock()
 	now := e.now()
 	e.refreshCredentials()
+	defer e.record(now)
+	if e.cfg.Paused {
+		e.mu.Lock()
+		e.recompute(now)
+		e.mu.Unlock()
+		e.save()
+		return
+	}
 	e.probeDue(now, nil)
 	e.mu.Lock()
 	e.recompute(now)
@@ -321,6 +348,7 @@ func (e *Engine) anchorIdle(now time.Time) {
 				acc.AnchorReading = &r
 			}
 			e.host.Log("info", fmt.Sprintf("cpa-balancer: anchored %s with %s", name, req.Model))
+			e.rec.AddEvent(history.Event{At: now, Kind: "anchor", Account: name, Model: req.Model})
 			anchored = true
 		}
 		e.dirty = true
@@ -349,3 +377,39 @@ func (e *Engine) save() {
 
 // Shutdown persists state before the plugin is unloaded or replaced.
 func (e *Engine) Shutdown() { e.save() }
+
+// record stores the end-of-tick levels and writes closed history slots.
+func (e *Engine) record(now time.Time) {
+	if e.rec == nil {
+		return
+	}
+	e.mu.RLock()
+	active := map[string]string{
+		string(quota.Main): e.st.Active[quota.Main].Account, string(quota.Fable): e.st.Active[quota.Fable].Account,
+	}
+	levels := map[string]history.Levels{}
+	for _, a := range e.cfg.Accounts {
+		snap := e.snaps[a.AuthFile]
+		var l history.Levels
+		weekly := func(b quota.Bucket) (*float64, *float64) {
+			r, ok := snap.Readings[b]
+			if !ok || r.ResetsAt == nil {
+				return nil, nil
+			}
+			util, limit := r.Util, policy.Cap(a.Reserve, *r.ResetsAt, now, e.cfg.Thresholds)
+			return &util, &limit
+		}
+		l.Main, l.MainCap = weekly(quota.Main)
+		l.Fable, l.FableCap = weekly(quota.Fable)
+		if s, ok := snap.Readings[quota.Session]; ok && s.Running(now) {
+			util := s.Util
+			l.Session, l.SessionOpen = &util, true
+		}
+		levels[a.AuthFile] = l
+	}
+	e.mu.RUnlock()
+	e.rec.Snapshot(now, active, levels)
+	if err := e.rec.Flush(now); err != nil {
+		e.host.Log("warn", "cpa-balancer: history not written: "+err.Error())
+	}
+}

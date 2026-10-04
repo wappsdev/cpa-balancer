@@ -24,10 +24,15 @@ anchor:
   enabled: false
 `
 
-func TestDefaultsWhenOnlyHostKeysAreGiven(t *testing.T) {
-	cfg, err := Parse([]byte("enabled: true\npriority: 0\n"))
+const minimal = "accounts: [{auth_file: claude-w.json}]\nbuckets: {main: [claude-opus-5-5]}\n"
+
+func TestDefaultsWhenOnlyRequiredKeysAreGiven(t *testing.T) {
+	cfg, err := Parse([]byte("enabled: true\npriority: 0\n" + minimal))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.Paused {
+		t.Fatal("paused must default to false")
 	}
 	if cfg.Mode != "apply" || cfg.Thresholds.SessionCap != 98 || cfg.Thresholds.ReserveCapFar != 85 {
 		t.Fatalf("defaults not applied: %+v", cfg)
@@ -56,8 +61,23 @@ func TestOverrides(t *testing.T) {
 	}
 }
 
-func TestRejectsUnknownMode(t *testing.T) {
-	if _, err := Parse([]byte("mode: yolo\n")); err == nil {
-		t.Fatal("expected an error")
+func TestValidation(t *testing.T) {
+	bad := map[string]string{
+		"mode":           "mode: yolo\n" + minimal,
+		"cap range":      "thresholds: {session_cap: 120}\n" + minimal,
+		"cap order":      "thresholds: {reserve_cap_far: 95}\n" + minimal,
+		"dwell":          "thresholds: {min_dwell_minutes: -1}\n" + minimal,
+		"stale":          "thresholds: {stale_hours: 0}\n" + minimal,
+		"no accounts":    "buckets: {main: [claude-opus-5-5]}\n",
+		"no main models": "accounts: [{auth_file: claude-w.json}]\n",
+		"duplicate":      "accounts: [{auth_file: a.json}, {auth_file: a.json}]\nbuckets: {main: [m]}\n",
+	}
+	for name, raw := range bad {
+		if _, err := Parse([]byte(raw)); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if cfg, err := Parse([]byte("paused: true\n" + minimal)); err != nil || !cfg.Paused {
+		t.Fatalf("paused: %+v %v", cfg, err)
 	}
 }

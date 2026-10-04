@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account Balancer</title>
+<link rel="stylesheet" href="uplot.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>Account Balancer</h1>
+      <div class="muted" id="meta">Loading…</div>
+    </div>
+    <div class="controls">
+      <button type="button" id="pause" class="toggle" disabled>Balancing: …</button>
+      <label>Mode
+        <select id="mode" disabled>
+          <option value="apply">apply</option>
+          <option value="shadow">shadow</option>
+        </select>
+      </label>
+      <button type="button" id="run" disabled>Run now</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button type="button" role="tab" data-tab="history" aria-selected="false">History</button>
+    <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
+
+  <div id="error" class="banner bad" hidden></div>
+  <div id="config-error" class="banner bad" hidden></div>
+
+  <section id="tab-overview">
+    <div class="cards" id="choices"></div>
+    <h2>Accounts</h2>
+    <div class="scroll"><table id="accounts"></table></div>
+    <h2>Recent changes</h2>
+    <div class="scroll"><table id="changes"></table></div>
+  </section>
+
+  <section id="tab-history" hidden>
+    <div class="range" role="group" aria-label="Range">
+      <button type="button" data-range="24h" aria-pressed="true">24h</button>
+      <button type="button" data-range="7d" aria-pressed="false">7d</button>
+      <button type="button" data-range="30d" aria-pressed="false">30d</button>
+      <button type="button" data-range="90d" aria-pressed="false">90d</button>
+    </div>
+    <div id="cursor-info" class="info muted">Hover a chart to see that moment in all four.</div>
+    <div class="chart"><h3>Weekly utilization % <span class="muted">— solid main, dashed Fable, stepped cap</span></h3><div id="chart-weekly"></div></div>
+    <div class="chart"><h3>5-hour window % <span class="muted">— filled while the window is open</span></h3><div id="chart-session"></div></div>
+    <div class="chart"><h3>Active account</h3><div id="chart-active"></div></div>
+    <div class="chart"><h3>Tokens per step <span class="muted">— stacked by account</span></h3><div id="chart-tokens"></div></div>
+    <h2>Events</h2>
+    <div class="scroll"><table id="events"></table></div>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <form id="settings" novalidate>
+      <fieldset>
+        <legend>Accounts</legend>
+        <p class="muted">Accounts are tried in order of their weekly reset. A reserve account keeps quota back until its reset is near.</p>
+        <table id="account-list"></table>
+        <div class="row">
+          <select id="account-add"></select>
+          <button type="button" id="account-add-button">Add account</button>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Thresholds</legend>
+        <div class="grid">
+          <label>Reserve cap, reset ≥ 48 h away <input type="number" step="any" data-threshold="reserve_cap_far"> %</label>
+          <label>Reserve cap, reset 12–48 h away <input type="number" step="any" data-threshold="reserve_cap_near"> %</label>
+          <label>Final cap (every account) <input type="number" step="any" data-threshold="final_cap"> %</label>
+          <label>5-hour switch at <input type="number" step="any" data-threshold="session_cap"> %</label>
+          <label>Minimum dwell <input type="number" step="1" data-threshold="min_dwell_minutes"> min</label>
+          <label>Readings stale after <input type="number" step="any" data-threshold="stale_hours"> h</label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Buckets</legend>
+        <p class="muted">Models separated by commas. Each bucket has its own weekly limit.</p>
+        <label class="wide">Main <input type="text" data-bucket="main"></label>
+        <label class="wide">Fable <input type="text" data-bucket="fable"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Anchoring</legend>
+        <label><input type="checkbox" data-anchor="enabled"> Start idle accounts' 5-hour window with a one-token request</label>
+        <label class="wide">Model <input type="text" data-anchor="model"></label>
+        <label class="wide">Fallback model <input type="text" data-anchor="fallback_model"></label>
+      </fieldset>
+      <div class="row">
+        <button type="button" id="review">Review &amp; save</button>
+        <span id="settings-status" class="muted"></span>
+      </div>
+      <div id="validation" class="bad"></div>
+      <div id="review-panel" hidden>
+        <h3>Changes to write</h3>
+        <ul id="review-list"></ul>
+        <div class="row">
+          <button type="button" id="save" class="primary">Save</button>
+          <button type="button" id="cancel">Cancel</button>
+        </div>
+      </div>
+    </form>
+  </section>
+</main>
+<script src="uplot.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
