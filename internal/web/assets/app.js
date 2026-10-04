@@ -328,21 +328,36 @@ function renderHistory(s) {
   renderEvents(s);
 }
 
-// The cursor box: requests per account and model at that moment, and events inside the step.
+// Where the pointer is over a chart, so the tip can sit next to it.
+let pointer = null;
+document.addEventListener("pointermove", e => {
+  pointer = e.target.closest?.(".u-over") ? { x: e.clientX, y: e.clientY } : null;
+  if (!pointer) $("chart-tip").hidden = true;
+});
+
+// The hovered moment: its time in the bar, and requests per account and model plus the
+// events inside the step in a tip beside the pointer.
 function describe(i) {
-  if (i == null || !hist) return;
+  if (i == null || !hist) { $("chart-tip").hidden = true; return; }
   const s = hist, from = s.t[i], to = from + s.step_seconds;
-  const parts = [`<strong>${esc(time(from * 1000))}</strong>`];
+  $("cursor-time").innerHTML = `<strong>${esc(time(from * 1000))}</strong>`;
+  const lines = [];
   for (const [n, a] of Object.entries(s.accounts)) {
     if (!a.requests[i]) continue;
     const models = Object.entries(a.models || {}).filter(([, v]) => v[i]).map(([m, v]) => `${esc(m)} ${v[i]}`).join(", ");
-    parts.push(`${esc(short(n))}: ${a.requests[i]} requests, ${num(a.tokens[i])} tokens (${models})`);
+    lines.push(`<strong>${esc(short(n))}</strong> ${a.requests[i]} requests · ${num(a.tokens[i])} tokens<br>${models}`);
   }
   for (const ev of s.events) {
     const t = Date.parse(ev.t) / 1000;
-    if (t >= from && t < to) parts.push(eventText(ev));
+    if (t >= from && t < to) lines.push(eventText(ev));
   }
-  $("cursor-info").innerHTML = parts.join(" · ");
+  const tip = $("chart-tip");
+  if (!lines.length || !pointer) { tip.hidden = true; return; }
+  tip.innerHTML = lines.map(l => `<div>${l}</div>`).join("");
+  tip.hidden = false;
+  // Right of the pointer, or left of it near the window edge.
+  const x = pointer.x + 16 + tip.offsetWidth > innerWidth ? pointer.x - 16 - tip.offsetWidth : pointer.x + 16;
+  tip.style.transform = `translate(${Math.max(8, x)}px, ${Math.max(8, pointer.y - tip.offsetHeight - 12)}px)`;
 }
 
 function eventText(ev) {
