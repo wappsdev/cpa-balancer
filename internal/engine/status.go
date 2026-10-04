@@ -21,6 +21,8 @@ type AccountView struct {
 type View struct {
 	GeneratedAt time.Time       `json:"generated_at"`
 	Mode        string          `json:"mode"`
+	Paused      bool            `json:"paused"`
+	ConfigError string          `json:"config_error,omitempty"` // set by the plugin when the last config was rejected
 	Decision    policy.Decision `json:"decision"`
 	Accounts    []AccountView   `json:"accounts"`
 	Changes     []state.Change  `json:"changes"`
@@ -31,7 +33,7 @@ func (e *Engine) Status() View {
 	now := e.now()
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	v := View{GeneratedAt: now, Mode: e.cfg.Mode, Decision: e.decision, Changes: append([]state.Change(nil), e.st.Changes...)}
+	v := View{GeneratedAt: now, Mode: e.cfg.Mode, Paused: e.cfg.Paused, Decision: e.decision, Changes: append([]state.Change(nil), e.st.Changes...)}
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		_, listed := e.credentials[a.AuthFile]

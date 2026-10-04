@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/adnankurt/cpa-balancer/internal/config"
+	"github.com/adnankurt/cpa-balancer/internal/history"
 	"github.com/adnankurt/cpa-balancer/internal/quota"
 	"github.com/adnankurt/cpa-balancer/internal/state"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -112,7 +113,7 @@ func warm(e *Engine, now time.Time, gSession float64) {
 
 func TestPickFollowsDecisionAndCandidates(t *testing.T) {
 	c := &clock{t0}
-	e := New(testConfig(t), newHost(), c.now)
+	e := New(testConfig(t), newHost(), c.now, nil)
 	if got := pick(e, Opus, W, G); got != delegate {
 		t.Fatalf("without data the pick must be delegated, got %+v", got)
 	}
@@ -138,7 +139,7 @@ func TestPickFollowsDecisionAndCandidates(t *testing.T) {
 
 func TestSessionCapSwitchesTheNextRequest(t *testing.T) {
 	c := &clock{t0}
-	e := New(testConfig(t), newHost(), c.now)
+	e := New(testConfig(t), newHost(), c.now, nil)
 	warm(e, t0, 30)
 	e.OnUsage(usage(G, Opus, headers(52, 90, 98, 3, t0)))
 	if got := pick(e, Opus, W, G); got.AuthID != W {
@@ -147,7 +148,7 @@ func TestSessionCapSwitchesTheNextRequest(t *testing.T) {
 }
 
 func TestPinnedRequestIsNotRerouted(t *testing.T) {
-	e := New(testConfig(t), newHost(), (&clock{t0}).now)
+	e := New(testConfig(t), newHost(), (&clock{t0}).now, nil)
 	warm(e, t0, 30)
 	req := pluginapi.SchedulerPickRequest{Providers: []string{"claude"}, Model: "claude-haiku-4-5-20251001",
 		Options:    pluginapi.SchedulerOptions{Metadata: map[string]any{"pinned_auth_id": W}},
@@ -160,7 +161,7 @@ func TestPinnedRequestIsNotRerouted(t *testing.T) {
 func TestShadowModeAlwaysDelegates(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Mode = "shadow"
-	e := New(cfg, newHost(), (&clock{t0}).now)
+	e := New(cfg, newHost(), (&clock{t0}).now, nil)
 	warm(e, t0, 30)
 	if got := pick(e, Opus, W, G); got != delegate {
 		t.Fatalf("got %+v", got)
@@ -181,7 +182,7 @@ func TestTickProbesIdleAccountAndAnchorsIt(t *testing.T) {
 		"Anthropic-Ratelimit-Unified-5h-Reset":       {strconv.FormatInt(reset.Unix(), 10)},
 	}}
 	cfg := testConfig(t)
-	e := New(cfg, h, c.now)
+	e := New(cfg, h, c.now, nil)
 	e.OnUsage(usage(G, Opus, headers(52, 90, 30, 3, t0)))
 	e.OnUsage(usage(G, Fable, headers(0, 90, 30, 3, t0)))
 	e.Tick()
@@ -223,7 +224,7 @@ func TestClosedWindowAfterHaikuAnchorSwitchesToMainModel(t *testing.T) {
 	}
 	h := newHost()
 	h.probeBody["tok-w-secret"] = idleProbe
-	e := New(cfg, h, c.now)
+	e := New(cfg, h, c.now, nil)
 	e.Tick()
 	saved, _ := state.Load(cfg.StatePath)
 	if !saved.Accounts[W].AnchorMainModel {
@@ -233,7 +234,7 @@ func TestClosedWindowAfterHaikuAnchorSwitchesToMainModel(t *testing.T) {
 
 func TestStatusHasNoCredentials(t *testing.T) {
 	h := newHost()
-	e := New(testConfig(t), h, (&clock{t0}).now)
+	e := New(testConfig(t), h, (&clock{t0}).now, nil)
 	warm(e, t0, 30)
 	e.Tick()
 	raw, err := json.Marshal(e.Status())
@@ -249,7 +250,7 @@ func TestSwitchMadeByUsageIsProbedOnTheNextTick(t *testing.T) {
 	c := &clock{t0}
 	h := newHost()
 	h.probeBody["tok-w-secret"] = idleProbe
-	e := New(testConfig(t), h, c.now)
+	e := New(testConfig(t), h, c.now, nil)
 	e.Tick() // credentials; no probe: nothing configured has a running anchor or stale data yet
 	h.httpCalls = nil
 	warm(e, t0, 30)
@@ -261,5 +262,75 @@ func TestSwitchMadeByUsageIsProbedOnTheNextTick(t *testing.T) {
 	e.Tick()
 	if strings.Join(h.httpCalls, ",") != "tok-w-secret" {
 		t.Fatalf("W's 15-minute-old data must be probed after the switch, got %v", h.httpCalls)
+	}
+}
+
+func TestPausedDelegatesAndSkipsProbesAndAnchors(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Paused = true
+	h := newHost()
+	h.probeBody["tok-w-secret"] = idleProbe
+	e := New(cfg, h, (&clock{t0}).now, nil)
+	e.OnUsage(usage(G, Opus, headers(52, 90, 30, 3, t0)))
+	e.OnUsage(usage(G, Fable, headers(0, 90, 30, 3, t0)))
+	e.Tick()
+	if got := pick(e, Opus, W, G); got != delegate {
+		t.Fatalf("paused must delegate, got %+v", got)
+	}
+	if len(h.httpCalls) != 0 || len(h.execs) != 0 {
+		t.Fatalf("paused must not probe or anchor: probes=%v execs=%d", h.httpCalls, len(h.execs))
+	}
+	if !e.Status().Paused {
+		t.Fatal("status must report paused")
+	}
+}
+
+func TestTrafficAndEventsReachHistory(t *testing.T) {
+	c := &clock{t0}
+	rec := history.NewRecorder(t.TempDir())
+	e := New(testConfig(t), newHost(), c.now, rec)
+	warm(e, t0, 30)
+	failed := usage(G, Opus, headers(52, 90, 98, 3, t0))
+	failed.Failed = true
+	failed.Detail.InputTokens, failed.Detail.OutputTokens = 100, 20
+	e.OnUsage(failed) // forced switch to W
+	e.Tick()
+	c.t = t0.Add(6 * time.Minute)
+	e.Tick() // closes and writes the 12:00 slot
+	s, err := rec.Query("24h", c.t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := len(s.T) - 2 // the 12:00 point; the last one is the open 12:05 slot
+	g := s.Accounts[G]
+	if g == nil || g.Requests[i] != 3 || g.Tokens[i] != 120 || g.Main[i] == nil || *g.Main[i] != 52 || *g.MainCap[i] != 85 {
+		t.Fatalf("point %d of G is wrong", i)
+	}
+	if s.Active["main"][i] != W {
+		t.Fatalf("active %q", s.Active["main"][i])
+	}
+	var last history.Event
+	for _, ev := range s.Events {
+		if ev.Kind == "switch" && ev.Bucket == "main" {
+			last = ev
+		}
+	}
+	if last.From != G || last.To != W || last.Reason == "" {
+		t.Fatalf("last main switch %+v", last)
+	}
+}
+
+func TestHistorySurvivesANewEngine(t *testing.T) {
+	c := &clock{t0}
+	rec := history.NewRecorder(t.TempDir())
+	cfg := testConfig(t)
+	first := New(cfg, newHost(), c.now, rec)
+	first.OnUsage(usage(W, Opus, headers(10, 140, 5, 4, t0)))
+	second := New(cfg, newHost(), c.now, rec) // a reconfiguration
+	c.t = t0.Add(6 * time.Minute)
+	second.Tick()
+	s, _ := rec.Query("24h", c.t)
+	if s.Accounts[W] == nil || s.Accounts[W].Requests[len(s.T)-2] != 1 {
+		t.Fatal("traffic from the first engine was lost")
 	}
 }
