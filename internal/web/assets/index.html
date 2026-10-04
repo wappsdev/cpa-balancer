@@ -10,19 +10,24 @@
 <body>
 <main>
   <header class="top">
-    <div>
+    <div class="title">
       <h1>Account Balancer</h1>
-      <div class="muted" id="meta">Loading…</div>
+      <div class="meta"><span class="dot" id="live-dot"></span><span id="meta">Loading…</span></div>
     </div>
     <div class="controls">
-      <button type="button" id="pause" class="toggle" disabled>Balancing: …</button>
-      <label>Mode
-        <select id="mode" disabled>
-          <option value="apply">apply</option>
-          <option value="shadow">shadow</option>
-        </select>
-      </label>
-      <button type="button" id="run" disabled>Run now</button>
+      <div class="control">
+        <span class="control-label">Balancing</span>
+        <button type="button" role="switch" aria-checked="false" id="pause" class="switch" disabled aria-label="Balancing"><span class="knob"></span></button>
+        <span class="control-value" id="pause-label">—</span>
+      </div>
+      <div class="segmented" role="group" aria-label="Mode" id="mode">
+        <button type="button" data-mode="apply" aria-pressed="false" disabled>Apply</button>
+        <button type="button" data-mode="shadow" aria-pressed="false" disabled>Shadow</button>
+      </div>
+      <button type="button" id="run" class="button" disabled>
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Run now</span>
+      </button>
     </div>
   </header>
 
@@ -30,80 +35,93 @@
     <button type="button" role="tab" data-tab="overview" aria-selected="true">Overview</button>
     <button type="button" role="tab" data-tab="history" aria-selected="false">History</button>
     <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+    <span class="tab-indicator" aria-hidden="true"></span>
   </nav>
 
   <div id="error" class="banner bad" hidden></div>
   <div id="config-error" class="banner bad" hidden></div>
 
   <section id="tab-overview">
-    <div class="cards" id="choices"></div>
-    <h2>Accounts</h2>
-    <div class="scroll"><table id="accounts"></table></div>
-    <h2>Recent changes</h2>
-    <div class="scroll"><table id="changes"></table></div>
+    <div class="choices" id="choices"></div>
+    <div class="section-head"><h2>Accounts</h2><span class="hint">bar = utilization · tick = cap in force</span></div>
+    <div class="accounts" id="accounts"></div>
+    <div class="section-head"><h2>Recent changes</h2></div>
+    <ol class="timeline card" id="changes"></ol>
   </section>
 
   <section id="tab-history" hidden>
-    <div class="range" role="group" aria-label="Range">
-      <button type="button" data-range="24h" aria-pressed="true">24h</button>
-      <button type="button" data-range="7d" aria-pressed="false">7d</button>
-      <button type="button" data-range="30d" aria-pressed="false">30d</button>
-      <button type="button" data-range="90d" aria-pressed="false">90d</button>
+    <div class="history-bar">
+      <div class="segmented" role="group" aria-label="Range" id="range">
+        <button type="button" data-range="24h" aria-pressed="true">24h</button>
+        <button type="button" data-range="7d" aria-pressed="false">7d</button>
+        <button type="button" data-range="30d" aria-pressed="false">30d</button>
+        <button type="button" data-range="90d" aria-pressed="false">90d</button>
+      </div>
+      <div id="cursor-info" class="cursor-info">Hover a chart to see that moment in all four.</div>
     </div>
-    <div id="cursor-info" class="info muted">Hover a chart to see that moment in all four.</div>
-    <div class="chart"><h3>Weekly utilization % <span class="muted">— solid main, dashed Fable, stepped cap</span></h3><div id="chart-weekly"></div></div>
-    <div class="chart"><h3>5-hour window % <span class="muted">— filled while the window is open</span></h3><div id="chart-session"></div></div>
-    <div class="chart"><h3>Active account</h3><div id="chart-active"></div></div>
-    <div class="chart"><h3>Tokens per step <span class="muted">— stacked by account</span></h3><div id="chart-tokens"></div></div>
-    <h2>Events</h2>
-    <div class="scroll"><table id="events"></table></div>
+    <div class="chart card"><div class="chart-head"><h3>Weekly utilization</h3><span class="hint">solid main · dashed Fable · dotted cap</span></div><div id="chart-weekly"></div></div>
+    <div class="chart card"><div class="chart-head"><h3>5-hour window</h3><span class="hint">filled while the window is open</span></div><div id="chart-session"></div></div>
+    <div class="chart card"><div class="chart-head"><h3>Active account</h3></div><div id="chart-active"></div></div>
+    <div class="chart card"><div class="chart-head"><h3>Tokens per step</h3><span class="hint">stacked by account</span></div><div id="chart-tokens"></div></div>
+    <div class="section-head"><h2>Events</h2></div>
+    <ol class="timeline card" id="events"></ol>
   </section>
 
   <section id="tab-settings" hidden>
     <form id="settings" novalidate>
-      <fieldset>
+      <fieldset class="card">
         <legend>Accounts</legend>
-        <p class="muted">Accounts are tried in order of their weekly reset. A reserve account keeps quota back until its reset is near.</p>
-        <table id="account-list"></table>
+        <p class="hint">Accounts are used in order of their weekly reset. A reserve account holds quota back until its reset is near.</p>
+        <ul class="account-list" id="account-list"></ul>
         <div class="row">
-          <select id="account-add"></select>
-          <button type="button" id="account-add-button">Add account</button>
+          <select id="account-add" class="select"></select>
+          <button type="button" id="account-add-button" class="button">Add account</button>
         </div>
       </fieldset>
-      <fieldset>
+
+      <fieldset class="card">
         <legend>Thresholds</legend>
-        <div class="grid">
-          <label>Reserve cap, reset ≥ 48 h away <input type="number" step="any" data-threshold="reserve_cap_far"> %</label>
-          <label>Reserve cap, reset 12–48 h away <input type="number" step="any" data-threshold="reserve_cap_near"> %</label>
-          <label>Final cap (every account) <input type="number" step="any" data-threshold="final_cap"> %</label>
-          <label>5-hour switch at <input type="number" step="any" data-threshold="session_cap"> %</label>
-          <label>Minimum dwell <input type="number" step="1" data-threshold="min_dwell_minutes"> min</label>
-          <label>Readings stale after <input type="number" step="any" data-threshold="stale_hours"> h</label>
+        <div class="fields">
+          <label class="field"><span>Reserve cap, reset ≥ 48 h away</span><span class="input-unit"><input type="number" step="any" data-threshold="reserve_cap_far"><em>%</em></span></label>
+          <label class="field"><span>Reserve cap, reset 12–48 h away</span><span class="input-unit"><input type="number" step="any" data-threshold="reserve_cap_near"><em>%</em></span></label>
+          <label class="field"><span>Final cap, every account</span><span class="input-unit"><input type="number" step="any" data-threshold="final_cap"><em>%</em></span></label>
+          <label class="field"><span>5-hour switch at</span><span class="input-unit"><input type="number" step="any" data-threshold="session_cap"><em>%</em></span></label>
+          <label class="field"><span>Minimum dwell</span><span class="input-unit"><input type="number" step="1" data-threshold="min_dwell_minutes"><em>min</em></span></label>
+          <label class="field"><span>Readings stale after</span><span class="input-unit"><input type="number" step="any" data-threshold="stale_hours"><em>h</em></span></label>
+        </div>
+        <div class="ruler" id="ruler" aria-hidden="true"></div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Buckets</legend>
+        <p class="hint">Each bucket has its own weekly limit. Type a model and press Enter.</p>
+        <div class="field"><span>Main</span><div class="chips" data-bucket="main"><input type="text" aria-label="Add a main model"></div></div>
+        <div class="field"><span>Fable</span><div class="chips" data-bucket="fable"><input type="text" aria-label="Add a Fable model"></div></div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Anchoring</legend>
+        <div class="toggle-row">
+          <button type="button" role="switch" aria-checked="false" class="switch" data-anchor="enabled" aria-label="Anchoring"><span class="knob"></span></button>
+          <span>Start idle accounts' 5-hour window with a one-token request</span>
+        </div>
+        <div class="fields">
+          <label class="field"><span>Model</span><input type="text" class="text" data-anchor="model"></label>
+          <label class="field"><span>Fallback model</span><input type="text" class="text" data-anchor="fallback_model"></label>
         </div>
       </fieldset>
-      <fieldset>
-        <legend>Buckets</legend>
-        <p class="muted">Models separated by commas. Each bucket has its own weekly limit.</p>
-        <label class="wide">Main <input type="text" data-bucket="main"></label>
-        <label class="wide">Fable <input type="text" data-bucket="fable"></label>
-      </fieldset>
-      <fieldset>
-        <legend>Anchoring</legend>
-        <label><input type="checkbox" data-anchor="enabled"> Start idle accounts' 5-hour window with a one-token request</label>
-        <label class="wide">Model <input type="text" data-anchor="model"></label>
-        <label class="wide">Fallback model <input type="text" data-anchor="fallback_model"></label>
-      </fieldset>
-      <div class="row">
-        <button type="button" id="review">Review &amp; save</button>
-        <span id="settings-status" class="muted"></span>
+
+      <div class="savebar">
+        <div id="validation" class="bad"></div>
+        <span id="settings-status" class="hint"></span>
+        <button type="button" id="review" class="button primary">Review &amp; save</button>
       </div>
-      <div id="validation" class="bad"></div>
-      <div id="review-panel" hidden>
+      <div id="review-panel" class="card review" hidden>
         <h3>Changes to write</h3>
         <ul id="review-list"></ul>
         <div class="row">
-          <button type="button" id="save" class="primary">Save</button>
-          <button type="button" id="cancel">Cancel</button>
+          <button type="button" id="save" class="button primary">Save</button>
+          <button type="button" id="cancel" class="button">Cancel</button>
         </div>
       </div>
     </form>

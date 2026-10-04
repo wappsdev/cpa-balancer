@@ -9,13 +9,14 @@ import (
 )
 
 type AccountView struct {
-	AuthFile    string                  `json:"auth_file"`
-	Reserve     bool                    `json:"reserve"`
-	Listed      bool                    `json:"listed"`
-	Readings    quota.Readings          `json:"readings"`
-	Eligibility map[quota.Bucket]string `json:"eligibility"`
-	LastAnchor  time.Time               `json:"last_anchor,omitzero"`
-	AnchorModel string                  `json:"anchor_model,omitempty"`
+	AuthFile    string                   `json:"auth_file"`
+	Reserve     bool                     `json:"reserve"`
+	Listed      bool                     `json:"listed"`
+	Readings    quota.Readings           `json:"readings"`
+	Eligibility map[quota.Bucket]string  `json:"eligibility"`
+	Caps        map[quota.Bucket]float64 `json:"caps"` // the switch threshold in force per bucket
+	LastAnchor  time.Time                `json:"last_anchor,omitzero"`
+	AnchorModel string                   `json:"anchor_model,omitempty"`
 }
 
 type View struct {
@@ -38,10 +39,13 @@ func (e *Engine) Status() View {
 		snap := e.snaps[a.AuthFile]
 		_, listed := e.credentials[a.AuthFile]
 		av := AccountView{AuthFile: a.AuthFile, Reserve: a.Reserve, Listed: listed, Readings: snap.Readings,
-			Eligibility: map[quota.Bucket]string{}}
+			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{quota.Session: e.cfg.Thresholds.SessionCap}}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
 			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)
 			av.Eligibility[b] = why
+			if r, ok := snap.Readings[b]; ok && r.ResetsAt != nil {
+				av.Caps[b] = policy.Cap(a.Reserve, *r.ResetsAt, now, e.cfg.Thresholds)
+			}
 		}
 		if acc := e.st.Accounts[a.AuthFile]; acc != nil && !acc.LastAnchor.IsZero() {
 			av.LastAnchor = acc.LastAnchor

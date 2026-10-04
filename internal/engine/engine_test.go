@@ -246,6 +246,19 @@ func TestStatusHasNoCredentials(t *testing.T) {
 	}
 }
 
+func TestStatusReportsTheCapInForcePerBucket(t *testing.T) {
+	e := New(testConfig(t), newHost(), (&clock{t0}).now, nil)
+	warm(e, t0, 30)
+	caps := map[string]map[quota.Bucket]float64{}
+	for _, a := range e.Status().Accounts {
+		caps[a.AuthFile] = a.Caps
+	}
+	// G keeps a reserve and resets in 90 h (far cap); W has none (final cap); 5-hour uses session_cap.
+	if caps[G][quota.Main] != 85 || caps[G][quota.Session] != 98 || caps[W][quota.Main] != 99 || caps[W][quota.Fable] != 99 {
+		t.Fatalf("caps %+v", caps)
+	}
+}
+
 func TestSwitchMadeByUsageIsProbedOnTheNextTick(t *testing.T) {
 	c := &clock{t0}
 	h := newHost()
