@@ -2,43 +2,129 @@
 package web
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 const (
 	PluginID     = "cpa-balancer"
-	ResourcePath = "/status"                          // relative to /v0/resource/plugins/<id>
-	RoutePath    = "/plugins/" + PluginID + "/status" // relative to /v0/management
+	resourceBase = "/v0/resource/plugins/" + PluginID
+	routeBase    = "/v0/management/plugins/" + PluginID
+	pagePath     = "/status" // the menu entry; serves index.html
 )
 
-//go:embed status.html
-var page []byte
-
-func Registration() map[string]any {
-	return map[string]any{
-		"routes": []map[string]any{{"Method": http.MethodGet, "Path": RoutePath}},
-		"resources": []map[string]any{{"Path": ResourcePath, "Menu": "Account Balancer",
-			"Description": "Which Claude account each quota bucket uses, and why."}},
-	}
+// API is what the routes need from the running plugin.
+type API interface {
+	Status() any
+	History(rangeName string) (any, error)
+	Run() any
+	Credentials() (any, error)
 }
 
-// Handle answers management.handle for the page and the status API.
-func Handle(req pluginapi.ManagementRequest, status func() any) pluginapi.ManagementResponse {
-	switch req.Path {
-	case "/v0/resource/plugins/" + PluginID + ResourcePath:
-		return pluginapi.ManagementResponse{StatusCode: http.StatusOK,
-			Headers: http.Header{"Content-Type": {"text/html; charset=utf-8"}, "Cache-Control": {"no-store"}}, Body: page}
-	case "/v0/management" + RoutePath:
-		body, err := json.Marshal(status())
-		if err != nil {
-			return pluginapi.ManagementResponse{StatusCode: http.StatusInternalServerError, Body: []byte(err.Error())}
-		}
-		return pluginapi.ManagementResponse{StatusCode: http.StatusOK,
-			Headers: http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}}, Body: body}
+//go:embed assets
+var assets embed.FS
+
+// resources maps resource paths to embedded files; the page links its assets relatively.
+var resources = map[string]string{
+	pagePath:     "assets/index.html",
+	"/app.js":    "assets/app.js",
+	"/app.css":   "assets/app.css",
+	"/uplot.js":  "assets/uPlot.iife.min.js",
+	"/uplot.css": "assets/uPlot.min.css",
+}
+
+var contentTypes = map[string]string{
+	".html": "text/html; charset=utf-8",
+	".js":   "text/javascript; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+}
+
+var routes = []struct{ method, path string }{
+	{http.MethodGet, "/status"},
+	{http.MethodGet, "/history"},
+	{http.MethodPost, "/run"},
+	{http.MethodGet, "/credentials"},
+}
+
+func Registration() map[string]any {
+	var rs []map[string]any
+	for _, r := range routes {
+		rs = append(rs, map[string]any{"Method": r.method, "Path": "/plugins/" + PluginID + r.path})
 	}
-	return pluginapi.ManagementResponse{StatusCode: http.StatusNotFound, Body: []byte("not found")}
+	var res []map[string]any
+	for p := range resources {
+		entry := map[string]any{"Path": p}
+		if p == pagePath {
+			entry["Menu"] = "Account Balancer"
+			entry["Description"] = "Which Claude account each quota bucket uses, its history and settings."
+		}
+		res = append(res, entry)
+	}
+	return map[string]any{"routes": rs, "resources": res}
+}
+
+// Handle answers management.handle for the page, its assets and the JSON API.
+func Handle(req pluginapi.ManagementRequest, api API) pluginapi.ManagementResponse {
+	if p, found := strings.CutPrefix(req.Path, resourceBase); found {
+		if file, known := resources[p]; known {
+			body, err := assets.ReadFile(file)
+			if err != nil {
+				return text(http.StatusInternalServerError, err.Error())
+			}
+			return pluginapi.ManagementResponse{StatusCode: http.StatusOK, Body: body, Headers: http.Header{
+				"Content-Type": {contentTypes[path.Ext(file)]}, "Cache-Control": {"no-store"}}}
+		}
+	}
+	switch req.Method + " " + strings.TrimPrefix(req.Path, routeBase) {
+	case "GET /status":
+		return jsonResponse(api.Status(), nil)
+	case "GET /history":
+		return jsonResponse(api.History(req.Query.Get("range")))
+	case "POST /run":
+		return jsonResponse(api.Run(), nil)
+	case "GET /credentials":
+		return jsonResponse(api.Credentials())
+	}
+	return text(http.StatusNotFound, "not found")
+}
+
+func jsonResponse(v any, err error) pluginapi.ManagementResponse {
+	if err != nil {
+		return text(http.StatusBadRequest, err.Error())
+	}
+	body, err := json.Marshal(v)
+	if err != nil {
+		return text(http.StatusInternalServerError, err.Error())
+	}
+	return pluginapi.ManagementResponse{StatusCode: http.StatusOK, Body: body,
+		Headers: http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}}}
+}
+
+func text(code int, msg string) pluginapi.ManagementResponse {
+	return pluginapi.ManagementResponse{StatusCode: code, Body: []byte(msg),
+		Headers: http.Header{"Content-Type": {"text/plain; charset=utf-8"}}}
+}
+
+// Credential is a Claude credential CPA knows about, for the "add account" picker.
+type Credential struct {
+	AuthFile string `json:"auth_file"`
+	Email    string `json:"email,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Disabled bool   `json:"disabled,omitempty"`
+}
+
+// ClaudeCredentials keeps only Claude credentials and only the fields the picker shows.
+func ClaudeCredentials(files []pluginapi.HostAuthFileEntry) []Credential {
+	out := []Credential{}
+	for _, f := range files {
+		if f.Provider == "claude" {
+			out = append(out, Credential{AuthFile: f.ID, Email: f.Email, Status: f.Status, Disabled: f.Disabled})
+		}
+	}
+	return out
 }
