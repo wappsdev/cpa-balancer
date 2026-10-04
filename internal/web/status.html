@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account Balancer</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #ffffff; --ok: #15803d; --bad: #b91c1c; --accent: #4f46e5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --line: #292524; --card: #1c1917; --ok: #4ade80; --bad: #f87171; --accent: #a5b4fc; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; }
+  .muted { color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .card .value { font-size: 16px; font-weight: 600; margin: 4px 0; word-break: break-all; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .scroll { overflow-x: auto; }
+  #error { color: var(--bad); margin-top: 16px; }
+  code { font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Account Balancer</h1>
+  <div class="muted" id="meta">Loading…</div>
+  <div id="error"></div>
+  <div class="cards" id="choices"></div>
+  <h2>Accounts</h2>
+  <div class="scroll"><table id="accounts"></table></div>
+  <h2>Recent changes</h2>
+  <div class="scroll"><table id="changes"></table></div>
+</main>
+<script>
+const API = "/v0/management/plugins/cpa-balancer/status";
+const PREFIX = "enc::v1::";
+
+// The Management Center stores its key XOR-obfuscated with this per-browser string.
+function managementKey() {
+  const raw = localStorage.getItem("managementKey");
+  if (!raw) return null;
+  if (!raw.startsWith(PREFIX)) { try { return JSON.parse(raw); } catch { return raw; } }
+  const data = Uint8Array.from(atob(raw.slice(PREFIX.length)), c => c.charCodeAt(0));
+  const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${location.host}|${navigator.userAgent}`);
+  return JSON.parse(new TextDecoder().decode(data.map((b, i) => b ^ key[i % key.length])));
+}
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const short = f => esc((f || "—").replace(/^claude-[0-9a-f]+-/, "").replace(/\.json$/, ""));
+const time = t => t ? new Date(t).toLocaleString() : "—";
+
+function reading(r) {
+  if (!r) return '<span class="muted">no data</span>';
+  if (!r.resets_at) return `closed <span class="muted">(${esc(r.source)})</span>`;
+  return `${r.util.toFixed(1)}% <span class="muted">resets ${time(r.resets_at)} · ${esc(r.source)}</span>`;
+}
+
+function render(v) {
+  document.getElementById("meta").textContent = `Mode: ${v.mode} · updated ${time(v.generated_at)}`;
+  const choice = (label, c, order) => `<div class="card"><div class="label">${label}</div>
+    <div class="value">${c.account ? short(c.account) : "no restriction"}</div>
+    <div class="muted">${esc(c.reason)}</div>
+    <div class="muted">order: ${(order || []).map(short).join(" → ") || "—"}</div></div>`;
+  document.getElementById("choices").innerHTML =
+    choice("Main bucket", v.decision.main, v.decision.main_order) + choice("Fable bucket", v.decision.fable, v.decision.fable_order);
+  const eligible = why => why.startsWith("weekly") && why.includes("<") ? `<span class="ok">${esc(why)}</span>` : `<span class="bad">${esc(why)}</span>`;
+  document.getElementById("accounts").innerHTML = `<tr><th>Account</th><th>Main</th><th>Fable</th><th>5-hour</th><th>Anchor</th></tr>` +
+    v.accounts.map(a => `<tr>
+      <td><strong>${short(a.auth_file)}</strong><br><span class="muted">${a.reserve ? "keeps a reserve" : "no reserve"}${a.listed ? "" : " · not listed by CPA"}</span></td>
+      <td>${reading(a.readings.main)}<br>${eligible(a.eligibility.main)}</td>
+      <td>${reading(a.readings.fable)}<br>${eligible(a.eligibility.fable)}</td>
+      <td>${reading(a.readings.session)}</td>
+      <td>${a.last_anchor ? `${time(a.last_anchor)}<br><code>${esc(a.anchor_model)}</code>` : '<span class="muted">—</span>'}</td>
+    </tr>`).join("");
+  document.getElementById("changes").innerHTML = `<tr><th>Time</th><th>Bucket</th><th>Change</th><th>Reason</th></tr>` +
+    ((v.changes || []).slice().reverse().map(c => `<tr><td>${time(c.at)}</td><td>${esc(c.bucket)}</td>
+      <td>${short(c.from)} → ${short(c.to)}</td><td class="muted">${esc(c.reason)}</td></tr>`).join("") ||
+     '<tr><td colspan="4" class="muted">No changes yet.</td></tr>');
+}
+
+async function refresh() {
+  const error = document.getElementById("error");
+  const key = managementKey();
+  if (!key) {
+    error.textContent = "Sign in to the Management Center with “Remember password” enabled, then reload this page.";
+    return;
+  }
+  try {
+    const res = await fetch(API, { headers: { Authorization: `Bearer ${key}` }, cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    render(await res.json());
+    error.textContent = "";
+  } catch (e) {
+    error.textContent = `Could not load status: ${e.message}`;
+  }
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
