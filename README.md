@@ -1,46 +1,71 @@
 # cpa-balancer
 
-Quota-aware Claude account balancing for a local CLIProxyAPI. Every 2 minutes it reads each
-account's weekly, Fable and 5-hour usage, picks the account whose weekly window resets
-soonest (keeping reserves on accounts that have one), and applies the choice to CPA through
-the Management API (`priority` for the main bucket, `excluded_models` for Fable).
+A CLIProxyAPI v8 native plugin that balances Claude accounts by quota. For every Claude
+request it picks the account whose weekly window resets soonest, keeping reserves on accounts
+that have one, with the Fable bucket decided separately. It reads usage from the rate-limit
+headers of each response, probes stale accounts, and starts idle accounts' 5-hour window with a
+one-token Haiku request so a switch lands on a window that resets sooner.
 
-While the chosen account's 5-hour window is running, every other usable account's 5-hour
-window is started with a 1-token Haiku request (`[anchor]` in the config), so a switch lands
-on a window that resets sooner. If a probe shows Haiku did not start the shared window, that
-account switches to anchoring with `fallback_model`. Design:
-`docs/superpowers/specs/2026-10-03-session-anchoring-design.md`.
+Designs: `docs/superpowers/specs/2026-10-04-cpa-balancer-plugin-design.md` (plugin) and
+`docs/superpowers/specs/2026-10-04-panel-ui-design.md` (page).
 
-Design: `docs/superpowers/specs/2026-10-03-cpa-balancer-design.md`
+## Build and install
 
-## Commands
+    make test       # go vet + go test
+    make install    # builds dist/cpa-balancer.dylib and copies it to ~/.cli-proxy-api/plugins/darwin/arm64/
+    brew services restart cliproxyapi
 
-    cpa-balancer status          # current choice, readings and reasons (no writes)
-    cpa-balancer run --dry-run   # one decision cycle without probing or writing
-    cpa-balancer run             # one decision cycle (what launchd runs)
-    cpa-balancer disable         # restore baseline priorities and stop deciding
-    cpa-balancer enable          # resume
+CPA loads the library at startup, so restart it after every install.
 
-Config: `~/.config/cpa-balancer/config.toml` (see `config.example.toml`).
-Log: `~/.local/state/cpa-balancer/balancer.log`. State: `~/.local/state/cpa-balancer/state.json`.
+## Configure
 
-## Install
+The config lives in CPA's config file under `plugins.configs.cpa-balancer`:
 
-    uv tool install --force .
-    cp deploy/dev.wapps.cpa-balancer.plist ~/Library/LaunchAgents/
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.wapps.cpa-balancer.plist
+    plugins:
+      configs:
+        cpa-balancer:
+          enabled: true
+          mode: apply            # shadow: decide and record, but let CPA pick
+          paused: false          # true: every pick goes to CPA's fill-first; no probes or anchors
+          state_path: ~/.cli-proxy-api/cpa-balancer/state.json
+          accounts:
+            - auth_file: claude-xxxxxxxx-first@example.com.json
+              reserve: false
+            - auth_file: claude-xxxxxxxx-second@example.com.json
+              reserve: true
+          buckets:
+            main: [claude-opus-5-5, claude-sonnet-5-5]
+            fable: [claude-fable-5-1]
+          thresholds:
+            reserve_cap_far: 85    # reserve accounts, reset 48 h or more away
+            reserve_cap_near: 90   # reserve accounts, reset 12–48 h away
+            final_cap: 99          # every account
+            session_cap: 98        # 5-hour window
+            min_dwell_minutes: 60
+            stale_hours: 6
+          anchor:
+            enabled: true
+            model: claude-haiku-4-5-20251001
+            fallback_model: claude-sonnet-5-5
 
-Do not use `uv tool install --editable`: the repository lives under `~/Documents`, which
-macOS privacy protection (TCC) blocks for launchd agents, so the scheduled run hangs on
-import waiting for a permission prompt. A regular install copies the package out of
-`~/Documents`. After changing the code, run `uv tool install --force .` again.
+An invalid config is not applied: the plugin keeps the previous one and reports
+`config_error` on its page.
 
-## Remove
+## Page
 
-    cpa-balancer disable
-    launchctl bootout gui/$(id -u)/dev.wapps.cpa-balancer
-    rm ~/Library/LaunchAgents/dev.wapps.cpa-balancer.plist
+Management Center → **Account Balancer** (sign in with "Remember password"):
 
-## Tests
+- header: balancing On / Paused, mode apply / shadow, Run now
+- Overview: chosen account per bucket with the reason, accounts, recent changes
+- History: 24h · 7d · 30d · 90d of weekly and 5-hour utilization, active account and tokens
+- Settings: accounts, thresholds, buckets and anchoring, saved through CPA after a review
 
-    uv run pytest -q
+State: `~/.cli-proxy-api/cpa-balancer/state.json`. History (90 days of 5-minute slots):
+`~/.cli-proxy-api/cpa-balancer/history/`. Log lines go to CPA's log with the prefix
+`cpa-balancer:`.
+
+## Roll back
+
+Pause it on the page (or set `paused: true`) to hand every pick back to CPA's fill-first
+order. To unload it entirely, disable the plugin in the Management Center's plugin list or set
+`plugins.configs.cpa-balancer.enabled: false` and restart CPA.
