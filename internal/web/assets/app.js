@@ -3,12 +3,23 @@
 const ROUTES = "/v0/management/plugins/cpa-balancer";
 const CONFIG = ROUTES + "/config"; // CPA's own plugin config API
 const PREFIX = "enc::v1::";
-const COLORS = ["#4f46e5", "#d97706", "#059669", "#db2777", "#0891b2", "#7c3aed"];
+const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#06b6d4", "#8b5cf6"];
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const short = f => (f || "—").replace(/^claude-[0-9a-f]+-/, "").replace(/\.json$/, "");
 const time = t => t ? new Date(t).toLocaleString() : "—";
+// Relative time: "in 4d 3h", "12m ago"; the exact time goes into a title attribute.
+function rel(t) {
+  if (!t) return "—";
+  let s = Math.round((Date.parse(t) - Date.now()) / 1000);
+  const future = s > 0;
+  s = Math.abs(s);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  const span = d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m` : "now";
+  return span === "now" ? "just now" : future ? `in ${span}` : `${span} ago`;
+}
+const when = t => `<span class="when" title="${esc(time(t))}">${esc(rel(t))}</span>`;
 const num = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
 
 // The Management Center persists its session under "cli-proxy-auth" (the key only with
@@ -62,41 +73,74 @@ function renderStatus(v) {
     return;
   }
   view = v;
-  $("meta").textContent = `Updated ${time(v.generated_at)}`;
+  $("meta").textContent = `${v.paused ? "Paused" : v.mode === "shadow" ? "Shadow mode — deciding, not applying" : "Balancing"} · updated ${rel(v.generated_at)}`;
+  $("live-dot").className = "dot " + (v.paused ? "paused" : "on");
   const pause = $("pause");
   pause.disabled = false;
-  pause.setAttribute("aria-pressed", String(!v.paused));
-  pause.textContent = v.paused ? "Balancing: Paused" : "Balancing: On";
-  $("mode").disabled = false;
-  $("mode").value = v.mode;
+  pause.setAttribute("aria-checked", String(!v.paused));
+  $("pause-label").textContent = v.paused ? "Paused" : "On";
+  for (const b of $("mode").querySelectorAll("button")) {
+    b.disabled = false;
+    b.setAttribute("aria-pressed", String(b.dataset.mode === v.mode));
+  }
   $("run").disabled = false;
 
-  const choice = (label, c, order) => `<div class="card"><div class="label">${label}</div>
-    <div class="value">${c.account ? esc(short(c.account)) : "no restriction"}</div>
-    <div class="muted">${esc(c.reason)}</div>
-    <div class="muted">order: ${(order || []).map(o => esc(short(o))).join(" → ") || "—"}</div></div>`;
+  const choice = (label, c, order) => `<div class="card choice">
+    <div class="eyebrow">${label}</div>
+    <div class="account">${c.account ? esc(short(c.account)) : "No restriction"}</div>
+    <div class="reason">${esc(c.reason)}</div>
+    <div class="order">${(order || []).map((o, i) => `<span class="chip${o === c.account ? " accent" : ""}"><b>${i + 1}</b> ${esc(short(o))}</span>`).join("")}</div>
+  </div>`;
   $("choices").innerHTML = v.paused
-    ? `<div class="card"><div class="label">Paused</div><div class="muted">Every request uses CPA's fill-first order; no probes or anchors run.</div></div>`
+    ? `<div class="card choice"><div class="eyebrow">Paused</div><div class="account">CPA's fill-first order</div>
+       <div class="reason">Every request uses CPA's own order. No probes or anchors run until balancing is turned back on.</div></div>`
     : choice("Main bucket", v.decision.main, v.decision.main_order) + choice("Fable bucket", v.decision.fable, v.decision.fable_order);
 
-  const reading = r => {
-    if (!r) return '<span class="muted">no data</span>';
-    if (!r.resets_at) return `closed <span class="muted">(${esc(r.source)})</span>`;
-    return `${r.util.toFixed(1)}% <span class="muted">resets ${time(r.resets_at)} · ${esc(r.source)}</span>`;
-  };
-  const eligible = why => `<span class="${why.startsWith("weekly") && why.includes("<") ? "ok" : "bad"}">${esc(why)}</span>`;
-  $("accounts").innerHTML = `<tr><th>Account</th><th>Main</th><th>Fable</th><th>5-hour</th><th>Anchor</th></tr>` +
-    (v.accounts || []).map(a => `<tr>
-      <td><strong>${esc(short(a.auth_file))}</strong><br><span class="muted">${a.reserve ? "keeps a reserve" : "no reserve"}${a.listed ? "" : " · not listed by CPA"}</span></td>
-      <td>${reading(a.readings.main)}<br>${eligible(a.eligibility.main)}</td>
-      <td>${reading(a.readings.fable)}<br>${eligible(a.eligibility.fable)}</td>
-      <td>${reading(a.readings.session)}</td>
-      <td>${a.last_anchor ? `${time(a.last_anchor)}<br><code>${esc(a.anchor_model)}</code>` : '<span class="muted">—</span>'}</td>
-    </tr>`).join("");
-  $("changes").innerHTML = `<tr><th>Time</th><th>Bucket</th><th>Change</th><th>Reason</th></tr>` +
-    ((v.changes || []).slice().reverse().map(c => `<tr><td>${time(c.at)}</td><td>${esc(c.bucket)}</td>
-      <td>${esc(short(c.from))} → ${esc(short(c.to))}</td><td class="muted">${esc(c.reason)}</td></tr>`).join("") ||
-     '<tr><td colspan="4" class="muted">No changes yet.</td></tr>');
+  $("accounts").innerHTML = (v.accounts || []).map(a => accountCard(a, v)).join("");
+
+  $("changes").innerHTML = (v.changes || []).slice().reverse().slice(0, 12).map(c => `<li>
+      <span class="mark"></span><span class="chip">${esc(c.bucket)}</span>
+      <span class="what">${esc(short(c.from))} → <strong>${esc(short(c.to))}</strong><span class="reason">${esc(c.reason)}</span></span>
+      ${when(c.at)}</li>`).join("") || '<li><span class="empty">No changes yet.</span></li>';
+}
+
+const BUCKETS = [["main", "Main"], ["fable", "Fable"], ["session", "5-hour"]];
+
+function accountCard(a, v) {
+  const activeIn = [["main", "main"], ["fable", "Fable"]].filter(([b]) => !v.paused && v.decision[b].account === a.auth_file).map(([, l]) => l);
+  const rows = BUCKETS.map(([b, label]) => {
+    const r = a.readings[b], cap = a.caps?.[b];
+    const open = r && r.resets_at;
+    const util = open ? r.util : 0;
+    const level = cap == null ? "" : util >= cap ? "bad" : util >= cap - 10 ? "warn" : "";
+    const value = !r ? '<span>no data</span>'
+      : !open ? `<span>${b === "session" ? "window not running" : "closed"}</span>`
+      : `<strong>${util.toFixed(1)}%</strong>${cap != null ? `<span>cap ${cap}%</span>` : ""}<span title="${esc(time(r.resets_at))}">resets ${esc(rel(r.resets_at))}</span>`;
+    const why = a.eligibility?.[b];
+    const blocked = why && !(why.startsWith("weekly") && why.includes("<"));
+    return `<div class="meter-row">
+        <span class="label">${label}</span>
+        <div class="meter" role="meter" aria-label="${label} utilization" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${util}">
+          <div class="fill ${level}" style="transform: scaleX(${Math.min(util, 100) / 100})"></div>
+          ${open && cap != null ? `<div class="cap" style="left: ${cap}%" title="cap ${cap}%"></div>` : ""}
+        </div>
+        <span class="meter-value">${value}</span>
+      </div>${blocked ? `<div class="why">${esc(why)}</div>` : ""}`;
+  }).join("");
+  const sources = [...new Set(Object.values(a.readings || {}).map(r => r.source))].join(", ");
+  return `<article class="card account-card">
+    <div class="account-head">
+      <span class="name">${esc(short(a.auth_file))}</span>
+      ${activeIn.length ? `<span class="chip accent">● active · ${activeIn.join(", ")}</span>` : ""}
+      <span class="chip">${a.reserve ? "keeps a reserve" : "no reserve"}</span>
+      ${a.listed ? "" : '<span class="chip bad">not listed by CPA</span>'}
+    </div>
+    ${rows}
+    <div class="account-foot">
+      <span>${a.last_anchor ? `Last anchor ${when(a.last_anchor)} · <code>${esc(a.anchor_model)}</code>` : "No anchor yet"}</span>
+      <span>${sources ? `source: ${esc(sources)}` : ""}</span>
+    </div>
+  </article>`;
 }
 
 async function refreshStatus() {
@@ -116,29 +160,41 @@ async function patchConfig(change) {
 }
 
 $("pause").addEventListener("click", async e => {
-  e.currentTarget.disabled = true;
-  try { await patchConfig({ paused: !view.paused }); } catch (err) { showError(err); e.currentTarget.disabled = false; }
+  const button = e.currentTarget;
+  button.disabled = true;
+  button.setAttribute("aria-checked", String(view.paused)); // flip at once; the status read confirms it
+  try { await patchConfig({ paused: !view.paused }); } catch (err) { showError(err); renderStatus(view); }
 });
-$("mode").addEventListener("change", async e => {
-  e.currentTarget.disabled = true;
-  try { await patchConfig({ mode: e.currentTarget.value }); } catch (err) { showError(err); e.currentTarget.disabled = false; }
+$("mode").addEventListener("click", async e => {
+  const mode = e.target.closest("button")?.dataset.mode;
+  if (!mode || mode === view?.mode) return;
+  const buttons = $("mode").querySelectorAll("button");
+  for (const b of buttons) { b.disabled = true; b.setAttribute("aria-pressed", String(b.dataset.mode === mode)); }
+  try { await patchConfig({ mode }); } catch (err) { showError(err); renderStatus(view); }
 });
 $("run").addEventListener("click", async e => {
   const button = e.currentTarget;
   button.disabled = true;
-  button.textContent = "Running…";
+  button.classList.add("busy");
   try { renderStatus(await api("POST", ROUTES + "/run")); showError(null); }
   catch (err) { showError(err); }
-  finally { button.disabled = false; button.textContent = "Run now"; }
+  finally { button.disabled = false; button.classList.remove("busy"); }
 });
 
 // ---------- tabs ----------
 
 let tab = "overview";
 
+// The indicator is a fixed 100px bar moved and scaled with transform, so only compositing runs.
+function placeIndicator() {
+  const b = document.querySelector(`.tabs button[data-tab="${tab}"]`);
+  document.querySelector(".tab-indicator").style.transform = `translateX(${b.offsetLeft}px) scaleX(${b.offsetWidth / 100})`;
+}
+
 function selectTab(name) {
   tab = name;
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  placeIndicator();
   for (const t of ["overview", "history", "settings"]) $("tab-" + t).hidden = t !== name;
   if (name === "history") loadHistory();
   if (name === "settings") loadSettings();
@@ -151,10 +207,10 @@ let range = "24h";
 let hist = null;
 let charts = [];
 
-for (const b of document.querySelectorAll(".range button")) {
+for (const b of $("range").querySelectorAll("button")) {
   b.addEventListener("click", () => {
     range = b.dataset.range;
-    for (const o of document.querySelectorAll(".range button")) o.setAttribute("aria-pressed", String(o === b));
+    for (const o of $("range").querySelectorAll("button")) o.setAttribute("aria-pressed", String(o === b));
     loadHistory();
   });
 }
@@ -170,12 +226,13 @@ async function loadHistory() {
 const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const alpha = (hex, a) => hex + Math.round(a * 255).toString(16).padStart(2, "0");
 const stepped = () => uPlot.paths.stepped({ align: 1 });
+const pct = (u, v) => v == null ? "—" : v.toFixed(1) + "%";
 
 function axes(yLabel, y = {}) {
-  const stroke = cssVar("--muted"), grid = { stroke: cssVar("--line"), width: 1 };
+  const stroke = cssVar("--muted"), grid = { stroke: cssVar("--line"), width: 1 }, font = "11px -apple-system, sans-serif";
   return [
-    { stroke, grid, ticks: grid },
-    { stroke, grid, ticks: grid, label: yLabel, size: 56, ...y },
+    { stroke, grid, ticks: { show: false }, font },
+    { stroke, grid, ticks: { show: false }, font, label: yLabel, labelFont: font, size: 52, ...y },
   ];
 }
 
@@ -216,17 +273,17 @@ function renderHistory(s) {
   const weeklyData = [s.t];
   for (const n of names) {
     const a = s.accounts[n];
-    weekly.series.push({ label: `${short(n)} main`, stroke: color(n), width: 2, spanGaps: false });
-    weekly.series.push({ label: `${short(n)} Fable`, stroke: color(n), width: 2, dash: [6, 4] });
-    weekly.series.push({ label: `${short(n)} main cap`, stroke: alpha(color(n), 0.6), width: 1, paths: stepped(), dash: [2, 3] });
-    weekly.series.push({ label: `${short(n)} Fable cap`, stroke: alpha(color(n), 0.6), width: 1, paths: stepped(), dash: [2, 3], show: false });
+    weekly.series.push({ label: `${short(n)} main`, stroke: color(n), width: 2, value: pct });
+    weekly.series.push({ label: `${short(n)} Fable`, stroke: color(n), width: 2, dash: [6, 4], value: pct });
+    weekly.series.push({ label: `${short(n)} main cap`, stroke: alpha(color(n), 0.6), width: 1, paths: stepped(), dash: [2, 3], value: pct });
+    weekly.series.push({ label: `${short(n)} Fable cap`, stroke: alpha(color(n), 0.6), width: 1, paths: stepped(), dash: [2, 3], show: false, value: pct });
     weeklyData.push(a.main, a.fable, a.main_cap, a.fable_cap);
   }
 
   const session = { ...base(150, { y: { range: [0, 100] } }), axes: axes("%"), series: [{}], hooks: { draw: [markers(["anchor"], ev => color(ev.account))] } };
   const sessionData = [s.t];
   for (const n of names) {
-    session.series.push({ label: short(n), stroke: color(n), fill: alpha(color(n), 0.12), width: 2 });
+    session.series.push({ label: short(n), stroke: color(n), fill: alpha(color(n), 0.12), width: 2, value: pct });
     sessionData.push(s.accounts[n].session);
   }
 
@@ -240,6 +297,7 @@ function renderHistory(s) {
     axes: axes("", { splits: () => [1, 2], values: (u, vals) => vals.map(v => v === 2 ? "main" : "Fable") }),
     series: [{}], hooks: { draw: [markers(["switch"], () => cssVar("--muted"))] },
   };
+  active.cursor = { ...active.cursor, points: { show: false } }; // a dot on a 10px lane only hides it
   const activeData = [s.t];
   for (const n of names) {
     active.series.push({ label: `${short(n)} main`, stroke: color(n), width: 10, paths: stepped(), points: { show: false }, value: (u, v) => v == null ? "—" : "active" });
@@ -274,7 +332,7 @@ function renderHistory(s) {
 function describe(i) {
   if (i == null || !hist) return;
   const s = hist, from = s.t[i], to = from + s.step_seconds;
-  const parts = [`<strong>${time(from * 1000)}</strong>`];
+  const parts = [`<strong>${esc(time(from * 1000))}</strong>`];
   for (const [n, a] of Object.entries(s.accounts)) {
     if (!a.requests[i]) continue;
     const models = Object.entries(a.models || {}).filter(([, v]) => v[i]).map(([m, v]) => `${esc(m)} ${v[i]}`).join(", ");
@@ -289,7 +347,7 @@ function describe(i) {
 
 function eventText(ev) {
   switch (ev.kind) {
-    case "switch": return `${esc(ev.bucket)}: ${esc(short(ev.from))} → ${esc(short(ev.to))} <span class="muted">${esc(ev.reason)}</span>`;
+    case "switch": return `${esc(ev.bucket)}: ${esc(short(ev.from))} → <strong>${esc(short(ev.to))}</strong> <span class="reason">${esc(ev.reason)}</span>`;
     case "anchor": return `anchored ${esc(short(ev.account))} with <code>${esc(ev.model)}</code>`;
     case "reset": return `${esc(short(ev.account))} ${esc(ev.bucket)} window reset`;
   }
@@ -297,13 +355,14 @@ function eventText(ev) {
 }
 
 function renderEvents(s) {
-  const rows = s.events.slice().sort((a, b) => Date.parse(b.t) - Date.parse(a.t)).slice(0, 200)
-    .map(ev => `<tr><td>${time(ev.t)}</td><td>${esc(ev.kind)}</td><td>${eventText(ev)}</td></tr>`).join("");
-  $("events").innerHTML = `<tr><th>Time</th><th>Kind</th><th>Detail</th></tr>` +
-    (rows || '<tr><td colspan="3" class="muted">No events in this range.</td></tr>');
+  $("events").innerHTML = s.events.slice().sort((a, b) => Date.parse(b.t) - Date.parse(a.t)).slice(0, 200)
+    .map(ev => `<li><span class="mark ${esc(ev.kind)}"></span><span class="chip">${esc(ev.kind)}</span>
+      <span class="what">${eventText(ev)}</span>${when(ev.t)}</li>`).join("") ||
+    '<li><span class="empty">No events in this range.</span></li>';
 }
 
 addEventListener("resize", () => {
+  placeIndicator();
   const width = $("chart-weekly").clientWidth;
   for (const c of charts) c.setSize({ width, height: c.height });
 });
@@ -314,6 +373,7 @@ const SECTIONS = ["accounts", "buckets", "thresholds", "anchor"];
 let original = null;
 let accounts = [];
 let credentials = [];
+const buckets = { main: [], fable: [] };
 
 async function loadSettings() {
   $("review-panel").hidden = true;
@@ -331,18 +391,67 @@ function fillForm(c) {
   accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: !!a.reserve }));
   renderAccounts();
   for (const el of document.querySelectorAll("[data-threshold]")) el.value = c.thresholds?.[el.dataset.threshold] ?? "";
-  for (const el of document.querySelectorAll("[data-bucket]")) el.value = (c.buckets?.[el.dataset.bucket] || []).join(", ");
+  for (const b of Object.keys(buckets)) { buckets[b] = [...(c.buckets?.[b] || [])]; renderChips(b); }
   for (const el of document.querySelectorAll("[data-anchor]")) {
     const v = c.anchor?.[el.dataset.anchor];
-    if (el.type === "checkbox") el.checked = !!v; else el.value = v ?? "";
+    if (el.getAttribute("role") === "switch") el.setAttribute("aria-checked", String(!!v)); else el.value = v ?? "";
+  }
+  renderRuler();
+}
+
+// Model chips: Enter or comma adds, Backspace on an empty input removes the last one.
+function renderChips(bucket) {
+  const box = document.querySelector(`.chips[data-bucket="${bucket}"]`), input = box.querySelector("input");
+  for (const c of box.querySelectorAll(".chip")) c.remove();
+  for (const [i, m] of buckets[bucket].entries()) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = `${esc(m)}<button type="button" data-chip="${i}" aria-label="Remove ${esc(m)}">×</button>`;
+    box.insertBefore(chip, input);
   }
 }
 
+for (const box of document.querySelectorAll(".chips")) {
+  const bucket = box.dataset.bucket, input = box.querySelector("input");
+  const add = () => {
+    const m = input.value.trim().replace(/,$/, "");
+    if (m && !buckets[bucket].includes(m)) buckets[bucket].push(m);
+    input.value = "";
+    renderChips(bucket);
+  };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); }
+    else if (e.key === "Backspace" && !input.value && buckets[bucket].length) { buckets[bucket].pop(); renderChips(bucket); }
+  });
+  input.addEventListener("blur", add);
+  box.addEventListener("click", e => {
+    const i = e.target.dataset.chip;
+    if (i !== undefined) { buckets[bucket].splice(+i, 1); renderChips(bucket); } else input.focus();
+  });
+}
+
+for (const sw of document.querySelectorAll("#settings .switch")) {
+  sw.addEventListener("click", () => sw.setAttribute("aria-checked", String(sw.getAttribute("aria-checked") !== "true")));
+}
+
+// The ruler shows where the caps sit on 0–100 as they are typed.
+function renderRuler() {
+  const value = k => Number(document.querySelector(`[data-threshold="${k}"]`).value);
+  const marks = [["reserve_cap_far", "≥48h", "up"], ["reserve_cap_near", "12–48h", "down"], ["final_cap", "final", "up"], ["session_cap", "5-hour", "down"]];
+  $("ruler").innerHTML = '<div class="track"></div>' + marks.map(([k, label, side]) => {
+    const v = value(k);
+    if (!(v >= 0 && v <= 100)) return "";
+    return `<div class="tick${k === "session_cap" ? " session" : ""}" style="left: ${v}%"></div><div class="tag ${side}" style="left: ${v}%">${label} ${v}%</div>`;
+  }).join("");
+}
+for (const el of document.querySelectorAll("[data-threshold]")) el.addEventListener("input", renderRuler);
+
 function renderAccounts() {
-  $("account-list").innerHTML = `<tr><th>Account</th><th>Reserve</th><th></th></tr>` + accounts.map((a, i) => `<tr>
-    <td><strong>${esc(short(a.auth_file))}</strong><br><span class="muted">${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></td>
-    <td><label><input type="checkbox" data-reserve="${i}" ${a.reserve ? "checked" : ""}> keeps a reserve</label></td>
-    <td><button type="button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">Remove</button></td></tr>`).join("");
+  $("account-list").innerHTML = accounts.map((a, i) => `<li>
+    <div class="who"><strong>${esc(short(a.auth_file))}</strong><span>${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
+    <div class="reserve"><button type="button" role="switch" class="switch" data-reserve="${i}" aria-checked="${a.reserve}" aria-label="Keeps a reserve"><span class="knob"></span></button>Reserve</div>
+    <button type="button" class="icon-button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">
+      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></li>`).join("");
   const free = credentials.filter(c => !accounts.some(a => a.auth_file === c.auth_file));
   $("account-add").innerHTML = free.length
     ? free.map(c => `<option value="${esc(c.auth_file)}">${esc(c.email || short(c.auth_file))}${c.disabled ? " (disabled)" : ""}</option>`).join("")
@@ -350,13 +459,16 @@ function renderAccounts() {
   $("account-add-button").disabled = !free.length;
 }
 
-$("account-list").addEventListener("change", e => {
-  const i = e.target.dataset.reserve;
-  if (i !== undefined) accounts[+i].reserve = e.target.checked;
-});
 $("account-list").addEventListener("click", e => {
-  const i = e.target.dataset.remove;
-  if (i !== undefined) { accounts.splice(+i, 1); renderAccounts(); }
+  const reserve = e.target.closest("[data-reserve]"), remove = e.target.closest("[data-remove]");
+  if (reserve) {
+    const a = accounts[+reserve.dataset.reserve];
+    a.reserve = !a.reserve;
+    reserve.setAttribute("aria-checked", String(a.reserve));
+  } else if (remove) {
+    accounts.splice(+remove.dataset.remove, 1);
+    renderAccounts();
+  }
 });
 $("account-add-button").addEventListener("click", () => {
   const f = $("account-add").value;
@@ -368,16 +480,12 @@ function collect() {
   for (const el of document.querySelectorAll("[data-threshold]")) {
     if (el.value !== "") thresholds[el.dataset.threshold] = Number(el.value);
   }
-  const buckets = {};
-  for (const el of document.querySelectorAll("[data-bucket]")) {
-    buckets[el.dataset.bucket] = el.value.split(",").map(m => m.trim()).filter(Boolean);
-  }
   const anchor = {};
   for (const el of document.querySelectorAll("[data-anchor]")) {
-    if (el.type === "checkbox") anchor[el.dataset.anchor] = el.checked;
+    if (el.getAttribute("role") === "switch") anchor[el.dataset.anchor] = el.getAttribute("aria-checked") === "true";
     else if (el.value.trim()) anchor[el.dataset.anchor] = el.value.trim();
   }
-  return { accounts: accounts.map(a => ({ ...a })), buckets, thresholds, anchor };
+  return { accounts: accounts.map(a => ({ ...a })), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
 }
 
 // The same rules as config.Validate; the plugin checks them again.
@@ -469,6 +577,7 @@ $("save").addEventListener("click", async e => {
 
 // ---------- start ----------
 
+placeIndicator();
 refreshStatus();
 setInterval(() => { if (!document.hidden) refreshStatus(); }, 15000);
 setInterval(() => { if (!document.hidden && tab === "history") loadHistory(); }, 60000);
