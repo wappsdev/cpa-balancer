@@ -122,6 +122,43 @@ func TestQueryIncludesTheOpenSlot(t *testing.T) {
 	}
 }
 
+func TestASlotInMemoryAndOnDiskCountsOnce(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRecorder(dir)
+	r.AddTraffic(t0.Add(time.Minute), "w", "m", Traffic{Requests: 2})
+	r.current(t0.Add(6 * time.Minute)) // closes 12:00 into pending without writing it
+	// A flush racing the query wrote the same slot to disk after the memory copy was taken.
+	if err := r.appendSlot(r.pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := r.Query("24h", t0.Add(6*time.Minute))
+	if got := s.Accounts["w"].Requests[len(s.T)-2]; got != 2 {
+		t.Fatalf("requests %d, want 2", got)
+	}
+}
+
+func TestPendingSlotsAreBoundedWhenWritesFail(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(dir, nil, 0o600); err != nil { // a file where the directory should be
+		t.Fatal(err)
+	}
+	r := NewRecorder(dir)
+	for i := range maxPending + 50 {
+		at := t0.Add(time.Duration(i) * SlotLength)
+		r.AddTraffic(at, "w", "m", Traffic{Requests: 1})
+		if err := r.Flush(at); err == nil && i > 0 {
+			t.Fatal("flush must fail")
+		}
+	}
+	if len(r.pending) != maxPending {
+		t.Fatalf("pending %d, want %d", len(r.pending), maxPending)
+	}
+	// Slots 0..336 are closed; the last 288 are kept.
+	if want := t0.Add(49 * SlotLength); !r.pending[0].T.Equal(want) {
+		t.Fatalf("oldest kept %v, want %v", r.pending[0].T, want)
+	}
+}
+
 func mustRead(t *testing.T, p string) []byte {
 	b, err := os.ReadFile(p)
 	if err != nil {

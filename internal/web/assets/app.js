@@ -47,8 +47,16 @@ function showError(e) {
 // ---------- header and overview ----------
 
 let view = null;
+let configError = ""; // kept apart from view: it is reported even before any config was accepted
 
 function renderStatus(v) {
+  configError = v.config_error || "";
+  $("config-error").hidden = !v.config_error;
+  $("config-error").textContent = v.config_error ? `The last configuration was rejected and is not in use: ${v.config_error}` : "";
+  if (!v.decision) { // no engine yet: the plugin has never accepted a configuration
+    $("meta").textContent = "Not configured";
+    return;
+  }
   view = v;
   $("meta").textContent = `Updated ${time(v.generated_at)}`;
   const pause = $("pause");
@@ -58,8 +66,6 @@ function renderStatus(v) {
   $("mode").disabled = false;
   $("mode").value = v.mode;
   $("run").disabled = false;
-  $("config-error").hidden = !v.config_error;
-  $("config-error").textContent = v.config_error ? `The last configuration was rejected and is not in use: ${v.config_error}` : "";
 
   const choice = (label, c, order) => `<div class="card"><div class="label">${label}</div>
     <div class="value">${c.account ? esc(short(c.account)) : "no restriction"}</div>
@@ -442,9 +448,9 @@ $("save").addEventListener("click", async e => {
   $("settings-status").textContent = "Saving…";
   try {
     await patchConfig(pending);
-    if (view?.config_error) {
+    if (configError) {
       $("settings-status").textContent = "";
-      $("validation").textContent = `Saved, but the plugin rejected it: ${view.config_error}`;
+      $("validation").textContent = `Saved, but the plugin rejected it: ${configError}`;
     } else {
       $("settings-status").textContent = "Saved.";
       await loadSettings();

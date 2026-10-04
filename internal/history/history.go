@@ -16,6 +16,7 @@ const (
 	SlotLength = 5 * time.Minute
 	Retention  = 90 * 24 * time.Hour
 	dateLayout = "2006-01-02"
+	maxPending = 288 // a day of unwritten slots; older ones are dropped while writes keep failing
 )
 
 type Traffic struct {
@@ -101,6 +102,9 @@ func (r *Recorder) current(now time.Time) *Slot {
 		r.open = newSlot(start)
 	} else if start.After(r.open.T) {
 		r.pending = append(r.pending, r.open)
+		if len(r.pending) > maxPending {
+			r.pending = r.pending[len(r.pending)-maxPending:]
+		}
 		r.open = newSlot(start)
 	}
 	return r.open
@@ -210,6 +214,11 @@ func (r *Recorder) slots(from, to time.Time) []*Slot {
 	}
 	data, _ := json.Marshal(memory) // deep copy outside the lock
 	r.mu.Unlock()
+	// A flush may write a copied slot to disk while the files are read; the copy wins.
+	inMemory := map[time.Time]bool{}
+	for _, s := range memory {
+		inMemory[s.T] = true
+	}
 	var out []*Slot
 	for day := from.UTC().Truncate(24 * time.Hour); day.Before(to); day = day.Add(24 * time.Hour) {
 		f, err := os.Open(filepath.Join(r.dir, day.Format(dateLayout)+".jsonl"))
@@ -220,7 +229,7 @@ func (r *Recorder) slots(from, to time.Time) []*Slot {
 		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for scanner.Scan() {
 			var s Slot
-			if json.Unmarshal(scanner.Bytes(), &s) == nil && !s.T.Before(from) && s.T.Before(to) {
+			if json.Unmarshal(scanner.Bytes(), &s) == nil && !s.T.Before(from) && s.T.Before(to) && !inMemory[s.T] {
 				out = append(out, &s)
 			}
 		}

@@ -270,10 +270,17 @@ func TestPausedDelegatesAndSkipsProbesAndAnchors(t *testing.T) {
 	cfg.Paused = true
 	h := newHost()
 	h.probeBody["tok-w-secret"] = idleProbe
-	e := New(cfg, h, (&clock{t0}).now, nil)
+	rec := history.NewRecorder(t.TempDir())
+	e := New(cfg, h, (&clock{t0}).now, rec)
 	e.OnUsage(usage(G, Opus, headers(52, 90, 30, 3, t0)))
 	e.OnUsage(usage(G, Fable, headers(0, 90, 30, 3, t0)))
 	e.Tick()
+	if v := e.Status(); len(v.Changes) != 0 {
+		t.Fatalf("paused must not record account changes: %+v", v.Changes)
+	}
+	if s, _ := rec.Query("24h", t0); len(s.Events) != 0 {
+		t.Fatalf("paused must not record switch events: %+v", s.Events)
+	}
 	if got := pick(e, Opus, W, G); got != delegate {
 		t.Fatalf("paused must delegate, got %+v", got)
 	}

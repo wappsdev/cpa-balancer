@@ -100,6 +100,9 @@ func (e *Engine) recompute(now time.Time) {
 		b quota.Bucket
 		c policy.Choice
 	}{{quota.Main, d.Main}, {quota.Fable, d.Fable}} {
+		if e.cfg.Paused {
+			break // nothing is applied while paused, so nothing is recorded as a change
+		}
 		prev := e.st.Active[x.b]
 		if prev.Account == x.c.Account {
 			if prev.Provisional != x.c.Provisional {
