@@ -259,6 +259,13 @@ func TestStatusReportsTheCapInForcePerBucket(t *testing.T) {
 	}
 }
 
+func TestStatusReportsTheFinalCap(t *testing.T) {
+	// A reserve account's cap rises to final_cap near its reset; "when does work stop" needs it.
+	if v := New(testConfig(t), newHost(), (&clock{t0}).now, nil).Status(); v.FinalCap != 99 {
+		t.Fatalf("final cap %v", v.FinalCap)
+	}
+}
+
 func TestSwitchMadeByUsageIsProbedOnTheNextTick(t *testing.T) {
 	c := &clock{t0}
 	h := newHost()
