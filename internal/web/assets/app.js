@@ -11,16 +11,20 @@ const short = f => (f || "—").replace(/^claude-[0-9a-f]+-/, "").replace(/\.jso
 const time = t => t ? new Date(t).toLocaleString() : "—";
 const num = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
 
-// The Management Center stores its key XOR-obfuscated with this per-browser string.
+// The Management Center persists its session under "cli-proxy-auth" (the key only with
+// "Remember password"), XOR-obfuscated with this per-browser string.
 function managementKey() {
   let raw;
-  try { raw = localStorage.getItem("managementKey"); } catch { return null; }
+  try { raw = localStorage.getItem("cli-proxy-auth"); } catch { return null; }
   if (!raw) return null;
   try {
-    if (!raw.startsWith(PREFIX)) return JSON.parse(raw);
-    const data = Uint8Array.from(atob(raw.slice(PREFIX.length)), c => c.charCodeAt(0));
-    const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${location.host}|${navigator.userAgent}`);
-    return JSON.parse(new TextDecoder().decode(data.map((b, i) => b ^ key[i % key.length])));
+    let json = raw;
+    if (raw.startsWith(PREFIX)) {
+      const data = Uint8Array.from(atob(raw.slice(PREFIX.length)), c => c.charCodeAt(0));
+      const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${location.host}|${navigator.userAgent}`);
+      json = new TextDecoder().decode(data.map((b, i) => b ^ key[i % key.length]));
+    }
+    return JSON.parse(json)?.state?.managementKey || null;
   } catch { return null; }
 }
 
