@@ -24,7 +24,7 @@ type View struct {
 	Mode        string          `json:"mode"`
 	Paused      bool            `json:"paused"`
 	ConfigError string          `json:"config_error,omitempty"` // set by the plugin when the last config was rejected
-	FinalCap    float64         `json:"final_cap"` // every account's cap once reserves are released
+	FinalCap    float64         `json:"final_cap"`              // every account's cap once reserves are released
 	Decision    policy.Decision `json:"decision"`
 	Accounts    []AccountView   `json:"accounts"`
 	Changes     []state.Change  `json:"changes"`
