@@ -29,7 +29,9 @@ import "C"
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -37,6 +39,7 @@ import (
 
 	"github.com/adnankurt/cpa-balancer/internal/config"
 	"github.com/adnankurt/cpa-balancer/internal/engine"
+	"github.com/adnankurt/cpa-balancer/internal/history"
 	"github.com/adnankurt/cpa-balancer/internal/web"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -48,6 +51,8 @@ var (
 	mu         sync.Mutex
 	current    *engine.Engine
 	configYAML string // the config current was built from
+	configErr  string // why the last config was rejected; "" when it was applied
+	recorder   *history.Recorder
 	stop       chan struct{}
 	host       hostClient
 )
@@ -145,12 +150,7 @@ func dispatch(method string, req []byte) (raw []byte) {
 		if err := json.Unmarshal(req, &r); err != nil {
 			return fail(err)
 		}
-		return ok(web.Handle(r, func() any {
-			if e := engineNow(); e != nil {
-				return e.Status()
-			}
-			return map[string]string{"error": "not configured"}
-		}))
+		return ok(web.Handle(r, pluginAPI{}))
 	case pluginabi.MethodPluginShutdown, pluginabi.MethodPluginQuiesce:
 		shutdown()
 		return ok(map[string]any{})
@@ -174,20 +174,28 @@ func configure(req []byte) []byte {
 	switch {
 	case err != nil:
 		host.Log("error", "cpa-balancer: "+err.Error()+"; keeping the previous configuration")
+		mu.Lock()
+		configErr = err.Error()
+		mu.Unlock()
 	case unchanged:
 		// CPA re-sends the same config several times at startup; keep the running engine,
 		// but restart the loop if a quiesce stopped it (a rolled-back hot replacement).
 		mu.Lock()
+		configErr = ""
 		if stop == nil {
 			stop = make(chan struct{})
 			go loop(stop)
 		}
 		mu.Unlock()
 	default:
-		e := engine.New(cfg, host, time.Now)
 		mu.Lock()
+		// The recorder outlives engines: a config change must not drop the open history slot.
+		if recorder == nil {
+			recorder = history.NewRecorder(filepath.Join(filepath.Dir(cfg.StatePath), "history"))
+		}
+		e := engine.New(cfg, host, time.Now, recorder)
 		previous := current
-		current, configYAML = e, string(lr.ConfigYAML)
+		current, configYAML, configErr = e, string(lr.ConfigYAML), ""
 		if stop == nil {
 			stop = make(chan struct{})
 			go loop(stop)
@@ -205,6 +213,44 @@ func configure(req []byte) []byte {
 		"capabilities": map[string]bool{"scheduler": true, "scheduler_across_priorities": true,
 			"usage_plugin": true, "management_api": true},
 	})
+}
+
+// pluginAPI answers the page's routes from the running engine.
+type pluginAPI struct{}
+
+func (pluginAPI) Status() any {
+	mu.Lock()
+	e, cfgErr := current, configErr
+	mu.Unlock()
+	if e == nil {
+		return map[string]string{"error": "not configured", "config_error": cfgErr}
+	}
+	v := e.Status()
+	v.ConfigError = cfgErr
+	return v
+}
+
+func (pluginAPI) History(rangeName string) (any, error) {
+	mu.Lock()
+	rec := recorder
+	mu.Unlock()
+	if rec == nil {
+		return nil, errors.New("not configured")
+	}
+	return rec.Query(rangeName, time.Now())
+}
+
+func (a pluginAPI) Run() any {
+	safeTick()
+	return a.Status()
+}
+
+func (pluginAPI) Credentials() (any, error) {
+	files, err := host.AuthList()
+	if err != nil {
+		return nil, err
+	}
+	return web.ClaudeCredentials(files), nil
 }
 
 func engineNow() *engine.Engine {
