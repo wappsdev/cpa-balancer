@@ -244,3 +244,22 @@ func TestStatusHasNoCredentials(t *testing.T) {
 		t.Fatalf("status JSON: %s", raw)
 	}
 }
+
+func TestSwitchMadeByUsageIsProbedOnTheNextTick(t *testing.T) {
+	c := &clock{t0}
+	h := newHost()
+	h.probeBody["tok-w-secret"] = idleProbe
+	e := New(testConfig(t), h, c.now)
+	e.Tick() // credentials; no probe: nothing configured has a running anchor or stale data yet
+	h.httpCalls = nil
+	warm(e, t0, 30)
+	c.t = t0.Add(15 * time.Minute)
+	e.OnUsage(usage(G, Opus, headers(52, 90, 98, 3, c.t))) // forced switch to W between ticks
+	if got := pick(e, Opus, W, G); got.AuthID != W {
+		t.Fatalf("expected the forced switch to W, got %+v", got)
+	}
+	e.Tick()
+	if strings.Join(h.httpCalls, ",") != "tok-w-secret" {
+		t.Fatalf("W's 15-minute-old data must be probed after the switch, got %v", h.httpCalls)
+	}
+}

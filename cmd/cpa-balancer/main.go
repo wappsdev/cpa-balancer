@@ -175,7 +175,14 @@ func configure(req []byte) []byte {
 	case err != nil:
 		host.Log("error", "cpa-balancer: "+err.Error()+"; keeping the previous configuration")
 	case unchanged:
-		// CPA re-sends the same config several times at startup; keep the running engine.
+		// CPA re-sends the same config several times at startup; keep the running engine,
+		// but restart the loop if a quiesce stopped it (a rolled-back hot replacement).
+		mu.Lock()
+		if stop == nil {
+			stop = make(chan struct{})
+			go loop(stop)
+		}
+		mu.Unlock()
 	default:
 		e := engine.New(cfg, host, time.Now)
 		mu.Lock()

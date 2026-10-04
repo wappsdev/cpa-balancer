@@ -43,6 +43,7 @@ type Engine struct {
 	credentials map[string]credential // auth file -> host view
 	snaps       map[string]policy.Snapshot
 	decision    policy.Decision
+	switchedTo  map[string]bool // accounts that became active since the last tick, to probe if stale
 	dirty       bool
 }
 
@@ -54,7 +55,7 @@ func New(cfg config.Config, host Host, now func() time.Time) *Engine {
 		host.Log("warn", "cpa-balancer: state not loaded, starting empty: "+err.Error())
 		st = state.New()
 	}
-	e := &Engine{cfg: cfg, host: host, now: now, st: st, credentials: map[string]credential{}}
+	e := &Engine{cfg: cfg, host: host, now: now, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}}
 	e.mu.Lock()
 	e.recompute(now())
 	e.mu.Unlock()
@@ -100,6 +101,9 @@ func (e *Engine) recompute(now time.Time) {
 			continue
 		}
 		e.st.Active[x.b] = policy.Active{Account: x.c.Account, Since: now, Provisional: x.c.Provisional}
+		if x.c.Account != "" {
+			e.switchedTo[x.c.Account] = true
+		}
 		e.st.AddChange(state.Change{At: now, Bucket: x.b, From: prev.Account, To: x.c.Account, Reason: x.c.Reason})
 		e.host.Log("info", fmt.Sprintf("cpa-balancer: %s %q -> %q (%s)", x.b, prev.Account, x.c.Account, x.c.Reason))
 		e.dirty = true
@@ -165,19 +169,17 @@ func (e *Engine) Tick() {
 	defer e.tickMu.Unlock()
 	now := e.now()
 	e.refreshCredentials()
-	e.mu.RLock()
-	before := map[quota.Bucket]string{quota.Main: e.st.Active[quota.Main].Account, quota.Fable: e.st.Active[quota.Fable].Account}
-	e.mu.RUnlock()
-
 	e.probeDue(now, nil)
 	e.mu.Lock()
 	e.recompute(now)
+	// Accounts switched to here or by OnUsage since the last tick, if they are still chosen.
 	switched := map[string]bool{}
-	for b, prev := range before {
-		if cur := e.st.Active[b].Account; cur != "" && cur != prev {
-			switched[cur] = true
+	for account := range e.switchedTo {
+		if account == e.st.Active[quota.Main].Account || account == e.st.Active[quota.Fable].Account {
+			switched[account] = true
 		}
 	}
+	e.switchedTo = map[string]bool{}
 	e.mu.Unlock()
 	if len(switched) > 0 && e.probeDue(now, switched) {
 		e.mu.Lock()
