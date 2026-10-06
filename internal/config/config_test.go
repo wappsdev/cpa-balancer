@@ -81,3 +81,13 @@ func TestValidation(t *testing.T) {
 		t.Fatalf("paused: %+v %v", cfg, err)
 	}
 }
+
+func TestParsesExtraUsage(t *testing.T) {
+	cfg, err := Parse([]byte("accounts:\n  - auth_file: a.json\n    extra_usage: true\n  - auth_file: b.json\nbuckets:\n  main: [m]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Accounts[0].ExtraUsage || cfg.Accounts[1].ExtraUsage {
+		t.Fatalf("got %+v", cfg.Accounts)
+	}
+}
