@@ -107,7 +107,7 @@ function renderStatus(v) {
 const BUCKETS = [["main", "Main"], ["fable", "Fable"], ["session", "5-hour"]];
 
 function accountCard(a, v) {
-  const activeIn = [["main", "main"], ["fable", "Fable"]].filter(([b]) => !v.paused && v.decision[b].account === a.auth_file).map(([, l]) => l);
+  const activeIn = [["main", "main"], ["fable", "Fable"]].filter(([b]) => !v.paused && v.decision[b].account === a.auth_file).map(([b, l]) => l + (v.decision[b].credits ? " (credits)" : ""));
   const rows = BUCKETS.map(([b, label]) => {
     const r = a.readings[b], cap = a.caps?.[b];
     const open = r && r.resets_at;
@@ -133,6 +133,7 @@ function accountCard(a, v) {
       <span class="name">${esc(short(a.auth_file))}</span>
       ${activeIn.length ? `<span class="chip accent">● active · ${activeIn.join(", ")}</span>` : ""}
       <span class="chip">${a.reserve ? "keeps a reserve" : "no reserve"}</span>
+      ${a.extra_usage ? '<span class="chip">extra usage on</span>' : ""}
       ${a.listed ? "" : '<span class="chip bad">not listed by CPA</span>'}
     </div>
     ${rows}
@@ -403,7 +404,7 @@ async function loadSettings() {
 }
 
 function fillForm(c) {
-  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: !!a.reserve }));
+  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: !!a.reserve, extra_usage: !!a.extra_usage }));
   renderAccounts();
   for (const el of document.querySelectorAll("[data-threshold]")) el.value = c.thresholds?.[el.dataset.threshold] ?? "";
   for (const b of Object.keys(buckets)) { buckets[b] = [...(c.buckets?.[b] || [])]; renderChips(b); }
@@ -465,6 +466,7 @@ function renderAccounts() {
   $("account-list").innerHTML = accounts.map((a, i) => `<li>
     <div class="who"><strong>${esc(short(a.auth_file))}</strong><span>${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
     <div class="reserve"><button type="button" role="switch" class="switch" data-reserve="${i}" aria-checked="${a.reserve}" aria-label="Keeps a reserve"><span class="knob"></span></button>Reserve</div>
+    <div class="reserve"><button type="button" role="switch" class="switch" data-extra="${i}" aria-checked="${a.extra_usage}" aria-label="Extra usage credits are on"><span class="knob"></span></button>Extra usage</div>
     <button type="button" class="icon-button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">
       <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></li>`).join("");
   const free = credentials.filter(c => !accounts.some(a => a.auth_file === c.auth_file));
@@ -475,8 +477,12 @@ function renderAccounts() {
 }
 
 $("account-list").addEventListener("click", e => {
-  const reserve = e.target.closest("[data-reserve]"), remove = e.target.closest("[data-remove]");
-  if (reserve) {
+  const reserve = e.target.closest("[data-reserve]"), extra = e.target.closest("[data-extra]"), remove = e.target.closest("[data-remove]");
+  if (extra) {
+    const a = accounts[+extra.dataset.extra];
+    a.extra_usage = !a.extra_usage;
+    extra.setAttribute("aria-checked", String(a.extra_usage));
+  } else if (reserve) {
     const a = accounts[+reserve.dataset.reserve];
     a.reserve = !a.reserve;
     reserve.setAttribute("aria-checked", String(a.reserve));
@@ -487,7 +493,7 @@ $("account-list").addEventListener("click", e => {
 });
 $("account-add-button").addEventListener("click", () => {
   const f = $("account-add").value;
-  if (f) { accounts.push({ auth_file: f, reserve: false }); renderAccounts(); }
+  if (f) { accounts.push({ auth_file: f, reserve: false, extra_usage: false }); renderAccounts(); }
 });
 
 function collect() {
@@ -530,12 +536,15 @@ function changes(before, after) {
   const lines = [], changed = [];
   for (const k of SECTIONS) {
     if (k === "accounts") {
-      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, !!a.reserve]));
-      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, a.reserve]));
+      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage }]));
+      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage }]));
       const order = (before.accounts || []).map(a => a.auth_file).join() !== after.accounts.map(a => a.auth_file).join();
       for (const f of Object.keys(now)) {
-        if (!(f in was)) lines.push(`add account ${short(f)}${now[f] ? " (keeps a reserve)" : ""}`);
-        else if (was[f] !== now[f]) lines.push(`${short(f)}: ${now[f] ? "keeps a reserve" : "no reserve"}`);
+        if (!(f in was)) lines.push(`add account ${short(f)}${now[f].reserve ? " (keeps a reserve)" : ""}${now[f].extra ? " (extra usage)" : ""}`);
+        else {
+          if (was[f].reserve !== now[f].reserve) lines.push(`${short(f)}: ${now[f].reserve ? "keeps a reserve" : "no reserve"}`);
+          if (was[f].extra !== now[f].extra) lines.push(`${short(f)}: extra usage ${now[f].extra ? "on" : "off"}`);
+        }
       }
       for (const f of Object.keys(was)) if (!(f in now)) lines.push(`remove account ${short(f)}`);
       if (lines.length || order) changed.push(k);

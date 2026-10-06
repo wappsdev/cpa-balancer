@@ -14,6 +14,9 @@ import (
 type Account struct {
 	AuthFile string `yaml:"auth_file" json:"auth_file"`
 	Reserve  bool   `yaml:"reserve" json:"reserve"`
+	// ExtraUsage: the account has extra-usage credits on, so it keeps answering past its plan
+	// limits. It is used only when no account has plan quota left.
+	ExtraUsage bool `yaml:"extra_usage" json:"extra_usage"`
 }
 
 type Thresholds struct {

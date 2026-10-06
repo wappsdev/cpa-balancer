@@ -24,6 +24,7 @@ type Choice struct {
 	Account string `json:"account"` // "" = no restriction
 	Reason  string `json:"reason"`
 	Relaxed bool   `json:"relaxed"` // reserves released or nothing eligible
+	Credits bool   `json:"credits"` // every plan quota is used up; this account spends extra-usage credits
 	// Provisional: some configured account had no data, so leaving this choice is not held back by dwell.
 	Provisional bool `json:"provisional"`
 }
@@ -129,7 +130,33 @@ func Choose(b quota.Bucket, cfg config.Config, snaps map[string]Snapshot, now ti
 				notes[cur.Account]))
 		}
 	}
+	if c, ok := creditChoice(b, cfg, snaps, cur, provisional); ok {
+		return c
+	}
 	return Choice{Reason: "no eligible account even with reserves released; no restriction", Relaxed: true, Provisional: provisional}
+}
+
+// creditChoice is the last resort: every plan quota is used up, so the account with extra-usage
+// credits that resets soonest takes the traffic (the current one on a tie).
+func creditChoice(b quota.Bucket, cfg config.Config, snaps map[string]Snapshot, cur Active, provisional bool) (Choice, bool) {
+	var paying []string
+	for _, a := range cfg.Accounts {
+		if s, listed := snaps[a.AuthFile]; a.ExtraUsage && listed && !s.Unavailable {
+			paying = append(paying, a.AuthFile)
+		}
+	}
+	if len(paying) == 0 {
+		return Choice{}, false
+	}
+	sort.SliceStable(paying, func(i, j int) bool {
+		ri, rj := resetOf(snaps, paying[i], b), resetOf(snaps, paying[j], b)
+		if !ri.Equal(rj) {
+			return ri.Before(rj)
+		}
+		return paying[i] == cur.Account && paying[j] != cur.Account
+	})
+
+	return Choice{Account: paying[0], Reason: "every plan quota is used up; spending extra-usage credits on the earliest reset", Relaxed: true, Credits: true, Provisional: provisional}, true
 }
 
 func resetOf(snaps map[string]Snapshot, account string, b quota.Bucket) time.Time {

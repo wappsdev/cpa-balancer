@@ -207,3 +207,49 @@ func TestProvisionalChoiceIsLeftWithoutDwell(t *testing.T) {
 		t.Fatalf("a choice made without G's data is provisional: %+v", onlyW.Main)
 	}
 }
+
+func extraConfig(w, g bool) config.Config {
+	c := testConfig()
+	c.Accounts = []config.Account{{AuthFile: W, ExtraUsage: w}, {AuthFile: G, Reserve: true, ExtraUsage: g}}
+	return c
+}
+
+func full() map[string]Snapshot {
+	return map[string]Snapshot{
+		W: snap(quota.Readings{quota.Main: rd(100, 70), quota.Session: rd(10, 3)}),
+		G: snap(quota.Readings{quota.Main: rd(100, 20), quota.Session: rd(10, 3)}),
+	}
+}
+
+func TestPlanQuotaGoesFirstAndCreditsAreTheLastResort(t *testing.T) {
+	snaps := full()
+	snaps[W] = snap(quota.Readings{quota.Main: rd(40, 70), quota.Session: rd(10, 3)})
+	d := Decide(snaps, extraConfig(false, true), now, nil)
+	if d.Main.Account != W || d.Main.Credits {
+		t.Fatalf("an account with plan quota left must be used before credits, got %+v", d.Main)
+	}
+}
+
+func TestSpendsCreditsOnTheAccountThatHasThem(t *testing.T) {
+	d := Decide(full(), extraConfig(false, true), now, nil)
+	if d.Main.Account != G || !d.Main.Credits || !d.Main.Relaxed {
+		t.Fatalf("want G on credits, got %+v", d.Main)
+	}
+	if !strings.Contains(d.Main.Reason, "credits") {
+		t.Fatalf("reason should say credits: %q", d.Main.Reason)
+	}
+}
+
+func TestWithoutExtraUsageNothingIsRestricted(t *testing.T) {
+	d := Decide(full(), extraConfig(false, false), now, nil)
+	if d.Main.Account != "" || d.Main.Credits {
+		t.Fatalf("want no restriction, got %+v", d.Main)
+	}
+}
+
+func TestCreditsGoToTheSoonestResetWhenBothHaveThem(t *testing.T) {
+	d := Decide(full(), extraConfig(true, true), now, nil)
+	if d.Main.Account != G || !d.Main.Credits {
+		t.Fatalf("G resets first (20h vs 70h), got %+v", d.Main)
+	}
+}
