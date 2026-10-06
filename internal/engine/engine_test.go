@@ -361,3 +361,12 @@ func TestHistorySurvivesANewEngine(t *testing.T) {
 		t.Fatal("traffic from the first engine was lost")
 	}
 }
+
+func TestStatusReportsExtraUsage(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts[1].ExtraUsage = true
+	v := New(cfg, newHost(), (&clock{t0}).now, nil).Status()
+	if v.Accounts[0].ExtraUsage || !v.Accounts[1].ExtraUsage {
+		t.Fatalf("extra usage per account: %+v %+v", v.Accounts[0].ExtraUsage, v.Accounts[1].ExtraUsage)
+	}
+}
