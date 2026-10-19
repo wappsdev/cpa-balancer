@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -368,5 +369,88 @@ func TestStatusReportsExtraUsage(t *testing.T) {
 	v := New(cfg, newHost(), (&clock{t0}).now, nil).Status()
 	if v.Accounts[0].ExtraUsage || !v.Accounts[1].ExtraUsage {
 		t.Fatalf("extra usage per account: %+v %+v", v.Accounts[0].ExtraUsage, v.Accounts[1].ExtraUsage)
+	}
+}
+
+func usageBody(weekly, session float64) string {
+	return fmt.Sprintf(`{"limits":[{"kind":"session","percent":%v,"resets_at":"2026-10-03T15:00:00Z"},`+
+		`{"kind":"weekly_all","percent":%v,"resets_at":"2026-10-09T01:00:00Z"}]}`, session, weekly)
+}
+
+func TestRecheckProbesALockedAccountNowAndReportsItOpen(t *testing.T) {
+	c := &clock{t0}
+	h := newHost()
+	h.files[0].Unavailable = true // CPA still cools W after an old 429
+	h.probeBody["tok-w-secret"] = usageBody(0, 0)
+	e := New(testConfig(t), h, c.now, nil)
+	e.OnUsage(usage(W, Opus, headers(99, 140, 27, 4, t0))) // the last value seen before the reset
+	got := e.Recheck("")
+	w := got[0]
+	if w.AuthFile != W || w.AuthIndex != "idx-w" || !w.Locked || !w.Open || w.Weekly != 0 {
+		t.Fatalf("W: %+v", w)
+	}
+	if r := e.Status().Accounts[0].Readings[quota.Main]; r.Util != 0 || r.Source != "probe" {
+		t.Fatalf("the fresh reading must replace the stale 99%%, got %+v", r)
+	}
+}
+
+func TestRecheckReportsAnAccountStillAtItsLimit(t *testing.T) {
+	h := newHost()
+	h.files[0].Unavailable = true
+	h.probeBody["tok-w-secret"] = usageBody(100, 10)
+	e := New(testConfig(t), h, (&clock{t0}).now, nil)
+	if w := e.Recheck(W)[0]; w.Open || !w.Locked || w.Weekly != 100 {
+		t.Fatalf("W: %+v", w)
+	}
+}
+
+func TestRecheckOfOneAccountProbesOnlyIt(t *testing.T) {
+	h := newHost()
+	h.probeBody["tok-g-secret"] = usageBody(40, 10)
+	e := New(testConfig(t), h, (&clock{t0}).now, nil)
+	got := e.Recheck(G)
+	if len(got) != 1 || got[0].AuthFile != G || got[0].Locked || !got[0].Open || strings.Join(h.httpCalls, ",") != "tok-g-secret" {
+		t.Fatalf("got %+v, probes %v", got, h.httpCalls)
+	}
+}
+
+func TestRecheckReportsAFailedProbe(t *testing.T) {
+	h := newHost()
+	delete(h.auth, "idx-w")
+	e := New(testConfig(t), h, (&clock{t0}).now, nil)
+	if w := e.Recheck(W)[0]; w.Open || w.Error == "" {
+		t.Fatalf("W: %+v", w)
+	}
+}
+
+func TestRecheckWaitsOutTheUsageEndpointsRetryAfter(t *testing.T) {
+	c := &clock{t0}
+	h := newHost()
+	h.probeBody["tok-w-secret"] = usageBody(0, 0)
+	e := New(testConfig(t), h, c.now, nil)
+	e.st.Account(W).RetryAfter = t0.Add(10 * time.Minute)
+	if w := e.Recheck(W)[0]; w.Open || w.Error == "" || len(h.httpCalls) != 0 {
+		t.Fatalf("W: %+v, probes %v", w, h.httpCalls)
+	}
+}
+
+func TestStatusReportsWhichCredentialsCPAHoldsBack(t *testing.T) {
+	h := newHost()
+	h.files[1].Unavailable = true
+	e := New(testConfig(t), h, (&clock{t0}).now, nil)
+	e.Tick()
+	v := e.Status()
+	if v.Accounts[0].Unavailable || !v.Accounts[1].Unavailable {
+		t.Fatalf("unavailable per account: %v %v", v.Accounts[0].Unavailable, v.Accounts[1].Unavailable)
+	}
+}
+
+func TestRecheckDoesNotReportADisabledCredentialAsLocked(t *testing.T) {
+	h := newHost()
+	h.files[0].Disabled = true // switched off by hand: a cooldown reset would not bring it back
+	h.probeBody["tok-w-secret"] = usageBody(0, 0)
+	e := New(testConfig(t), h, (&clock{t0}).now, nil)
+	if w := e.Recheck(W)[0]; w.Locked || !w.Disabled {
+		t.Fatalf("W: %+v", w)
 	}
 }

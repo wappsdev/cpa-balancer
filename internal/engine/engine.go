@@ -31,6 +31,7 @@ type Host interface {
 type credential struct {
 	index       string
 	unavailable bool
+	disabled    bool // switched off by hand, as opposed to cooled down
 }
 
 type Engine struct {
@@ -226,7 +227,7 @@ func (e *Engine) refreshCredentials() {
 	creds := map[string]credential{}
 	for _, f := range files {
 		if e.cfg.Managed(f.ID) {
-			creds[f.ID] = credential{index: f.AuthIndex, unavailable: f.Disabled || f.Unavailable}
+			creds[f.ID] = credential{index: f.AuthIndex, unavailable: f.Disabled || f.Unavailable, disabled: f.Disabled}
 		}
 	}
 	e.mu.Lock()

@@ -84,6 +84,7 @@ function renderStatus(v) {
     b.setAttribute("aria-pressed", String(b.dataset.mode === v.mode));
   }
   $("run").disabled = false;
+  $("recheck-all").disabled = false;
 
   const choice = (label, c, order) => `<div class="card choice">
     <div class="eyebrow">${label}</div>
@@ -140,6 +141,7 @@ function accountCard(a, v) {
     <div class="account-foot">
       <span>${a.last_anchor ? `Last anchor ${when(a.last_anchor)} · <code>${esc(a.anchor_model)}</code>` : "No anchor yet"}</span>
       <span>${sources ? `source: ${esc(sources)}` : ""}</span>
+      <button type="button" class="button" data-recheck="${esc(a.auth_file)}"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Recheck</span></button>
     </div>
   </article>`;
 }
@@ -180,6 +182,47 @@ $("run").addEventListener("click", async e => {
   try { renderStatus(await api("POST", ROUTES + "/run")); showError(null); }
   catch (err) { showError(err); }
   finally { button.disabled = false; button.classList.remove("busy"); }
+});
+
+// CPA keeps a credential cooled until its weekly reset even when Anthropic opens the window early
+// (a manual reset). The balancer probes the account now; a locked one it finds open is released
+// here, because a plugin cannot reach CPA's cooldown.
+async function recheck(authFile) {
+  const results = await api("POST", ROUTES + "/recheck" + (authFile ? `?auth_file=${encodeURIComponent(authFile)}` : ""));
+  if (!Array.isArray(results)) throw new Error(results?.error || "unreadable answer from the balancer");
+  const lines = [];
+  for (const r of results) {
+    const name = short(r.auth_file);
+    if (r.error) lines.push(`${name}: ${r.error}`);
+    else if (r.disabled) lines.push(`${name}: disabled in CPA — turn it on there`);
+    else if (r.locked && r.open) {
+      try {
+        await api("POST", "/v8/management/routing/cooldown/reset", { auth_index: r.auth_index });
+        lines.push(`${name}: unlocked — weekly ${Math.round(r.weekly)}%`);
+      } catch (err) { lines.push(`${name}: open, but the release failed — ${err.message || err}`); }
+    } else if (r.locked) lines.push(`${name}: still at its limit — weekly ${Math.round(r.weekly)}%, 5h ${Math.round(r.session)}%`);
+    else lines.push(`${name}: not locked — weekly ${Math.round(r.weekly)}%`);
+  }
+  renderStatus(await api("POST", ROUTES + "/run")); // picks up the released credentials at once
+  return lines;
+}
+
+async function runRecheck(button, authFile) {
+  button.disabled = true;
+  button.classList.add("busy");
+  try {
+    const lines = await recheck(authFile);
+    $("notice").textContent = lines.join(" · ");
+    $("notice").hidden = false;
+    showError(null);
+  } catch (err) { showError(err); }
+  finally { button.disabled = false; button.classList.remove("busy"); }
+}
+
+$("recheck-all").addEventListener("click", e => runRecheck(e.currentTarget, ""));
+$("accounts").addEventListener("click", e => {
+  const button = e.target.closest("[data-recheck]");
+  if (button) runRecheck(button, button.dataset.recheck);
 });
 
 // ---------- tabs ----------
