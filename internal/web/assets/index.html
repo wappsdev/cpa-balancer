@@ -28,6 +28,10 @@
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Run now</span>
       </button>
+      <button type="button" id="recheck-all" class="button" disabled title="Ask Anthropic for every account now and release a lock CPA kept after an early reset">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Recheck</span>
+      </button>
     </div>
   </header>
 
@@ -39,6 +43,7 @@
   </nav>
 
   <div id="error" class="banner bad" hidden></div>
+  <div id="notice" class="banner info" role="status" hidden></div>
   <div id="config-error" class="banner bad" hidden></div>
 
   <section id="tab-overview">

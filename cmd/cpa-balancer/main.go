@@ -245,6 +245,14 @@ func (a pluginAPI) Run() any {
 	return a.Status()
 }
 
+func (pluginAPI) Recheck(authFile string) any {
+	e := engineNow()
+	if e == nil {
+		return map[string]string{"error": "not configured"}
+	}
+	return e.Recheck(authFile)
+}
+
 func (pluginAPI) Credentials() (any, error) {
 	files, err := host.AuthList()
 	if err != nil {

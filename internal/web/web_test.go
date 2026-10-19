@@ -10,10 +10,17 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-type fakeAPI struct{ ran int }
+type fakeAPI struct {
+	ran       int
+	rechecked []string
+}
 
 func (f *fakeAPI) Status() any { return map[string]string{"mode": "apply"} }
 func (f *fakeAPI) Run() any    { f.ran++; return map[string]string{"mode": "shadow"} }
+func (f *fakeAPI) Recheck(authFile string) any {
+	f.rechecked = append(f.rechecked, authFile)
+	return []map[string]string{{"auth_file": authFile}}
+}
 func (f *fakeAPI) History(r string) (any, error) {
 	if r != "7d" {
 		return nil, errors.New("range must be one of 24h, 7d, 30d, 90d")
@@ -82,7 +89,7 @@ func TestRoutes(t *testing.T) {
 
 func TestRegistrationListsEveryRouteAndResource(t *testing.T) {
 	reg := Registration()
-	if len(reg["routes"].([]map[string]any)) != 4 || len(reg["resources"].([]map[string]any)) != len(resources) {
+	if len(reg["routes"].([]map[string]any)) != 5 || len(reg["resources"].([]map[string]any)) != len(resources) {
 		t.Fatalf("%+v", reg)
 	}
 	menus := 0
@@ -93,5 +100,22 @@ func TestRegistrationListsEveryRouteAndResource(t *testing.T) {
 	}
 	if menus != 1 {
 		t.Fatalf("exactly one menu entry, got %d", menus)
+	}
+}
+
+func TestRecheckRoute(t *testing.T) {
+	api := &fakeAPI{}
+	base := "/v0/management/plugins/cpa-balancer"
+	if res := call(api, "POST", base+"/recheck", nil); res.StatusCode != 200 || string(res.Body) != `[{"auth_file":""}]` {
+		t.Fatalf("all accounts: %d %s", res.StatusCode, res.Body)
+	}
+	if res := call(api, "POST", base+"/recheck", url.Values{"auth_file": {"claude-a.json"}}); res.StatusCode != 200 {
+		t.Fatalf("one account: %d", res.StatusCode)
+	}
+	if strings.Join(api.rechecked, ",") != ",claude-a.json" {
+		t.Fatalf("rechecked %q", api.rechecked)
+	}
+	if call(api, "GET", base+"/recheck", nil).StatusCode != 404 {
+		t.Fatal("recheck must be POST only")
 	}
 }
