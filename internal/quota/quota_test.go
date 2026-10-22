@@ -31,8 +31,11 @@ func TestFromHeadersSplitsBuckets(t *testing.T) {
 	if int(out[Main].Util+0.5) != 35 || int(out[Session].Util+0.5) != 7 || !out[Main].ResetsAt.Equal(*at(100 * time.Hour)) {
 		t.Fatalf("main model: %+v", out)
 	}
-	if _, ok := FromHeaders(h, "claude-fable-5-1", main, fable, now)[Fable]; !ok {
-		t.Fatal("fable model should fill the Fable bucket")
+	// The unified 7d header is the all-models weekly window on a Fable request too (Fable use
+	// counts toward it); Fable's own weekly limit comes only from the usage endpoint.
+	fableOut := FromHeaders(h, "claude-fable-5-1", main, fable, now)
+	if _, ok := fableOut[Fable]; ok || int(fableOut[Main].Util+0.5) != 35 {
+		t.Fatalf("fable model must fill the all-models window, not Fable's: %+v", fableOut)
 	}
 	other := FromHeaders(h, "claude-haiku-4-5-20251001", main, fable, now)
 	if _, ok := other[Main]; ok || len(other) != 1 {

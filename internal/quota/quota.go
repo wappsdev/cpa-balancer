@@ -44,19 +44,16 @@ func headerReading(h http.Header, window string, now time.Time) (Reading, bool) 
 	return Reading{Util: util * 100, ResetsAt: &at, ObservedAt: now, Source: "header"}, true
 }
 
-// FromHeaders reads the shared 5-hour window and, for a model of a configured bucket, its weekly window.
+// FromHeaders reads the shared 5-hour window and, for a model of a configured bucket, the
+// all-models weekly window. The unified 7d header is that window on a Fable request too (Fable
+// use counts toward it); Fable's own weekly limit is only in the usage endpoint (FromProbe).
 func FromHeaders(h http.Header, model string, mainModels, fableModels []string, now time.Time) Readings {
 	out := Readings{}
 	if r, ok := headerReading(h, "5h", now); ok {
 		out[Session] = r
 	}
-	if r, ok := headerReading(h, "7d", now); ok {
-		switch {
-		case slices.Contains(mainModels, model):
-			out[Main] = r
-		case slices.Contains(fableModels, model):
-			out[Fable] = r
-		}
+	if r, ok := headerReading(h, "7d", now); ok && (slices.Contains(mainModels, model) || slices.Contains(fableModels, model)) {
+		out[Main] = r
 	}
 	return out
 }
