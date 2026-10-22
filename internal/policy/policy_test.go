@@ -253,3 +253,14 @@ func TestCreditsGoToTheSoonestResetWhenBothHaveThem(t *testing.T) {
 		t.Fatalf("G resets first (20h vs 70h), got %+v", d.Main)
 	}
 }
+
+func TestFableNeedsRoomInTheAllModelsWeekToo(t *testing.T) {
+	// Fable use counts toward the all-models week: W has Fable room but its week is full
+	d := decide(map[string]Snapshot{
+		W: snap(quota.Readings{quota.Main: rd(100, 13), quota.Fable: rd(47, 13)}),
+		G: snap(quota.Readings{quota.Main: rd(33, 140), quota.Fable: rd(2, 140)}),
+	}, nil)
+	if d.Fable.Account != G {
+		t.Fatalf("Fable must go where the week has room, got %+v", d.Fable)
+	}
+}

@@ -78,6 +78,16 @@ func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now 
 	if weekly.Util >= limit {
 		return false, fmt.Sprintf("weekly %.0f%% >= cap %.0f%%", weekly.Util, limit)
 	}
+	// Fable use counts toward the all-models week as well, so a full week stops Fable too.
+	if all, ok := s.Readings[quota.Main]; b == quota.Fable && ok && all.ResetsAt != nil && now.Sub(all.ObservedAt) <= th.Stale() {
+		allLimit := th.FinalCap
+		if !releaseReserve {
+			allLimit = Cap(a.Reserve, *all.ResetsAt, now, th)
+		}
+		if all.Util >= allLimit {
+			return false, fmt.Sprintf("all-models week %.0f%% >= cap %.0f%%", all.Util, allLimit)
+		}
+	}
 	if session, ok := s.Readings[quota.Session]; ok && now.Sub(session.ObservedAt) <= th.Stale() && session.Util >= th.SessionCap {
 		return false, fmt.Sprintf("5h %.0f%% >= %.0f%%", session.Util, th.SessionCap)
 	}
