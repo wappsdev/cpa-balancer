@@ -63,3 +63,19 @@ func TestRequestAndParse(t *testing.T) {
 		t.Fatalf("%+v", limited)
 	}
 }
+
+func TestParsePlanReadsTheRateLimitTier(t *testing.T) {
+	for body, want := range map[string]Plan{
+		`{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}`: {"max_20x", 20},
+		`{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}`:  {"max_5x", 5},
+		`{"account":{"has_claude_pro":true},"organization":{"organization_type":"claude_pro"}}`:          {"pro", 1},
+	} {
+		got, err := ParsePlan([]byte(body))
+		if err != nil || got != want {
+			t.Fatalf("%s: got %+v %v, want %+v", body, got, err, want)
+		}
+	}
+	if _, err := ParsePlan([]byte(`{"organization":{"organization_type":"claude_team"}}`)); err == nil {
+		t.Fatal("an unknown plan must be an error, not a guess")
+	}
+}
