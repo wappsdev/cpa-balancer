@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/adnankurt/cpa-balancer/internal/quota"
@@ -80,4 +81,44 @@ func Parse(resp pluginapi.HTTPResponse, now time.Time) Result {
 		return Result{Err: fmt.Errorf("decode usage: %w", err)}
 	}
 	return Result{Readings: readings}
+}
+
+// ProfileURL names the account's subscription; its rate-limit tier sets how much quota 1% is.
+const ProfileURL = "https://api.anthropic.com/api/oauth/profile"
+
+func ProfileRequest(accessToken string) pluginapi.HTTPRequest {
+	r := Request(accessToken)
+	r.URL = ProfileURL
+	return r
+}
+
+// Plan is a subscription and its size in Pro plans: 1% of a Max 20x is twenty times 1% of a Pro.
+type Plan struct {
+	Name   string  `json:"name"`
+	Weight float64 `json:"weight"`
+}
+
+// ParsePlan reads the plan from the profile; an unknown one is an error, never a guess.
+func ParsePlan(body []byte) (Plan, error) {
+	var p struct {
+		Account struct {
+			HasClaudePro bool `json:"has_claude_pro"`
+		} `json:"account"`
+		Organization struct {
+			Type string `json:"organization_type"`
+			Tier string `json:"rate_limit_tier"`
+		} `json:"organization"`
+	}
+	if err := json.Unmarshal(body, &p); err != nil {
+		return Plan{}, fmt.Errorf("decode profile: %w", err)
+	}
+	switch tier := p.Organization.Tier; {
+	case strings.Contains(tier, "max_20x"):
+		return Plan{"max_20x", 20}, nil
+	case strings.Contains(tier, "max_5x"):
+		return Plan{"max_5x", 5}, nil
+	case p.Organization.Type == "claude_pro" || p.Account.HasClaudePro:
+		return Plan{"pro", 1}, nil
+	}
+	return Plan{}, fmt.Errorf("unknown plan %q / %q", p.Organization.Type, p.Organization.Tier)
 }

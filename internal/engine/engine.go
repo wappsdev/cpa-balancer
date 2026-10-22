@@ -215,6 +215,7 @@ func (e *Engine) Tick() {
 		e.mu.Unlock()
 	}
 	e.anchorIdle(now)
+	e.checkPlans(now)
 	e.save()
 }
 

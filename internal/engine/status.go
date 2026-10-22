@@ -13,7 +13,9 @@ type AccountView struct {
 	Reserve     bool                     `json:"reserve"`
 	ExtraUsage  bool                     `json:"extra_usage"`
 	Listed      bool                     `json:"listed"`
-	Unavailable bool                     `json:"unavailable"` // CPA holds the credential back (cooldown or disabled)
+	Plan        string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
+	Weight      float64                  `json:"weight,omitempty"` // the plan in Pro plans: 20, 5 or 1
+	Unavailable bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
 	Readings    quota.Readings           `json:"readings"`
 	Eligibility map[quota.Bucket]string  `json:"eligibility"`
 	Caps        map[quota.Bucket]float64 `json:"caps"` // the switch threshold in force per bucket
@@ -41,7 +43,8 @@ func (e *Engine) Status() View {
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
-		av := AccountView{AuthFile: a.AuthFile, Reserve: a.Reserve, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable, Readings: snap.Readings,
+		av := AccountView{AuthFile: a.AuthFile, Reserve: a.Reserve, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
+			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: e.st.Account(a.AuthFile).Plan.Weight, Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{quota.Session: e.cfg.Thresholds.SessionCap}}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
 			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)

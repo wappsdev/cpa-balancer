@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/adnankurt/cpa-balancer/internal/policy"
+	"github.com/adnankurt/cpa-balancer/internal/probe"
 	"github.com/adnankurt/cpa-balancer/internal/quota"
 )
 
@@ -24,6 +25,8 @@ type Account struct {
 	AnchorRetryAfter time.Time      `json:"anchor_retry_after,omitzero"`
 	AnchorMainModel  bool           `json:"anchor_main_model,omitempty"`
 	AnchorReading    *quota.Reading `json:"anchor_reading,omitempty"`
+	Plan             probe.Plan     `json:"plan,omitzero"` // empty until the profile was read
+	PlanCheckedAt    time.Time      `json:"plan_checked_at,omitzero"`
 }
 
 type Change struct {

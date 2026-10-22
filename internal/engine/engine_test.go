@@ -13,6 +13,7 @@ import (
 
 	"github.com/adnankurt/cpa-balancer/internal/config"
 	"github.com/adnankurt/cpa-balancer/internal/history"
+	"github.com/adnankurt/cpa-balancer/internal/probe"
 	"github.com/adnankurt/cpa-balancer/internal/quota"
 	"github.com/adnankurt/cpa-balancer/internal/state"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -31,7 +32,9 @@ type fakeHost struct {
 	files     []pluginapi.HostAuthFileEntry
 	auth      map[string][]byte // auth_index -> json
 	probeBody map[string]string // access token -> usage JSON
-	httpCalls []string
+	profile   map[string]string // access token -> profile JSON
+	httpCalls []string          // usage reads, by token
+	profiles  []string          // profile reads, by token
 	execs     []pluginapi.HostModelExecutionRequest
 	execResp  pluginapi.HostModelExecutionResponse
 	logs      []string
@@ -46,6 +49,7 @@ func newHost() *fakeHost {
 		},
 		auth:      map[string][]byte{"idx-w": []byte(`{"access_token":"tok-w-secret"}`), "idx-g": []byte(`{"access_token":"tok-g-secret"}`)},
 		probeBody: map[string]string{},
+		profile:   map[string]string{},
 	}
 }
 
@@ -58,6 +62,13 @@ func (h *fakeHost) AuthGet(index string) ([]byte, error) {
 }
 func (h *fakeHost) HTTPDo(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
 	token := strings.TrimPrefix(req.Headers.Get("Authorization"), "Bearer ")
+	if req.URL == probe.ProfileURL {
+		h.profiles = append(h.profiles, token)
+		if body, ok := h.profile[token]; ok {
+			return pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(body)}, nil
+		}
+		return pluginapi.HTTPResponse{StatusCode: 500}, nil
+	}
 	h.httpCalls = append(h.httpCalls, token)
 	return pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(h.probeBody[token])}, nil
 }
@@ -452,5 +463,45 @@ func TestRecheckDoesNotReportADisabledCredentialAsLocked(t *testing.T) {
 	e := New(testConfig(t), h, (&clock{t0}).now, nil)
 	if w := e.Recheck(W)[0]; w.Locked || !w.Disabled {
 		t.Fatalf("W: %+v", w)
+	}
+}
+
+const max20x = `{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}`
+const max5x = `{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}`
+
+func TestTickReadsEachPlanOnceADay(t *testing.T) {
+	c := &clock{t0}
+	h := newHost()
+	h.profile["tok-w-secret"], h.profile["tok-g-secret"] = max20x, max5x
+	e := New(testConfig(t), h, c.now, nil)
+	e.Tick()
+	v := e.Status()
+	if v.Accounts[0].Plan != "max_20x" || v.Accounts[0].Weight != 20 || v.Accounts[1].Plan != "max_5x" || v.Accounts[1].Weight != 5 {
+		t.Fatalf("plans: %+v %+v", v.Accounts[0], v.Accounts[1])
+	}
+	c.t = t0.Add(23 * time.Hour)
+	e.Tick()
+	if len(h.profiles) != 2 {
+		t.Fatalf("a plan is read once a day, got %v", h.profiles)
+	}
+	c.t = t0.Add(25 * time.Hour)
+	e.Tick()
+	if len(h.profiles) != 4 {
+		t.Fatalf("a day later each plan is read again, got %v", h.profiles)
+	}
+}
+
+func TestAFailedPlanReadIsTriedAgainWithinTheHourAndShowsNoPlan(t *testing.T) {
+	c := &clock{t0}
+	h := newHost() // no profile answers: every read fails
+	e := New(testConfig(t), h, c.now, nil)
+	e.Tick()
+	if v := e.Status(); v.Accounts[0].Plan != "" || v.Accounts[0].Weight != 0 {
+		t.Fatalf("an unknown plan must stay empty: %+v", v.Accounts[0])
+	}
+	c.t = t0.Add(61 * time.Minute)
+	e.Tick()
+	if len(h.profiles) != 4 {
+		t.Fatalf("a failed read is retried after an hour, got %v", h.profiles)
 	}
 }
