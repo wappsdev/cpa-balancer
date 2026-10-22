@@ -115,12 +115,25 @@ func pick(e *Engine, model string, ids ...string) pluginapi.SchedulerPickRespons
 	return e.Pick(req)
 }
 
+// fableProbe records the usage endpoint's Fable reading, the only source of Fable's own limit.
+func fableProbe(e *Engine, account string, util, resetH float64, now time.Time) {
+	at := now.Add(time.Duration(resetH * float64(time.Hour)))
+	e.mu.Lock()
+	acc := e.st.Account(account)
+	if acc.Probe == nil {
+		acc.Probe = quota.Readings{}
+	}
+	acc.Probe[quota.Fable] = quota.Reading{Util: util, ResetsAt: &at, ObservedAt: now, Source: "probe"}
+	e.recompute(now)
+	e.mu.Unlock()
+}
+
 // warm feeds main and Fable usage for both accounts: G resets first, so G is chosen.
 func warm(e *Engine, now time.Time, gSession float64) {
 	e.OnUsage(usage(W, Opus, headers(10, 140, 0, 4, now)))
-	e.OnUsage(usage(W, Fable, headers(1, 140, 0, 4, now)))
+	fableProbe(e, W, 1, 140, now)
 	e.OnUsage(usage(G, Opus, headers(52, 90, gSession, 3, now)))
-	e.OnUsage(usage(G, Fable, headers(0, 90, gSession, 3, now)))
+	fableProbe(e, G, 0, 90, now)
 }
 
 func TestPickFollowsDecisionAndCandidates(t *testing.T) {
@@ -196,7 +209,7 @@ func TestTickProbesIdleAccountAndAnchorsIt(t *testing.T) {
 	cfg := testConfig(t)
 	e := New(cfg, h, c.now, nil)
 	e.OnUsage(usage(G, Opus, headers(52, 90, 30, 3, t0)))
-	e.OnUsage(usage(G, Fable, headers(0, 90, 30, 3, t0)))
+	fableProbe(e, G, 0, 90, t0)
 	e.Tick()
 	if strings.Join(h.httpCalls, ",") != "tok-w-secret" {
 		t.Fatalf("expected one probe of W, got %v", h.httpCalls)
@@ -305,7 +318,7 @@ func TestPausedDelegatesAndSkipsProbesAndAnchors(t *testing.T) {
 	rec := history.NewRecorder(t.TempDir())
 	e := New(cfg, h, (&clock{t0}).now, rec)
 	e.OnUsage(usage(G, Opus, headers(52, 90, 30, 3, t0)))
-	e.OnUsage(usage(G, Fable, headers(0, 90, 30, 3, t0)))
+	fableProbe(e, G, 0, 90, t0)
 	e.Tick()
 	if v := e.Status(); len(v.Changes) != 0 {
 		t.Fatalf("paused must not record account changes: %+v", v.Changes)
@@ -329,6 +342,7 @@ func TestTrafficAndEventsReachHistory(t *testing.T) {
 	rec := history.NewRecorder(t.TempDir())
 	e := New(testConfig(t), newHost(), c.now, rec)
 	warm(e, t0, 30)
+	// warm sent G one request (its Opus usage); this failed one is the second
 	failed := usage(G, Opus, headers(52, 90, 98, 3, t0))
 	failed.Failed = true
 	failed.Detail.InputTokens, failed.Detail.OutputTokens = 100, 20
@@ -342,7 +356,7 @@ func TestTrafficAndEventsReachHistory(t *testing.T) {
 	}
 	i := len(s.T) - 2 // the 12:00 point; the last one is the open 12:05 slot
 	g := s.Accounts[G]
-	if g == nil || g.Requests[i] != 3 || g.Tokens[i] != 120 || g.Main[i] == nil || *g.Main[i] != 52 || *g.MainCap[i] != 85 {
+	if g == nil || g.Requests[i] != 2 || g.Tokens[i] != 120 || g.Main[i] == nil || *g.Main[i] != 52 || *g.MainCap[i] != 85 {
 		t.Fatalf("point %d of G is wrong", i)
 	}
 	if s.Active["main"][i] != W {
