@@ -115,11 +115,25 @@ func ParsePlan(body []byte) (Plan, error) {
 	}
 	switch tier := p.Organization.Tier; {
 	case strings.Contains(tier, "max_20x"):
-		return Plan{"max_20x", 10}, nil
+		return Plan{"max_20x", WeightOf("max_20x")}, nil
 	case strings.Contains(tier, "max_5x"):
-		return Plan{"max_5x", 5}, nil
+		return Plan{"max_5x", WeightOf("max_5x")}, nil
 	case p.Organization.Type == "claude_pro" || p.Account.HasClaudePro:
-		return Plan{"pro", 1}, nil
+		return Plan{"pro", WeightOf("pro")}, nil
 	}
 	return Plan{}, fmt.Errorf("unknown plan %q / %q", p.Organization.Type, p.Organization.Tier)
+}
+
+// WeightOf is a plan's weekly limit in Pro plans, from its name, so a weight saved by an older
+// version never outlives a correction; 0 for an unknown name.
+func WeightOf(name string) float64 {
+	switch name {
+	case "max_20x":
+		return 10
+	case "max_5x":
+		return 5
+	case "pro":
+		return 1
+	}
+	return 0
 }

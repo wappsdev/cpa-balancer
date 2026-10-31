@@ -519,3 +519,12 @@ func TestAFailedPlanReadIsTriedAgainWithinTheHourAndShowsNoPlan(t *testing.T) {
 		t.Fatalf("a failed read is retried after an hour, got %v", h.profiles)
 	}
 }
+
+func TestAWeightSavedBeforeIsTakenFromThePlanName(t *testing.T) {
+	// a plan read on an older version was saved with 20; the weight follows the name instead
+	e := New(testConfig(t), newHost(), (&clock{t0}).now, nil)
+	e.st.Account(W).Plan = probe.Plan{Name: "max_20x", Weight: 20}
+	if w := e.Status().Accounts[0].Weight; w != 10 {
+		t.Fatalf("weight %v", w)
+	}
+}

@@ -134,7 +134,7 @@ function accountCard(a, v) {
       <span class="name">${esc(short(a.auth_file))}</span>
       ${activeIn.length ? `<span class="chip accent">● active · ${activeIn.join(", ")}</span>` : ""}
       <span class="chip">${a.reserve ? "keeps a reserve" : "no reserve"}</span>
-      ${a.plan ? `<span class="chip">${esc({ max_20x: "Max 20x", max_5x: "Max 5x", pro: "Pro" }[a.plan] || a.plan)}</span>` : ""}
+      ${a.plan ? `<span class="chip">${esc({ max_20x: "Ultra", max_5x: "Max", pro: "Pro" }[a.plan] || a.plan)}</span>` : ""}
       ${a.extra_usage ? '<span class="chip">extra usage on</span>' : ""}
       ${a.listed ? "" : '<span class="chip bad">not listed by CPA</span>'}
     </div>
