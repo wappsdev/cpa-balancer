@@ -490,7 +490,7 @@ func TestTickReadsEachPlanOnceADay(t *testing.T) {
 	e := New(testConfig(t), h, c.now, nil)
 	e.Tick()
 	v := e.Status()
-	if v.Accounts[0].Plan != "max_20x" || v.Accounts[0].Weight != 20 || v.Accounts[1].Plan != "max_5x" || v.Accounts[1].Weight != 5 {
+	if v.Accounts[0].Plan != "max_20x" || v.Accounts[0].Weight != 10 || v.Accounts[1].Plan != "max_5x" || v.Accounts[1].Weight != 5 {
 		t.Fatalf("plans: %+v %+v", v.Accounts[0], v.Accounts[1])
 	}
 	c.t = t0.Add(23 * time.Hour)

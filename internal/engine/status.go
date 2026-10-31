@@ -14,7 +14,7 @@ type AccountView struct {
 	ExtraUsage  bool                     `json:"extra_usage"`
 	Listed      bool                     `json:"listed"`
 	Plan        string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
-	Weight      float64                  `json:"weight,omitempty"` // the plan in Pro plans: 20, 5 or 1
+	Weight      float64                  `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
 	Unavailable bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
 	Readings    quota.Readings           `json:"readings"`
 	Eligibility map[quota.Bucket]string  `json:"eligibility"`
