@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/adnankurt/cpa-balancer/internal/policy"
+	"github.com/adnankurt/cpa-balancer/internal/probe"
 	"github.com/adnankurt/cpa-balancer/internal/quota"
 	"github.com/adnankurt/cpa-balancer/internal/state"
 )
@@ -44,7 +45,7 @@ func (e *Engine) Status() View {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
 		av := AccountView{AuthFile: a.AuthFile, Reserve: a.Reserve, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
-			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: e.st.Account(a.AuthFile).Plan.Weight, Readings: snap.Readings,
+			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{quota.Session: e.cfg.Thresholds.SessionCap}}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
 			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)
