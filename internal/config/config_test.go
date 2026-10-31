@@ -91,3 +91,38 @@ func TestParsesExtraUsage(t *testing.T) {
 		t.Fatalf("got %+v", cfg.Accounts)
 	}
 }
+
+func TestAccountNames(t *testing.T) {
+	cfg := func(accounts ...Account) Config {
+		c := Default()
+		c.Accounts = accounts
+		c.Buckets.Main = []string{"m"}
+		return c
+	}
+	// a label wins; without one, the e-mail's domain, or its local part when two share a domain
+	names := cfg(
+		Account{AuthFile: "claude-1a-ali@sirket.com.json", Label: "Work"},
+		Account{AuthFile: "claude-2b-ali@gmail.com.json"},
+		Account{AuthFile: "claude-3c-veli@gmail.com.json"},
+		Account{AuthFile: "claude-4d-me@example.com.json"},
+	).Names()
+	want := map[string]string{
+		"claude-1a-ali@sirket.com.json": "Work", "claude-2b-ali@gmail.com.json": "ali",
+		"claude-3c-veli@gmail.com.json": "veli", "claude-4d-me@example.com.json": "wapps",
+	}
+	for f, n := range want {
+		if names[f] != n {
+			t.Fatalf("%s: got %q, want %q (all %v)", f, names[f], n, names)
+		}
+	}
+	// a derived name that equals a label, or two equal labels, is refused
+	if err := cfg(Account{AuthFile: "claude-1-a@x.com.json", Label: "y"}, Account{AuthFile: "claude-2-b@y.com.json"}).Validate(); err == nil {
+		t.Fatal("two accounts named y must be refused")
+	}
+	if err := cfg(Account{AuthFile: "claude-1-a@x.com.json", Label: "bad name!"}).Validate(); err == nil {
+		t.Fatal("a label must be one word of letters, digits, - or _")
+	}
+	if err := cfg(Account{AuthFile: "claude-1-a@x.com.json", Label: "personal-2"}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

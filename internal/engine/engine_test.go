@@ -528,3 +528,12 @@ func TestAWeightSavedBeforeIsTakenFromThePlanName(t *testing.T) {
 		t.Fatalf("weight %v", w)
 	}
 }
+
+func TestStatusNamesEachAccount(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts[1].Label = "personal"
+	v := New(cfg, newHost(), (&clock{t0}).now, nil).Status()
+	if v.Accounts[0].Name != "claude-w" || v.Accounts[1].Name != "personal" {
+		t.Fatalf("names %q %q", v.Accounts[0].Name, v.Accounts[1].Name)
+	}
+}
