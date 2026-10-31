@@ -11,6 +11,7 @@ import (
 
 type AccountView struct {
 	AuthFile    string                   `json:"auth_file"`
+	Name        string                   `json:"name"` // the account's label, or a name from its e-mail
 	Reserve     bool                     `json:"reserve"`
 	ExtraUsage  bool                     `json:"extra_usage"`
 	Listed      bool                     `json:"listed"`
@@ -41,10 +42,11 @@ func (e *Engine) Status() View {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	v := View{GeneratedAt: now, Mode: e.cfg.Mode, Paused: e.cfg.Paused, FinalCap: e.cfg.Thresholds.FinalCap, Decision: e.decision, Changes: append([]state.Change(nil), e.st.Changes...)}
+	names := e.cfg.Names()
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
-		av := AccountView{AuthFile: a.AuthFile, Reserve: a.Reserve, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
+		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{quota.Session: e.cfg.Thresholds.SessionCap}}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 
 type Account struct {
 	AuthFile string `yaml:"auth_file" json:"auth_file"`
-	Reserve  bool   `yaml:"reserve" json:"reserve"`
+	// Label names the account in the Management Center, the HUD and its commands; empty means a
+	// name taken from the e-mail (Names).
+	Label   string `yaml:"label,omitempty" json:"label,omitempty"`
+	Reserve bool   `yaml:"reserve" json:"reserve"`
 	// ExtraUsage: the account has extra-usage credits on, so it keeps answering past its plan
 	// limits. It is used only when no account has plan quota left.
 	ExtraUsage bool `yaml:"extra_usage" json:"extra_usage"`
@@ -121,8 +125,54 @@ func (c Config) Validate() error {
 			return fmt.Errorf("account auth files must be unique and non-empty, got %q", a.AuthFile)
 		}
 		seen[a.AuthFile] = true
+		if a.Label != "" && !labelPattern.MatchString(a.Label) {
+			return fmt.Errorf("label %q must be one word of up to 20 letters, digits, - or _", a.Label)
+		}
+	}
+	taken := map[string]string{}
+	for file, name := range c.Names() {
+		if other, ok := taken[strings.ToLower(name)]; ok {
+			return fmt.Errorf("accounts %s and %s are both named %q; give one a label", other, file, name)
+		}
+		taken[strings.ToLower(name)] = file
 	}
 	return nil
+}
+
+var labelPattern = regexp.MustCompile(`^[\p{L}\p{N}_-]{1,20}$`)
+
+var authPrefix = regexp.MustCompile(`^(claude|codex)-[0-9a-f]+-`)
+
+// emailOf is the e-mail inside a CPA auth file name, or the name itself.
+func emailOf(authFile string) string {
+	return strings.TrimSuffix(authPrefix.ReplaceAllString(authFile, ""), ".json")
+}
+
+// Names is each account's name, by auth file: its label, else the e-mail's domain (wapps for
+// me@example.com), else the e-mail's local part when two accounts share a domain. The Management
+// Center, the HUD and their commands all use these.
+func (c Config) Names() map[string]string {
+	domain := func(e string) string {
+		at := strings.LastIndex(e, "@")
+		return strings.SplitN(e[at+1:], ".", 2)[0]
+	}
+	count := map[string]int{}
+	for _, a := range c.Accounts {
+		count[domain(emailOf(a.AuthFile))]++
+	}
+	out := map[string]string{}
+	for _, a := range c.Accounts {
+		e := emailOf(a.AuthFile)
+		switch {
+		case a.Label != "":
+			out[a.AuthFile] = a.Label
+		case count[domain(e)] > 1 && strings.Contains(e, "@"):
+			out[a.AuthFile] = e[:strings.LastIndex(e, "@")]
+		default:
+			out[a.AuthFile] = domain(e)
+		}
+	}
+	return out
 }
 
 func (c Config) Managed(authFile string) bool {

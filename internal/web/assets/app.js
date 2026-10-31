@@ -7,7 +7,10 @@ const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#06b6d4", "#8b5cf6"
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const short = f => (f || "—").replace(/^claude-[0-9a-f]+-/, "").replace(/\.json$/, "");
+// Each account's name as the balancer reports it (its label, or one from its e-mail): the same
+// name the HUD and its commands use. An account the status does not list yet shows its e-mail.
+let names = {};
+const short = f => names[f] || (f || "—").replace(/^claude-[0-9a-f]+-/, "").replace(/\.json$/, "");
 const time = t => t ? new Date(t).toLocaleString() : "—";
 // Relative time: "in 4d 3h", "12m ago"; the exact time goes into a title attribute.
 function rel(t) {
@@ -73,6 +76,7 @@ function renderStatus(v) {
     return;
   }
   view = v;
+  names = Object.fromEntries((v.accounts || []).map(a => [a.auth_file, a.name]));
   $("meta").textContent = `${v.paused ? "Paused" : v.mode === "shadow" ? "Shadow mode — deciding, not applying" : "Balancing"} · updated ${rel(v.generated_at)}`;
   $("live-dot").className = "dot " + (v.paused ? "paused" : "on");
   const pause = $("pause");
@@ -448,7 +452,7 @@ async function loadSettings() {
 }
 
 function fillForm(c) {
-  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: !!a.reserve, extra_usage: !!a.extra_usage }));
+  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: !!a.reserve, extra_usage: !!a.extra_usage, label: a.label || "" }));
   renderAccounts();
   for (const el of document.querySelectorAll("[data-threshold]")) el.value = c.thresholds?.[el.dataset.threshold] ?? "";
   for (const b of Object.keys(buckets)) { buckets[b] = [...(c.buckets?.[b] || [])]; renderChips(b); }
@@ -509,6 +513,7 @@ for (const el of document.querySelectorAll("[data-threshold]")) el.addEventListe
 function renderAccounts() {
   $("account-list").innerHTML = accounts.map((a, i) => `<li>
     <div class="who"><strong>${esc(short(a.auth_file))}</strong><span>${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
+    <input class="text label-input" data-label="${i}" value="${esc(a.label)}" placeholder="name" maxlength="20" aria-label="Name for ${esc(short(a.auth_file))}" title="The name the Management Center, the HUD and its commands use; empty takes one from the e-mail">
     <div class="reserve"><button type="button" role="switch" class="switch" data-reserve="${i}" aria-checked="${a.reserve}" aria-label="Keeps a reserve"><span class="knob"></span></button>Reserve</div>
     <div class="reserve"><button type="button" role="switch" class="switch" data-extra="${i}" aria-checked="${a.extra_usage}" aria-label="Extra usage credits are on"><span class="knob"></span></button>Extra usage</div>
     <button type="button" class="icon-button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">
@@ -535,9 +540,13 @@ $("account-list").addEventListener("click", e => {
     renderAccounts();
   }
 });
+$("account-list").addEventListener("input", e => {
+  const field = e.target.closest("[data-label]");
+  if (field) accounts[+field.dataset.label].label = field.value.trim();
+});
 $("account-add-button").addEventListener("click", () => {
   const f = $("account-add").value;
-  if (f) { accounts.push({ auth_file: f, reserve: false, extra_usage: false }); renderAccounts(); }
+  if (f) { accounts.push({ auth_file: f, reserve: false, extra_usage: false, label: "" }); renderAccounts(); }
 });
 
 function collect() {
@@ -550,7 +559,8 @@ function collect() {
     if (el.getAttribute("role") === "switch") anchor[el.dataset.anchor] = el.getAttribute("aria-checked") === "true";
     else if (el.value.trim()) anchor[el.dataset.anchor] = el.value.trim();
   }
-  return { accounts: accounts.map(a => ({ ...a })), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
+  // An empty label is left out: the balancer then takes a name from the e-mail.
+  return { accounts: accounts.map(({ label, ...a }) => (label ? { ...a, label } : a)), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
 }
 
 // The same rules as config.Validate; the plugin checks them again.
@@ -564,6 +574,9 @@ function validate(c) {
   if ("min_dwell_minutes" in t && !(Number.isInteger(t.min_dwell_minutes) && t.min_dwell_minutes >= 0)) errors.push("minimum dwell must be a whole number ≥ 0");
   if ("stale_hours" in t && !(t.stale_hours > 0)) errors.push("stale after must be more than 0 hours");
   if (!c.accounts.length) errors.push("at least one account is required");
+  for (const a of c.accounts) if (a.label && !/^[\p{L}\p{N}_-]{1,20}$/u.test(a.label)) errors.push(`name "${a.label}" must be one word of up to 20 letters, digits, - or _`);
+  const labels = c.accounts.map(a => (a.label || "").toLowerCase()).filter(Boolean);
+  if (new Set(labels).size !== labels.length) errors.push("two accounts have the same name");
   if (!c.buckets.main.length) errors.push("the main bucket needs at least one model");
   return errors;
 }
@@ -580,14 +593,15 @@ function changes(before, after) {
   const lines = [], changed = [];
   for (const k of SECTIONS) {
     if (k === "accounts") {
-      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage }]));
-      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage }]));
+      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage, label: a.label || "" }]));
+      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage, label: a.label || "" }]));
       const order = (before.accounts || []).map(a => a.auth_file).join() !== after.accounts.map(a => a.auth_file).join();
       for (const f of Object.keys(now)) {
         if (!(f in was)) lines.push(`add account ${short(f)}${now[f].reserve ? " (keeps a reserve)" : ""}${now[f].extra ? " (extra usage)" : ""}`);
         else {
           if (was[f].reserve !== now[f].reserve) lines.push(`${short(f)}: ${now[f].reserve ? "keeps a reserve" : "no reserve"}`);
           if (was[f].extra !== now[f].extra) lines.push(`${short(f)}: extra usage ${now[f].extra ? "on" : "off"}`);
+          if (was[f].label !== now[f].label) lines.push(`${short(f)}: name ${now[f].label ? `"${now[f].label}"` : "from the e-mail"}`);
         }
       }
       for (const f of Object.keys(was)) if (!(f in now)) lines.push(`remove account ${short(f)}`);
