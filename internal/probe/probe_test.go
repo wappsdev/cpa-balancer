@@ -66,7 +66,7 @@ func TestRequestAndParse(t *testing.T) {
 
 func TestParsePlanReadsTheRateLimitTier(t *testing.T) {
 	for body, want := range map[string]Plan{
-		`{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}`: {"max_20x", 20},
+		`{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}`: {"max_20x", 10},
 		`{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}`:  {"max_5x", 5},
 		`{"account":{"has_claude_pro":true},"organization":{"organization_type":"claude_pro"}}`:          {"pro", 1},
 	} {

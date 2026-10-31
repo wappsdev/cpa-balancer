@@ -92,7 +92,8 @@ func ProfileRequest(accessToken string) pluginapi.HTTPRequest {
 	return r
 }
 
-// Plan is a subscription and its size in Pro plans: 1% of a Max 20x is twenty times 1% of a Pro.
+// Plan is a subscription and its weekly limit in Pro plans: a Max 20x has ten times a Pro's weekly
+// limit (its 20x is the 5-hour limit), a Max 5x five times.
 type Plan struct {
 	Name   string  `json:"name"`
 	Weight float64 `json:"weight"`
@@ -114,7 +115,7 @@ func ParsePlan(body []byte) (Plan, error) {
 	}
 	switch tier := p.Organization.Tier; {
 	case strings.Contains(tier, "max_20x"):
-		return Plan{"max_20x", 20}, nil
+		return Plan{"max_20x", 10}, nil
 	case strings.Contains(tier, "max_5x"):
 		return Plan{"max_5x", 5}, nil
 	case p.Organization.Type == "claude_pro" || p.Account.HasClaudePro:
