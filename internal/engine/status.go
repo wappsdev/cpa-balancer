@@ -10,6 +10,12 @@ import (
 	"github.com/adnankurt/cpa-balancer/internal/state"
 )
 
+// NextCap is the cap a window moves to next and when.
+type NextCap struct {
+	Cap float64   `json:"cap"`
+	At  time.Time `json:"at"`
+}
+
 type AccountView struct {
 	AuthFile     string                   `json:"auth_file"`
 	Name         string                   `json:"name"`                    // the account's label, or a name from its e-mail
@@ -25,7 +31,8 @@ type AccountView struct {
 	Unavailable  bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
 	Readings     quota.Readings           `json:"readings"`
 	Eligibility  map[quota.Bucket]string  `json:"eligibility"`
-	Caps         map[quota.Bucket]float64 `json:"caps"` // the switch threshold in force per bucket
+	Caps         map[quota.Bucket]float64 `json:"caps"`                // the switch threshold in force per bucket
+	NextCaps     map[quota.Bucket]NextCap `json:"next_caps,omitempty"` // where the cap changes next before the reset
 	LastAnchor   time.Time                `json:"last_anchor,omitzero"`
 	AnchorModel  string                   `json:"anchor_model,omitempty"`
 }
@@ -53,17 +60,25 @@ func (e *Engine) Status() View {
 		cred, listed := e.credentials[a.AuthFile]
 		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, SessionSteps: a.SessionSteps, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
-			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}}
+			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}, NextCaps: map[quota.Bucket]NextCap{}}
 		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour
 		av.Fable = !e.st.Account(a.AuthFile).NoFable
 		if av.FiveHour {
 			av.Caps[quota.Session] = policy.SessionCap(a, snap.Readings[quota.Session].ResetsAt, now, e.cfg.Thresholds)
+			if r := snap.Readings[quota.Session]; r.ResetsAt != nil {
+				if c, at, ok := policy.NextCap(a, true, *r.ResetsAt, now, e.cfg.Thresholds); ok {
+					av.NextCaps[quota.Session] = NextCap{Cap: c, At: at}
+				}
+			}
 		}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
 			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)
 			av.Eligibility[b] = why
 			if r, ok := snap.Readings[b]; ok && r.ResetsAt != nil {
 				av.Caps[b] = policy.Cap(a, *r.ResetsAt, now, e.cfg.Thresholds)
+				if c, at, ok := policy.NextCap(a, false, *r.ResetsAt, now, e.cfg.Thresholds); ok {
+					av.NextCaps[b] = NextCap{Cap: c, At: at}
+				}
 			}
 		}
 		if acc := e.st.Accounts[a.AuthFile]; acc != nil && !acc.LastAnchor.IsZero() {

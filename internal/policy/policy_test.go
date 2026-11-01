@@ -308,3 +308,33 @@ func TestAnAccountsOwnFiveHourSteps(t *testing.T) {
 		t.Fatalf("closed window cap %v", got)
 	}
 }
+
+func TestNextCapIsTheFirstChangeBeforeTheReset(t *testing.T) {
+	th := config.Default().Thresholds
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	custom := config.Account{Reserve: config.ReserveCustom, ReserveSteps: []config.ReserveStep{{Cap: 10, Hours: 72}, {Cap: 10, Hours: 48}, {Cap: 60, Hours: 24}}}
+	// 10% until 3 days and again until 2 days: the cap first changes 2 days before the reset
+	c, at, ok := NextCap(custom, false, now.Add(100*time.Hour), now, th)
+	if !ok || c != 60 || !at.Equal(now.Add(52*time.Hour)) {
+		t.Fatalf("%v %v %v", c, at, ok)
+	}
+	// the last step gives way to the final cap
+	if c, at, ok := NextCap(custom, false, now.Add(10*time.Hour), now, th); ok {
+		t.Fatalf("after the last step the final cap holds to the reset: %v %v", c, at)
+	} else if c, at, ok := NextCap(custom, false, now.Add(30*time.Hour), now, th); !ok || c != th.FinalCap || !at.Equal(now.Add(6*time.Hour)) {
+		t.Fatalf("%v %v %v", c, at, ok)
+	}
+	// a 5-hour step that runs to the reset never changes; one that ends before it does
+	five := config.Account{SessionSteps: []config.ReserveStep{{Cap: 60, Hours: 0}}}
+	if _, _, ok := NextCap(five, true, now.Add(3*time.Hour), now, th); ok {
+		t.Fatal("a step to the reset has no next cap")
+	}
+	five.SessionSteps = []config.ReserveStep{{Cap: 40, Hours: 2}, {Cap: 80, Hours: 0}}
+	if c, at, ok := NextCap(five, true, now.Add(3*time.Hour), now, th); !ok || c != 80 || !at.Equal(now.Add(time.Hour)) {
+		t.Fatalf("%v %v %v", c, at, ok)
+	}
+	// without a reserve the final cap holds all week
+	if _, _, ok := NextCap(config.Account{Reserve: config.ReserveOff}, false, now.Add(100*time.Hour), now, th); ok {
+		t.Fatal("no reserve, no next cap")
+	}
+}

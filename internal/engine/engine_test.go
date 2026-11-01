@@ -605,3 +605,19 @@ func TestStatusReportsAnAccountsOwnFiveHourCap(t *testing.T) {
 		t.Fatalf("caps %v %v, own %v", v.Accounts[0].Caps, v.Accounts[1].Caps, v.Accounts[1].SessionSteps)
 	}
 }
+
+func TestStatusReportsTheNextCapAndWhenItApplies(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts[1] = config.Account{AuthFile: G, Reserve: config.ReserveCustom, ReserveSteps: []config.ReserveStep{{Cap: 50, Hours: 120}, {Cap: 70, Hours: 48}},
+		SessionSteps: []config.ReserveStep{{Cap: 60, Hours: 0}}}
+	e := New(cfg, newHost(), (&clock{t0}).now, nil)
+	e.OnUsage(usage(G, Opus, headers(30, 90, 10, 3, t0)))
+	g := e.Status().Accounts[1]
+	// 90 hours to the reset: 70% until 2 days before it, then the final cap
+	if n := g.NextCaps[quota.Main]; n.Cap != cfg.Thresholds.FinalCap || !n.At.Equal(t0.Add(42*time.Hour)) {
+		t.Fatalf("next main cap %+v", g.NextCaps)
+	}
+	if _, ok := g.NextCaps[quota.Session]; ok {
+		t.Fatalf("60%% runs to the 5-hour reset, so it has no next cap: %+v", g.NextCaps)
+	}
+}

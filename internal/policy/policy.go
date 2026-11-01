@@ -77,6 +77,32 @@ func Cap(a config.Account, resetsAt, now time.Time, th config.Thresholds) float6
 	return stepCap(steps, resetsAt.Sub(now), th.FinalCap)
 }
 
+// NextCap is the cap a window moves to next and when, the first step boundary before the reset
+// where the cap changes; ok is false when the cap in force holds to the reset.
+func NextCap(a config.Account, session bool, resetsAt, now time.Time, th config.Thresholds) (float64, time.Time, bool) {
+	steps, last := a.SessionSteps, th.SessionCap
+	if !session {
+		steps = map[string][]config.ReserveStep{config.ReserveDefault: th.Reserve, config.ReserveCustom: a.ReserveSteps}[a.Reserve]
+		last = th.FinalCap
+	}
+	left := resetsAt.Sub(now)
+	cur := stepCap(steps, left, last)
+	ends := []float64{}
+	for _, s := range steps {
+		if s.Hours > 0 && left >= time.Duration(s.Hours*float64(time.Hour)) {
+			ends = append(ends, s.Hours)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.Float64Slice(ends)))
+	for _, h := range ends {
+		end := time.Duration(h * float64(time.Hour))
+		if c := stepCap(steps, end-time.Nanosecond, last); c != cur {
+			return c, resetsAt.Add(-end), true
+		}
+	}
+	return 0, time.Time{}, false
+}
+
 func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now time.Time, th config.Thresholds,
 	releaseReserve bool) (bool, string) {
 	if !listed {
