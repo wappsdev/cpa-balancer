@@ -211,8 +211,11 @@ fieldset > .hint { margin: 0 0 12px; }
 .account-list .label-input { width: 120px; flex: none; }
 .account-list .reserve-field { flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); }
 .account-list .field-name { width: 56px; }
-.account-list .custom-reserve { display: inline-flex; align-items: center; gap: 6px; }
-.account-list .custom-reserve[hidden] { display: none; }
+.steps { display: grid; gap: 6px; justify-items: start; }
+.account-list .reserve-field .steps { flex-basis: 100%; padding-left: 68px; }
+.step { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.link-button { background: none; border: 0; padding: 2px 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.field.wide { grid-column: 1 / -1; }
 .input-unit.small { width: 72px; }
 .input-unit.small input { padding-right: 24px; }
 .text.small-number { width: 56px; }
@@ -234,6 +237,9 @@ fieldset > .hint { margin: 0 0 12px; }
 .ruler .tag { position: absolute; font-size: 11px; color: var(--muted); white-space: nowrap; transform: translateX(-50%); transition: left 200ms var(--ease-out); }
 .ruler .tag.up { top: 0; }
 .ruler .tag.down { top: 38px; }
+/* near an end, a tag sits inside the ruler rather than half past its edge */
+.ruler .tag.end { transform: translateX(-100%); }
+.ruler .tag.start { transform: none; }
 
 .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; height: auto; min-height: 36px; padding: 4px 6px; max-width: 640px; cursor: text; }
 .chips input { flex: 1; min-width: 140px; height: 26px; border: none; background: none; outline: none; padding: 0 4px; }

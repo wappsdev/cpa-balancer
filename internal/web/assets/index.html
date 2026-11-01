@@ -77,7 +77,7 @@
     <form id="settings" novalidate>
       <fieldset class="card">
         <legend>Accounts</legend>
-        <p class="hint">Accounts are used in order of their weekly reset. Reserve: Off uses an account up to the final cap. Default holds it to the two caps below until its reset is near. Custom gives it its own cap until a time you choose before the reset. If no account is left, every reserve is released.</p>
+        <p class="hint">Accounts are used in order of their weekly reset. Reserve: Off uses an account up to the final cap. Default holds it to the steps under Thresholds. Custom gives it steps of its own. Each step caps the account until a time before its reset; after the last step, the final cap applies. If no account is left, every reserve is released.</p>
         <ul class="account-list" id="account-list"></ul>
         <div class="row">
           <select id="account-add" class="select"></select>
@@ -88,8 +88,7 @@
       <fieldset class="card">
         <legend>Thresholds</legend>
         <div class="fields">
-          <label class="field"><span>Default reserve cap, reset ≥ 48 h away</span><span class="input-unit"><input type="number" step="any" data-threshold="reserve_cap_far"><em>%</em></span></label>
-          <label class="field"><span>Default reserve cap, reset 12–48 h away</span><span class="input-unit"><input type="number" step="any" data-threshold="reserve_cap_near"><em>%</em></span></label>
+          <div class="field wide"><span>Default reserve</span><div class="steps" id="default-steps"></div></div>
           <label class="field"><span>Final cap, every account</span><span class="input-unit"><input type="number" step="any" data-threshold="final_cap"><em>%</em></span></label>
           <label class="field"><span>5-hour switch at</span><span class="input-unit"><input type="number" step="any" data-threshold="session_cap"><em>%</em></span></label>
           <label class="field"><span>Minimum dwell</span><span class="input-unit"><input type="number" step="1" data-threshold="min_dwell_minutes"><em>min</em></span></label>

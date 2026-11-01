@@ -540,10 +540,11 @@ func TestStatusNamesEachAccount(t *testing.T) {
 
 func TestStatusReportsACustomReserve(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.Accounts[1] = config.Account{AuthFile: G, Reserve: config.ReserveCustom, ReserveCap: 50, ReserveHours: 120}
+	steps := []config.ReserveStep{{Cap: 50, Hours: 120}, {Cap: 70, Hours: 48}}
+	cfg.Accounts[1] = config.Account{AuthFile: G, Reserve: config.ReserveCustom, ReserveSteps: steps}
 	g := New(cfg, newHost(), (&clock{t0}).now, nil).Status().Accounts[1]
-	if g.Reserve != "custom" || g.ReserveCap != 50 || g.ReserveHours != 120 {
-		t.Fatalf("reserve %q %v %v", g.Reserve, g.ReserveCap, g.ReserveHours)
+	if g.Reserve != "custom" || len(g.ReserveSteps) != 2 || g.ReserveSteps[1] != steps[1] {
+		t.Fatalf("reserve %q %v", g.Reserve, g.ReserveSteps)
 	}
 }
 
