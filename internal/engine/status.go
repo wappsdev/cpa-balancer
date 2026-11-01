@@ -10,20 +10,21 @@ import (
 )
 
 type AccountView struct {
-	AuthFile    string                   `json:"auth_file"`
-	Name        string                   `json:"name"`                  // the account's label, or a name from its e-mail
-	Reserve     string                   `json:"reserve"`               // off, default or custom
-	ReserveCap  float64                  `json:"reserve_cap,omitempty"` // a custom reserve's cap
-	ExtraUsage  bool                     `json:"extra_usage"`
-	Listed      bool                     `json:"listed"`
-	Plan        string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
-	Weight      float64                  `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
-	Unavailable bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
-	Readings    quota.Readings           `json:"readings"`
-	Eligibility map[quota.Bucket]string  `json:"eligibility"`
-	Caps        map[quota.Bucket]float64 `json:"caps"` // the switch threshold in force per bucket
-	LastAnchor  time.Time                `json:"last_anchor,omitzero"`
-	AnchorModel string                   `json:"anchor_model,omitempty"`
+	AuthFile     string                   `json:"auth_file"`
+	Name         string                   `json:"name"`                    // the account's label, or a name from its e-mail
+	Reserve      string                   `json:"reserve"`                 // off, default or custom
+	ReserveCap   float64                  `json:"reserve_cap,omitempty"`   // a custom reserve's cap
+	ReserveHours float64                  `json:"reserve_hours,omitempty"` // and how long before the reset it is released
+	ExtraUsage   bool                     `json:"extra_usage"`
+	Listed       bool                     `json:"listed"`
+	Plan         string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
+	Weight       float64                  `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
+	Unavailable  bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
+	Readings     quota.Readings           `json:"readings"`
+	Eligibility  map[quota.Bucket]string  `json:"eligibility"`
+	Caps         map[quota.Bucket]float64 `json:"caps"` // the switch threshold in force per bucket
+	LastAnchor   time.Time                `json:"last_anchor,omitzero"`
+	AnchorModel  string                   `json:"anchor_model,omitempty"`
 }
 
 type View struct {
@@ -47,7 +48,7 @@ func (e *Engine) Status() View {
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
-		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveCap: a.ReserveCap, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
+		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveCap: a.ReserveCap, ReserveHours: a.ReserveHours, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{quota.Session: e.cfg.Thresholds.SessionCap}}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {

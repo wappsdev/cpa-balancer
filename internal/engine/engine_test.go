@@ -537,3 +537,12 @@ func TestStatusNamesEachAccount(t *testing.T) {
 		t.Fatalf("names %q %q", v.Accounts[0].Name, v.Accounts[1].Name)
 	}
 }
+
+func TestStatusReportsACustomReserve(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts[1] = config.Account{AuthFile: G, Reserve: config.ReserveCustom, ReserveCap: 50, ReserveHours: 120}
+	g := New(cfg, newHost(), (&clock{t0}).now, nil).Status().Accounts[1]
+	if g.Reserve != "custom" || g.ReserveCap != 50 || g.ReserveHours != 120 {
+		t.Fatalf("reserve %q %v %v", g.Reserve, g.ReserveCap, g.ReserveHours)
+	}
+}
