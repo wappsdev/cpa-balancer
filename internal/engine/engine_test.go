@@ -621,3 +621,22 @@ func TestStatusReportsTheNextCapAndWhenItApplies(t *testing.T) {
 		t.Fatalf("60%% runs to the 5-hour reset, so it has no next cap: %+v", g.NextCaps)
 	}
 }
+
+func TestHeldAccountsOfOneReopenQueueByThePlanSize(t *testing.T) {
+	const X = "claude-x.json"
+	cfg := testConfig(t)
+	cfg.Accounts = append(cfg.Accounts, config.Account{AuthFile: X, Reserve: config.ReserveDefault})
+	h := newHost()
+	h.files = append(h.files, pluginapi.HostAuthFileEntry{ID: X, Name: X, AuthIndex: "idx-x2", Provider: "claude"})
+	e := New(cfg, h, (&clock{t0}).now, nil)
+	e.OnUsage(usage(W, Opus, headers(10, 90, 5, 3, t0)))
+	// G and X are as full and reset together: X, the larger plan, has more room when they reopen
+	e.OnUsage(usage(G, Opus, headers(98, 40, 5, 3, t0)))
+	e.OnUsage(usage(X, Opus, headers(98, 40, 5, 3, t0)))
+	e.st.Account(G).Plan = probe.Plan{Name: "pro"}
+	e.st.Account(X).Plan = probe.Plan{Name: "max_20x"}
+	e.Tick()
+	if got := e.Status().Decision.MainOrder; strings.Join(got, ",") != W+","+X+","+G {
+		t.Fatalf("order %v", got)
+	}
+}

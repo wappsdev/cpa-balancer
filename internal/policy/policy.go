@@ -18,7 +18,8 @@ var farFuture = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 type Snapshot struct {
 	Readings    quota.Readings
 	Unavailable bool
-	NoFiveHour  bool // the plan has no 5-hour limit, so it has no window to start
+	NoFiveHour  bool    // the plan has no 5-hour limit, so it has no window to start
+	Weight      float64 // the plan's size in Pro plans; 0 while unknown
 }
 
 type Choice struct {
@@ -220,9 +221,71 @@ func resetOf(snaps map[string]Snapshot, account string, b quota.Bucket) time.Tim
 	return farFuture
 }
 
-// order puts the chosen account first, then the accounts that can take work now, then the rest,
-// each group by reset time: the next account shown, and the pick's fallbacks, never skip an
-// account with room for one at its cap.
+// reopen is when a held account can take work again in a bucket, and the room it has then in Pro
+// plans: the first step whose cap passes its weekly use (its reset otherwise), and the 5-hour
+// window's own, whichever comes later. An account held for any other reason never reopens here.
+func reopen(a config.Account, s Snapshot, listed bool, b quota.Bucket, now time.Time, th config.Thresholds) (time.Time, float64) {
+	if !listed || s.Unavailable {
+		return farFuture, 0
+	}
+	at, room := now, 100.0
+	weeks := []quota.Bucket{b}
+	if b == quota.Fable {
+		weeks = append(weeks, quota.Main) // Fable use counts toward the all-models week too
+	}
+	for _, w := range weeks {
+		r, ok := s.Readings[w]
+		if !ok || r.ResetsAt == nil || now.Sub(r.ObservedAt) > th.Stale() {
+			if w == b {
+				return farFuture, 0
+			}
+			continue
+		}
+		t, left := windowReopen(a, false, r, now, th)
+		at, room = later(at, t), min(room, left)
+	}
+	if r, ok := s.Readings[quota.Session]; ok && now.Sub(r.ObservedAt) <= th.Stale() && r.Util >= SessionCap(a, r.ResetsAt, now, th) {
+		if r.ResetsAt == nil {
+			return farFuture, 0
+		}
+		t, _ := windowReopen(a, true, r, now, th)
+		at = later(at, t)
+	}
+	return at, room * s.Weight
+}
+
+// windowReopen is when a window's cap first passes its use (now when it already does), with the
+// room under that cap; at the reset the use starts over and the whole window is room.
+func windowReopen(a config.Account, session bool, r quota.Reading, now time.Time, th config.Thresholds) (time.Time, float64) {
+	cap := Cap(a, *r.ResetsAt, now, th)
+	if session {
+		cap = SessionCap(a, r.ResetsAt, now, th)
+	}
+	if r.Util < cap {
+		return now, cap - r.Util
+	}
+	for t := now; ; {
+		c, at, ok := NextCap(a, session, *r.ResetsAt, t, th)
+		if !ok {
+			return *r.ResetsAt, 100
+		}
+		if r.Util < c {
+			return at, c - r.Util
+		}
+		t = at.Add(time.Nanosecond)
+	}
+}
+
+func later(x, y time.Time) time.Time {
+	if y.After(x) {
+		return y
+	}
+	return x
+}
+
+// order puts the chosen account first, then the accounts that can take work now by reset time,
+// then the held ones by when they reopen (a tie by their room then, in Pro plans): the next
+// account shown, and the pick's fallbacks, never skip an account with room for one at its cap.
 func order(b quota.Bucket, chosen string, cfg config.Config, snaps map[string]Snapshot, now time.Time) []string {
 	if chosen == "" {
 		return nil
@@ -234,14 +297,26 @@ func order(b quota.Bucket, chosen string, cfg config.Config, snaps map[string]Sn
 		}
 	}
 	open := map[string]bool{}
+	reopens := map[string]time.Time{}
+	room := map[string]float64{}
 	for _, a := range rest {
 		s, listed := snaps[a.AuthFile]
 		open[a.AuthFile], _ = Eligibility(a, s, listed, b, now, cfg.Thresholds, false)
+		if !open[a.AuthFile] {
+			reopens[a.AuthFile], room[a.AuthFile] = reopen(a, s, listed, b, now, cfg.Thresholds)
+		}
 	}
 	sort.SliceStable(rest, func(i, j int) bool {
 		x, y := rest[i].AuthFile, rest[j].AuthFile
 		if open[x] != open[y] {
 			return open[x]
+		}
+		// a held account queues by when it can take work again, a tie by the room it has then
+		if !open[x] && !reopens[x].Equal(reopens[y]) {
+			return reopens[x].Before(reopens[y])
+		}
+		if !open[x] && room[x] != room[y] {
+			return room[x] > room[y]
 		}
 		return resetOf(snaps, x, b).Before(resetOf(snaps, y, b))
 	})

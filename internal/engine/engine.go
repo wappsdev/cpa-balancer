@@ -92,7 +92,8 @@ func (e *Engine) recompute(now time.Time) {
 		if acc.NoFable {
 			delete(readings, quota.Fable)
 		}
-		snaps[a.AuthFile] = policy.Snapshot{Readings: readings, Unavailable: e.credentials[a.AuthFile].unavailable, NoFiveHour: acc.NoFiveHour}
+		snaps[a.AuthFile] = policy.Snapshot{Readings: readings, Unavailable: e.credentials[a.AuthFile].unavailable, NoFiveHour: acc.NoFiveHour,
+			Weight: probe.WeightOf(acc.Plan.Name)}
 	}
 	for name, snap := range snaps {
 		for b, r := range snap.Readings {

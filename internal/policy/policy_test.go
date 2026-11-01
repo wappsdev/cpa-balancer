@@ -338,3 +338,35 @@ func TestNextCapIsTheFirstChangeBeforeTheReset(t *testing.T) {
 		t.Fatal("no reserve, no next cap")
 	}
 }
+
+func TestBlockedAccountsQueueByWhenTheyReopen(t *testing.T) {
+	c := testConfig()
+	const E, F = "claude-e.json", "claude-f.json"
+	// E keeps 10% until 3 days before its reset, then 50%; F holds the default reserve
+	c.Accounts = append(c.Accounts,
+		config.Account{AuthFile: E, Reserve: config.ReserveCustom, ReserveSteps: []config.ReserveStep{{Cap: 10, Hours: 72}, {Cap: 50, Hours: 0}}},
+		config.Account{AuthFile: F, Reserve: config.ReserveDefault})
+	snaps := map[string]Snapshot{
+		W: snap(quota.Readings{quota.Main: rd(66, 100)}),
+		// G resets first but is at 98%: it reopens only when the final cap comes, 12 hours before
+		G: {Readings: quota.Readings{quota.Main: rd(98, 40)}, Weight: 10},
+		// E resets later, but its cap steps past its use in 2 hours
+		E: {Readings: quota.Readings{quota.Main: rd(13, 74)}, Weight: 1},
+		// F is as full as G and resets with it, but is a larger plan: at a tie the larger room goes first
+		F: {Readings: quota.Readings{quota.Main: rd(98, 40)}, Weight: 20},
+	}
+	d := Decide(snaps, c, now, nil)
+	if got := strings.Join(d.MainOrder, ","); got != strings.Join([]string{W, E, F, G}, ",") {
+		t.Fatalf("order %v", d.MainOrder)
+	}
+}
+
+func TestAnAccountHeldOnlyByItsFiveHourWindowReopensAtThatReset(t *testing.T) {
+	c := testConfig()
+	// G's week has room under its 85% cap, but its 5 hours are full until 2 hours from now
+	g := Snapshot{Readings: quota.Readings{quota.Main: rd(40, 100), quota.Session: rd(99, 2)}, Weight: 1}
+	at, room := reopen(c.Accounts[1], g, true, quota.Main, now, c.Thresholds)
+	if !at.Equal(now.Add(2*time.Hour)) || room != 45 {
+		t.Fatalf("reopens %v with room %v", at, room)
+	}
+}
