@@ -17,24 +17,25 @@ type NextCap struct {
 }
 
 type AccountView struct {
-	AuthFile     string                   `json:"auth_file"`
-	Name         string                   `json:"name"`                    // the account's label, or a name from its e-mail
-	Reserve      string                   `json:"reserve"`                 // off, default or custom
-	ReserveSteps []config.ReserveStep     `json:"reserve_steps,omitempty"` // a custom reserve's steps
-	SessionSteps []config.ReserveStep     `json:"session_steps,omitempty"` // its own 5-hour steps; absent, the default cap
-	ExtraUsage   bool                     `json:"extra_usage"`
-	Listed       bool                     `json:"listed"`
-	FiveHour     bool                     `json:"five_hour"`        // the plan has a 5-hour limit (true until a probe says otherwise)
-	Fable        bool                     `json:"fable"`            // the plan has a Fable weekly limit (true until a probe says otherwise)
-	Plan         string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
-	Weight       float64                  `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
-	Unavailable  bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
-	Readings     quota.Readings           `json:"readings"`
-	Eligibility  map[quota.Bucket]string  `json:"eligibility"`
-	Caps         map[quota.Bucket]float64 `json:"caps"`                // the switch threshold in force per bucket
-	NextCaps     map[quota.Bucket]NextCap `json:"next_caps,omitempty"` // where the cap changes next before the reset
-	LastAnchor   time.Time                `json:"last_anchor,omitzero"`
-	AnchorModel  string                   `json:"anchor_model,omitempty"`
+	AuthFile     string                     `json:"auth_file"`
+	Name         string                     `json:"name"`                    // the account's label, or a name from its e-mail
+	Reserve      string                     `json:"reserve"`                 // off, default or custom
+	ReserveSteps []config.ReserveStep       `json:"reserve_steps,omitempty"` // a custom reserve's steps
+	SessionSteps []config.ReserveStep       `json:"session_steps,omitempty"` // its own 5-hour steps; absent, the default cap
+	ExtraUsage   bool                       `json:"extra_usage"`
+	Listed       bool                       `json:"listed"`
+	FiveHour     bool                       `json:"five_hour"`        // the plan has a 5-hour limit (true until a probe says otherwise)
+	Fable        bool                       `json:"fable"`            // the plan has a Fable weekly limit (true until a probe says otherwise)
+	Plan         string                     `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
+	Weight       float64                    `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
+	Unavailable  bool                       `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
+	Readings     quota.Readings             `json:"readings"`
+	Eligibility  map[quota.Bucket]string    `json:"eligibility"`
+	Caps         map[quota.Bucket]float64   `json:"caps"`                // the switch threshold in force per bucket
+	NextCaps     map[quota.Bucket]NextCap   `json:"next_caps,omitempty"` // where the cap changes next before the reset
+	Reopens      map[quota.Bucket]time.Time `json:"reopens,omitempty"`   // when a held account takes work again
+	LastAnchor   time.Time                  `json:"last_anchor,omitzero"`
+	AnchorModel  string                     `json:"anchor_model,omitempty"`
 }
 
 type View struct {
@@ -60,7 +61,7 @@ func (e *Engine) Status() View {
 		cred, listed := e.credentials[a.AuthFile]
 		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, SessionSteps: a.SessionSteps, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
-			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}, NextCaps: map[quota.Bucket]NextCap{}}
+			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}, NextCaps: map[quota.Bucket]NextCap{}, Reopens: map[quota.Bucket]time.Time{}}
 		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour
 		av.Fable = !e.st.Account(a.AuthFile).NoFable
 		if av.FiveHour {
@@ -72,8 +73,13 @@ func (e *Engine) Status() View {
 			}
 		}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
-			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)
+			ok, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)
 			av.Eligibility[b] = why
+			if !ok {
+				if at, opens := policy.Reopens(a, snap, true, b, now, e.cfg.Thresholds); opens {
+					av.Reopens[b] = at
+				}
+			}
 			if r, ok := snap.Readings[b]; ok && r.ResetsAt != nil {
 				av.Caps[b] = policy.Cap(a, *r.ResetsAt, now, e.cfg.Thresholds)
 				if c, at, ok := policy.NextCap(a, false, *r.ResetsAt, now, e.cfg.Thresholds); ok {

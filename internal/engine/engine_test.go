@@ -681,3 +681,19 @@ func TestRecheckReadsThePlanAgain(t *testing.T) {
 		t.Fatal("a recheck of W leaves G's plan alone")
 	}
 }
+
+func TestStatusSaysWhenAHeldAccountReopens(t *testing.T) {
+	cfg := testConfig(t)
+	// G keeps 10% until 3 days before its reset, then 50%
+	cfg.Accounts[1] = config.Account{AuthFile: G, Reserve: config.ReserveCustom, ReserveSteps: []config.ReserveStep{{Cap: 10, Hours: 72}, {Cap: 50, Hours: 0}}}
+	e := New(cfg, newHost(), (&clock{t0}).now, nil)
+	e.OnUsage(usage(W, Opus, headers(30, 100, 5, 3, t0)))
+	e.OnUsage(usage(G, Opus, headers(13, 74, 5, 3, t0)))
+	v := e.Status()
+	if at, ok := v.Accounts[1].Reopens[quota.Main]; !ok || !at.Equal(t0.Add(2*time.Hour)) {
+		t.Fatalf("G reopens %+v", v.Accounts[1].Reopens)
+	}
+	if _, ok := v.Accounts[0].Reopens[quota.Main]; ok {
+		t.Fatal("W takes work now: it has nothing to reopen")
+	}
+}

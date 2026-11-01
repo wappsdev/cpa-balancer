@@ -254,6 +254,13 @@ func reopen(a config.Account, s Snapshot, listed bool, b quota.Bucket, now time.
 	return at, room * s.Weight
 }
 
+// Reopens is when a held account can take work again in a bucket; ok is false when it never
+// does on its own (not listed, disabled, no data).
+func Reopens(a config.Account, s Snapshot, listed bool, b quota.Bucket, now time.Time, th config.Thresholds) (time.Time, bool) {
+	at, _ := reopen(a, s, listed, b, now, th)
+	return at, !at.Equal(farFuture)
+}
+
 // windowReopen is when a window's cap first passes its use (now when it already does), with the
 // room under that cap; at the reset the use starts over and the whole window is room.
 func windowReopen(a config.Account, session bool, r quota.Reading, now time.Time, th config.Thresholds) (time.Time, float64) {
