@@ -599,9 +599,9 @@ func TestAnAccountWithoutAFableLimitReportsNone(t *testing.T) {
 
 func TestStatusReportsAnAccountsOwnFiveHourCap(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.Accounts[1].SessionCap = 70
+	cfg.Accounts[1].SessionSteps = []config.ReserveStep{{Cap: 70, Hours: 0}}
 	v := New(cfg, newHost(), (&clock{t0}).now, nil).Status()
-	if v.Accounts[0].Caps[quota.Session] != cfg.Thresholds.SessionCap || v.Accounts[1].Caps[quota.Session] != 70 || v.Accounts[1].SessionCap != 70 {
-		t.Fatalf("caps %v %v, own %v", v.Accounts[0].Caps, v.Accounts[1].Caps, v.Accounts[1].SessionCap)
+	if v.Accounts[0].Caps[quota.Session] != cfg.Thresholds.SessionCap || v.Accounts[1].Caps[quota.Session] != 70 || len(v.Accounts[1].SessionSteps) != 1 {
+		t.Fatalf("caps %v %v, own %v", v.Accounts[0].Caps, v.Accounts[1].Caps, v.Accounts[1].SessionSteps)
 	}
 }

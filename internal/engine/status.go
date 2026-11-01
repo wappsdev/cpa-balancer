@@ -15,7 +15,7 @@ type AccountView struct {
 	Name         string                   `json:"name"`                    // the account's label, or a name from its e-mail
 	Reserve      string                   `json:"reserve"`                 // off, default or custom
 	ReserveSteps []config.ReserveStep     `json:"reserve_steps,omitempty"` // a custom reserve's steps
-	SessionCap   float64                  `json:"session_cap,omitempty"`   // its own 5-hour cap; absent, the default
+	SessionSteps []config.ReserveStep     `json:"session_steps,omitempty"` // its own 5-hour steps; absent, the default cap
 	ExtraUsage   bool                     `json:"extra_usage"`
 	Listed       bool                     `json:"listed"`
 	FiveHour     bool                     `json:"five_hour"`        // the plan has a 5-hour limit (true until a probe says otherwise)
@@ -51,13 +51,13 @@ func (e *Engine) Status() View {
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
-		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, SessionCap: a.SessionCap, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
+		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, SessionSteps: a.SessionSteps, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}}
 		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour
 		av.Fable = !e.st.Account(a.AuthFile).NoFable
 		if av.FiveHour {
-			av.Caps[quota.Session] = policy.SessionCap(a, e.cfg.Thresholds)
+			av.Caps[quota.Session] = policy.SessionCap(a, snap.Readings[quota.Session].ResetsAt, now, e.cfg.Thresholds)
 		}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
 			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)

@@ -21,8 +21,9 @@ type Account struct {
 	// steps) or custom (ReserveSteps, this account's own).
 	Reserve      string        `yaml:"reserve" json:"reserve"` // empty is off
 	ReserveSteps []ReserveStep `yaml:"reserve_steps,omitempty" json:"reserve_steps,omitempty"`
-	// SessionCap is where this account's 5-hour window switches it away; 0 is the thresholds' one.
-	SessionCap float64 `yaml:"session_cap,omitempty" json:"session_cap,omitempty"`
+	// SessionSteps are this account's own 5-hour steps (hours before the 5-hour reset); none means
+	// the thresholds' session_cap all through the window.
+	SessionSteps []ReserveStep `yaml:"session_steps,omitempty" json:"session_steps,omitempty"`
 	// ExtraUsage: the account has extra-usage credits on, so it keeps answering past its plan
 	// limits. It is used only when no account has plan quota left.
 	ExtraUsage bool `yaml:"extra_usage" json:"extra_usage"`
@@ -127,7 +128,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s must be within 0-100, got %v", p.name, p.value)
 		}
 	}
-	if err := validSteps(th.Reserve, th.FinalCap); err != nil {
+	if err := validSteps(th.Reserve, th.FinalCap, 7*24); err != nil {
 		return fmt.Errorf("default reserve: %w", err)
 	}
 	if th.MinDwellMinutes < 0 {
@@ -152,14 +153,16 @@ func (c Config) Validate() error {
 		case a.Reserve != "" && a.Reserve != ReserveOff && a.Reserve != ReserveDefault && a.Reserve != ReserveCustom:
 			return fmt.Errorf("%s: reserve must be off, default or custom, got %q", a.AuthFile, a.Reserve)
 		case a.Reserve == ReserveCustom:
-			if err := validSteps(a.ReserveSteps, th.FinalCap); err != nil {
+			if err := validSteps(a.ReserveSteps, th.FinalCap, 7*24); err != nil {
 				return fmt.Errorf("%s: %w", a.AuthFile, err)
 			}
 		case len(a.ReserveSteps) > 0:
 			return fmt.Errorf("%s: reserve_steps go only with a custom reserve", a.AuthFile)
 		}
-		if a.SessionCap < 0 || a.SessionCap > 100 {
-			return fmt.Errorf("%s: session_cap must be within 0-100, got %v", a.AuthFile, a.SessionCap)
+		if len(a.SessionSteps) > 0 {
+			if err := validSteps(a.SessionSteps, 100, 5); err != nil {
+				return fmt.Errorf("%s: 5-hour limit: %w", a.AuthFile, err)
+			}
 		}
 		if a.Label != "" && !labelPattern.MatchString(a.Label) {
 			return fmt.Errorf("label %q must be one word of up to 20 letters, digits, - or _", a.Label)
@@ -175,19 +178,19 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// validSteps: at least one step, each capping above 0 and at most the final cap, until between 0
-// and 168 hours before the reset, no two at the same hours.
-func validSteps(steps []ReserveStep, finalCap float64) error {
+// validSteps: at least one step, each capping above 0 and at most maxCap, until 0 (the reset
+// itself) to under window hours before the reset, no two at the same hours.
+func validSteps(steps []ReserveStep, maxCap, window float64) error {
 	if len(steps) == 0 {
 		return fmt.Errorf("a reserve needs at least one step")
 	}
 	seen := map[float64]bool{}
 	for _, s := range steps {
 		switch {
-		case s.Cap <= 0 || s.Cap > finalCap:
-			return fmt.Errorf("a step's cap must be above 0 and at most the final cap %v, got %v", finalCap, s.Cap)
-		case s.Hours <= 0 || s.Hours >= 7*24:
-			return fmt.Errorf("a step ends between 0 and 168 hours before the reset, got %v", s.Hours)
+		case s.Cap <= 0 || s.Cap > maxCap:
+			return fmt.Errorf("a step's cap must be above 0 and at most %v, got %v", maxCap, s.Cap)
+		case s.Hours < 0 || s.Hours >= window:
+			return fmt.Errorf("a step ends from 0 to under %v hours before the reset, got %v", window, s.Hours)
 		case seen[s.Hours]:
 			return fmt.Errorf("two steps end %v hours before the reset", s.Hours)
 		}

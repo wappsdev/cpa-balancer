@@ -287,20 +287,24 @@ func TestTheOrderPutsAccountsThatCanTakeWorkFirst(t *testing.T) {
 	}
 }
 
-func TestAnAccountsOwnFiveHourCap(t *testing.T) {
+func TestAnAccountsOwnFiveHourSteps(t *testing.T) {
 	c := testConfig()
-	c.Accounts[0].SessionCap = 70 // W switches away at 70% of its 5-hour window
-	snaps := map[string]Snapshot{
-		W: snap(quota.Readings{quota.Main: rd(10, 20), quota.Session: rd(75, 3)}),
-		G: snap(quota.Readings{quota.Main: rd(10, 100), quota.Session: rd(75, 3)}),
+	// W: 60% until 2 hours before its 5-hour reset, then 90%
+	c.Accounts[0].SessionSteps = []config.ReserveStep{{Cap: 60, Hours: 2}, {Cap: 90, Hours: 0}}
+	early := map[string]Snapshot{W: snap(quota.Readings{quota.Main: rd(10, 20), quota.Session: rd(70, 3)})}
+	if ok, why := Eligibility(c.Accounts[0], early[W], true, quota.Main, now, c.Thresholds, false); ok || !strings.Contains(why, "60") {
+		t.Fatalf("3 h before the reset W is held at 60%%: %v %q", ok, why)
 	}
-	if ok, why := Eligibility(c.Accounts[0], snaps[W], true, quota.Main, now, c.Thresholds, false); ok || !strings.Contains(why, "70") {
-		t.Fatalf("W at 75%% of its 5 hours must be out at its own 70%%: %v %q", ok, why)
+	late := map[string]Snapshot{W: snap(quota.Readings{quota.Main: rd(10, 20), quota.Session: rd(70, 1)})}
+	if ok, _ := Eligibility(c.Accounts[0], late[W], true, quota.Main, now, c.Thresholds, false); !ok {
+		t.Fatal("1 h before the reset W may go to 90%")
 	}
-	if ok, _ := Eligibility(c.Accounts[1], snaps[G], true, quota.Main, now, c.Thresholds, false); !ok {
+	g := snap(quota.Readings{quota.Main: rd(10, 100), quota.Session: rd(75, 3)})
+	if ok, _ := Eligibility(c.Accounts[1], g, true, quota.Main, now, c.Thresholds, false); !ok {
 		t.Fatal("G uses the default 5-hour cap (98) and stays in")
 	}
-	if got := SessionCap(c.Accounts[0], c.Thresholds); got != 70 {
-		t.Fatalf("SessionCap %v", got)
+	// a closed window (no reset time) has the last step's cap
+	if got := SessionCap(c.Accounts[0], nil, now, c.Thresholds); got != 90 {
+		t.Fatalf("closed window cap %v", got)
 	}
 }
