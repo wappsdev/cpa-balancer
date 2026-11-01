@@ -2,7 +2,7 @@
 
 const ROUTES = "/v0/management/plugins/cpa-balancer";
 const CONFIG = ROUTES + "/config"; // CPA's own plugin config API
-const PREFIX = "enc::v1::";
+const PREFIX = "enc::v2::";
 const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#06b6d4", "#8b5cf6"];
 
 const $ = id => document.getElementById(id);
@@ -26,7 +26,8 @@ const when = t => `<span class="when" title="${esc(time(t))}">${esc(rel(t))}</sp
 const num = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
 
 // The Management Center persists its session under "cli-proxy-auth" (the key only with
-// "Remember password"), XOR-obfuscated with this per-browser string.
+// "Remember password"), XOR-obfuscated with a string of its host (format enc::v2::; it removes
+// any older entry itself).
 function managementKey() {
   let raw;
   try { raw = localStorage.getItem("cli-proxy-auth"); } catch { return null; }
@@ -35,7 +36,7 @@ function managementKey() {
     let json = raw;
     if (raw.startsWith(PREFIX)) {
       const data = Uint8Array.from(atob(raw.slice(PREFIX.length)), c => c.charCodeAt(0));
-      const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${location.host}|${navigator.userAgent}`);
+      const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${location.host}`);
       json = new TextDecoder().decode(data.map((b, i) => b ^ key[i % key.length]));
     }
     return JSON.parse(json)?.state?.managementKey || null;
