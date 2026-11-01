@@ -661,3 +661,23 @@ func TestCacheWritesAndReadsReachHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestRecheckReadsThePlanAgain(t *testing.T) {
+	c := &clock{t0}
+	h := newHost()
+	h.profile["tok-w-secret"], h.profile["tok-g-secret"] = max5x, max5x
+	h.probeBody["tok-w-secret"] = usageBody(10, 5)
+	e := New(testConfig(t), h, c.now, nil)
+	e.Tick()
+	// W moves to Max 20x an hour later: a recheck reads it, not the next day's plan read
+	h.profile["tok-w-secret"] = max20x
+	c.t = t0.Add(time.Hour)
+	e.Recheck(W)
+	v := e.Status()
+	if v.Accounts[0].Plan != "max_20x" || v.Accounts[0].Weight != 10 {
+		t.Fatalf("plan %q weight %v", v.Accounts[0].Plan, v.Accounts[0].Weight)
+	}
+	if v.Accounts[1].Plan != "max_5x" {
+		t.Fatal("a recheck of W leaves G's plan alone")
+	}
+}

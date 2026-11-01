@@ -19,8 +19,8 @@ type RecheckResult struct {
 	Error     string  `json:"error,omitempty"`
 }
 
-// Recheck probes every account (or only the one named) now, outside the probe schedule, and
-// re-decides. CPA keeps a credential cooled until its weekly reset even when the window opens
+// Recheck probes every account (or only the one named) now, outside the probe schedule, reads
+// its plan again, and re-decides. CPA keeps a credential cooled until its weekly reset even when the window opens
 // early (a manual reset), and a plugin cannot lift that; the caller lifts it for Locked && Open.
 func (e *Engine) Recheck(only string) []RecheckResult {
 	e.tickMu.Lock()
@@ -40,11 +40,15 @@ func (e *Engine) Recheck(only string) []RecheckResult {
 		switch {
 		case !listed:
 			r.Error = "not listed by CPA"
+			out = append(out, r)
+			continue
 		case now.Before(retryAfter):
 			r.Error = fmt.Sprintf("usage endpoint asked to wait until %s", retryAfter.Format(time.Kitchen))
 		default:
 			e.recheckOne(&r, now)
 		}
+		// a plan bought or changed shows at once, not at the next daily read
+		e.refreshPlan(a.AuthFile, cred.index, now)
 		out = append(out, r)
 	}
 	e.mu.Lock()

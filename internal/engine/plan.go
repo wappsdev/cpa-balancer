@@ -28,18 +28,23 @@ func (e *Engine) checkPlans(now time.Time) {
 	}
 	e.mu.RUnlock()
 	for _, j := range jobs {
-		plan, err := e.readPlan(j.index)
-		e.mu.Lock()
-		acc := e.st.Account(j.name)
-		if err != nil {
-			acc.PlanCheckedAt = now.Add(planRetry - planEvery)
-			e.host.Log("warn", fmt.Sprintf("cpa-balancer: plan of %s: %v", j.name, err))
-		} else {
-			acc.Plan, acc.PlanCheckedAt = plan, now
-		}
-		e.dirty = true
-		e.mu.Unlock()
+		e.refreshPlan(j.name, j.index, now)
 	}
+}
+
+// refreshPlan reads one account's plan now; a failed read is tried again within the hour.
+func (e *Engine) refreshPlan(name, index string, now time.Time) {
+	plan, err := e.readPlan(index)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	acc := e.st.Account(name)
+	if err != nil {
+		acc.PlanCheckedAt = now.Add(planRetry - planEvery)
+		e.host.Log("warn", fmt.Sprintf("cpa-balancer: plan of %s: %v", name, err))
+	} else {
+		acc.Plan, acc.PlanCheckedAt = plan, now
+	}
+	e.dirty = true
 }
 
 func (e *Engine) readPlan(index string) (probe.Plan, error) {
