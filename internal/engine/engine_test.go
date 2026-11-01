@@ -546,3 +546,34 @@ func TestStatusReportsACustomReserve(t *testing.T) {
 		t.Fatalf("reserve %q %v %v", g.Reserve, g.ReserveCap, g.ReserveHours)
 	}
 }
+
+func TestAnAccountWithoutAFiveHourLimitHasNoFiveHourWindowAndNoAnchor(t *testing.T) {
+	c := &clock{t0}
+	h := newHost()
+	// W's plan has no 5-hour limit: its usage has no session entry
+	h.probeBody["tok-w-secret"] = `{"limits":[{"kind":"weekly_all","percent":10,"resets_at":"2026-10-09T00:00:00+00:00"},` +
+		`{"kind":"weekly_scoped","percent":1,"resets_at":"2026-10-09T00:00:00+00:00","scope":{"model":{"display_name":"Fable"}}}]}`
+	h.execResp = pluginapi.HostModelExecutionResponse{StatusCode: 200}
+	e := New(testConfig(t), h, c.now, nil)
+	e.OnUsage(usage(G, Opus, headers(52, 90, 30, 3, t0))) // work goes on on G
+	fableProbe(e, G, 0, 90, t0)
+	e.Tick()
+	w := e.Status().Accounts[0]
+	if w.FiveHour {
+		t.Fatal("W must report no 5-hour limit")
+	}
+	if _, ok := w.Readings[quota.Session]; ok {
+		t.Fatalf("W has no 5-hour window: %+v", w.Readings)
+	}
+	if _, ok := w.Caps[quota.Session]; ok {
+		t.Fatalf("W has no 5-hour cap: %+v", w.Caps)
+	}
+	if !e.Status().Accounts[1].FiveHour {
+		t.Fatal("G has a 5-hour limit")
+	}
+	for _, x := range h.execs {
+		if x.AuthID == W {
+			t.Fatal("an account without a 5-hour limit must not be anchored")
+		}
+	}
+}

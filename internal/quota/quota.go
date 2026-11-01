@@ -83,17 +83,19 @@ func (l usageLimit) bucket() (Bucket, bool) {
 	return "", false
 }
 
-// FromProbe parses GET /api/oauth/usage. A session limit without resets_at is a closed window.
-func FromProbe(body []byte, now time.Time) (Readings, error) {
+// FromProbe parses GET /api/oauth/usage. A session limit without resets_at is a closed window; no
+// session limit at all (fiveHour false) is a plan without a 5-hour limit.
+func FromProbe(body []byte, now time.Time) (readings Readings, fiveHour bool, err error) {
 	var payload struct {
 		Limits []usageLimit `json:"limits"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := Readings{}
 	for _, l := range payload.Limits {
 		b, ok := l.bucket()
+		fiveHour = fiveHour || (ok && b == Session)
 		if !ok || l.Percent == nil {
 			continue
 		}
@@ -110,7 +112,7 @@ func FromProbe(body []byte, now time.Time) (Readings, error) {
 		}
 		out[b] = r
 	}
-	return out, nil
+	return out, fiveHour, nil
 }
 
 // Merge keeps the newest reading per bucket; on equal times the later source wins.
