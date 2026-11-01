@@ -5,6 +5,7 @@ PLUGIN_DIR := $(HOME)/.cli-proxy-api/plugins/darwin/arm64
 test:
 	go vet ./...
 	go test ./...
+	node internal/web/session_test.mjs
 
 build:
 	go build -buildmode=c-shared -o dist/cpa-balancer.dylib ./cmd/cpa-balancer
