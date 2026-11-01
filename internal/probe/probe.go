@@ -64,7 +64,7 @@ func Request(accessToken string) pluginapi.HTTPRequest {
 
 type Result struct {
 	Readings   quota.Readings
-	FiveHour   bool // the plan has a 5-hour limit
+	Limits     map[quota.Bucket]bool // the buckets the plan has a limit for
 	RetryAfter time.Time
 	Err        error
 }
@@ -77,11 +77,11 @@ func Parse(resp pluginapi.HTTPResponse, now time.Time) Result {
 		}
 		return res
 	}
-	readings, fiveHour, err := quota.FromProbe(resp.Body, now)
+	readings, limits, err := quota.FromProbe(resp.Body, now)
 	if err != nil {
 		return Result{Err: fmt.Errorf("decode usage: %w", err)}
 	}
-	return Result{Readings: readings, FiveHour: fiveHour}
+	return Result{Readings: readings, Limits: limits}
 }
 
 // ProfileURL names the account's subscription; its rate-limit tier sets how much quota 1% is.

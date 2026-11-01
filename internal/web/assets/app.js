@@ -124,7 +124,8 @@ const BUCKETS = [["main", "Main"], ["fable", "Fable"], ["session", "5-hour"]];
 
 function accountCard(a, v) {
   const activeIn = [["main", "main"], ["fable", "Fable"]].filter(([b]) => !v.paused && v.decision[b].account === a.auth_file).map(([b, l]) => l + (v.decision[b].credits ? " (credits)" : ""));
-  const rows = BUCKETS.map(([b, label]) => {
+  // a plan without a 5-hour or a Fable limit has no row for it
+  const rows = BUCKETS.filter(([b]) => !(b === "session" && a.five_hour === false) && !(b === "fable" && a.fable === false)).map(([b, label]) => {
     const r = a.readings[b], cap = a.caps?.[b];
     const open = r && r.resets_at;
     const util = open ? r.util : 0;

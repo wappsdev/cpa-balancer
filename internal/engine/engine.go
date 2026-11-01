@@ -89,6 +89,9 @@ func (e *Engine) recompute(now time.Time) {
 			// a reading kept from before the plan lost its 5-hour limit would read as a closed window
 			delete(readings, quota.Session)
 		}
+		if acc.NoFable {
+			delete(readings, quota.Fable)
+		}
 		snaps[a.AuthFile] = policy.Snapshot{Readings: readings, Unavailable: e.credentials[a.AuthFile].unavailable, NoFiveHour: acc.NoFiveHour}
 	}
 	for name, snap := range snaps {
@@ -289,7 +292,7 @@ func (e *Engine) probeDue(now time.Time, onlySwitched map[string]bool) bool {
 			e.host.Log("warn", fmt.Sprintf("cpa-balancer: probe %s failed: %v", j.name, res.Err))
 		} else {
 			acc.Probe = res.Readings
-			acc.NoFiveHour = !res.FiveHour
+			acc.NoFiveHour, acc.NoFable = !res.Limits[quota.Session], !res.Limits[quota.Fable]
 			session, has := res.Readings[quota.Session]
 			if !acc.AnchorMainModel && policy.AnchorDidNotStartWindow(session, has, acc.AnchorReading, acc.LastAnchor) {
 				acc.AnchorMainModel = true

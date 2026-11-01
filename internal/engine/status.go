@@ -18,6 +18,7 @@ type AccountView struct {
 	ExtraUsage   bool                     `json:"extra_usage"`
 	Listed       bool                     `json:"listed"`
 	FiveHour     bool                     `json:"five_hour"`        // the plan has a 5-hour limit (true until a probe says otherwise)
+	Fable        bool                     `json:"fable"`            // the plan has a Fable weekly limit (true until a probe says otherwise)
 	Plan         string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
 	Weight       float64                  `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
 	Unavailable  bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
@@ -53,6 +54,7 @@ func (e *Engine) Status() View {
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}}
 		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour
+		av.Fable = !e.st.Account(a.AuthFile).NoFable
 		if av.FiveHour {
 			av.Caps[quota.Session] = e.cfg.Thresholds.SessionCap
 		}

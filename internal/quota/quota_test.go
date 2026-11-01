@@ -53,15 +53,15 @@ const probeBody = `{"limits":[
  {"kind":"weekly_scoped","percent":40,"resets_at":"2026-10-09T00:59:59+00:00","scope":{"model":{"display_name":"Other"}}}]}`
 
 func TestFromProbe(t *testing.T) {
-	out, fiveHour, err := FromProbe([]byte(probeBody), now)
-	if err != nil || !fiveHour {
-		t.Fatal(err, fiveHour)
+	out, limits, err := FromProbe([]byte(probeBody), now)
+	if err != nil || !limits[Session] || !limits[Fable] || !limits[Main] {
+		t.Fatal(err, limits)
 	}
 	if len(out) != 3 || out[Main].Util != 58 || out[Fable].Util != 1 || out[Session].Util != 8 || out[Main].Source != "probe" {
 		t.Fatalf("%+v", out)
 	}
-	closed, fiveHour, _ := FromProbe([]byte(`{"limits":[{"kind":"session","percent":0,"resets_at":null}]}`), now)
-	if !fiveHour {
+	closed, limits, _ := FromProbe([]byte(`{"limits":[{"kind":"session","percent":0,"resets_at":null}]}`), now)
+	if !limits[Session] {
 		t.Fatal("a closed 5-hour window is still a 5-hour limit")
 	}
 	if r, ok := closed[Session]; !ok || r.ResetsAt != nil || r.Running(now) {
@@ -106,9 +106,10 @@ func TestRollForward(t *testing.T) {
 
 func TestFromProbeWithoutAFiveHourLimit(t *testing.T) {
 	// some plans have no 5-hour limit: the usage endpoint sends no session entry at all
-	out, fiveHour, err := FromProbe([]byte(`{"limits":[{"kind":"weekly_all","percent":66,"resets_at":"2026-11-06T00:59:59Z"}]}`), now)
-	if err != nil || fiveHour {
-		t.Fatalf("fiveHour %v, err %v", fiveHour, err)
+	// nor a Fable entry on a plan without Fable's own weekly limit
+	out, limits, err := FromProbe([]byte(`{"limits":[{"kind":"weekly_all","percent":66,"resets_at":"2026-11-06T00:59:59Z"}]}`), now)
+	if err != nil || limits[Session] || limits[Fable] || !limits[Main] {
+		t.Fatalf("limits %v, err %v", limits, err)
 	}
 	if _, ok := out[Session]; ok || out[Main].Util != 66 {
 		t.Fatalf("%+v", out)
