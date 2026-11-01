@@ -13,15 +13,15 @@ function reserveText(a) {
   if (a.reserve === "custom") return stepsText(a.reserve_steps || []);
   return "no reserve";
 }
-// "50% until 5 d, 70% until 2 d before reset", the earliest step first.
-const stepsText = steps => [...steps].sort((x, y) => y.hours - x.hours).map(s => `${s.cap}% until ${hoursText(s.hours)}`).join(", ") + " before reset";
-const hoursText = h => (h % 24 === 0 ? `${h / 24} d` : `${h} h`);
+const emailOf = f => (f || "").replace(/^claude-[0-9a-f]+-/, "").replace(/\.json$/, "");
 
 // Each account's name as the balancer reports it (its label, or one from its e-mail): the same
 // name the HUD and its commands use. An account the status does not list yet shows its e-mail.
 let names = {};
 // Accounts whose plan has no 5-hour limit get no 5-hour setting (from the status; unknown: shown).
 let noFiveHour = new Set();
+let plans = {};
+const planOf = f => ({ max_20x: "Ultra", max_5x: "Max", pro: "Pro" }[plans[f]] || "");
 const hasFiveHour = f => !noFiveHour.has(f);
 const short = f => names[f] || (f || "—").replace(/^claude-[0-9a-f]+-/, "").replace(/\.json$/, "");
 const time = t => t ? new Date(t).toLocaleString() : "—";
@@ -92,6 +92,7 @@ function renderStatus(v) {
   view = v;
   names = Object.fromEntries((v.accounts || []).map(a => [a.auth_file, a.name]));
   noFiveHour = new Set((v.accounts || []).filter(a => a.five_hour === false).map(a => a.auth_file));
+  plans = Object.fromEntries((v.accounts || []).map(a => [a.auth_file, a.plan]));
   $("meta").textContent = `${v.paused ? "Paused" : v.mode === "shadow" ? "Shadow mode — deciding, not applying" : "Balancing"} · updated ${rel(v.generated_at)}`;
   $("live-dot").className = "dot " + (v.paused ? "paused" : "on");
   const pause = $("pause");
@@ -468,11 +469,11 @@ async function loadSettings() {
 }
 
 function fillForm(c) {
-  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: a.reserve || "off", reserve_steps: (a.reserve_steps || [{ cap: 50, hours: 48 }]).map(s => ({ ...s })), session_cap: a.session_cap || 0, extra_usage: !!a.extra_usage, label: a.label || "" }));
-  defaultSteps = (c.thresholds?.reserve || []).map(s => ({ ...s }));
+  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: a.reserve || "off", reserve_steps: (a.reserve_steps || []).map(s => ({ ...s })), session_steps: (a.session_steps || []).map(s => ({ ...s })), extra_usage: !!a.extra_usage, label: a.label || "" }));
+  defaultSteps = (c.thresholds?.reserve || []).map(s => ({ ...s })).sort((x, y) => y.hours - x.hours);
+  for (const el of document.querySelectorAll("[data-threshold]")) el.value = c.thresholds?.[el.dataset.threshold] ?? "";
   renderAccounts();
   renderDefaultSteps();
-  for (const el of document.querySelectorAll("[data-threshold]")) el.value = c.thresholds?.[el.dataset.threshold] ?? "";
   for (const b of Object.keys(buckets)) { buckets[b] = [...(c.buckets?.[b] || [])]; renderChips(b); }
   for (const el of document.querySelectorAll("[data-anchor]")) {
     const v = c.anchor?.[el.dataset.anchor];
@@ -520,7 +521,7 @@ for (const sw of document.querySelectorAll("#settings .switch")) {
 function renderRuler() {
   const value = k => Number(document.querySelector(`[data-threshold="${k}"]`).value);
   const marks = [
-    ...defaultSteps.map((st, k) => [st.cap, `${hoursText(st.hours)}`, k % 2 ? "down" : "up", false]),
+    ...defaultSteps.map((st, k) => [st.cap, `${timeText("week", st.hours)}`, k % 2 ? "down" : "up", false]),
     [value("final_cap"), "final", "up", false], [value("session_cap"), "5-hour", "down", true],
   ];
   $("ruler").innerHTML = '<div class="track"></div>' + marks.map(([v, label, side, session]) => {
@@ -530,82 +531,150 @@ function renderRuler() {
 }
 for (const el of document.querySelectorAll("[data-threshold]")) el.addEventListener("input", renderRuler);
 
-// ---------- reserve steps: the default ones under Thresholds, and each custom account's own ----------
+// ---------- limits: steps over a window, edited the same way for the week and the 5 hours ----------
 
-let defaultSteps = [];
-const stepsOf = scope => (scope === "default" ? defaultSteps : accounts[+scope].reserve_steps);
+// A window: its length in hours, its time units, and how a time before its reset reads.
+const WINDOWS = {
+  week: { hours: 168, units: [["d", 24, "days"], ["h", 1, "hours"]] },
+  five: { hours: 5, units: [["h", 1, "hours"], ["m", 1 / 60, "minutes"]] },
+};
+const unitOf = (window, hours) => (window === "week" ? (hours > 0 && hours % 24 === 0 ? "d" : "h") : (Number.isInteger(hours) ? "h" : "m"));
+const timeText = (window, hours) => {
+  if (hours === 0) return "the reset";
+  const u = unitOf(window, hours);
+  return u === "d" ? `${hours / 24} d` : u === "m" ? `${Math.round(hours * 60)} m` : `${hours} h`;
+};
+// "50% until 5 d, 70% until 2 d before reset", "60% to the reset": the earliest step first.
+const stepsText = (steps, window = "week") => {
+  const sorted = [...steps].sort((x, y) => y.hours - x.hours);
+  const before = sorted.filter(s => s.hours > 0).map(s => `${s.cap}% until ${timeText(window, s.hours)}`).join(", ");
+  const atReset = sorted.find(s => s.hours === 0);
+  return [before && `${before} before reset`, atReset && `${atReset.cap}% to the reset`].filter(Boolean).join(", then ");
+};
 
-function stepsHtml(steps, scope) {
-  return steps.map((s, k) => {
-    const days = s.hours % 24 === 0;
-    return `<div class="step" data-scope="${scope}" data-step="${k}">
-      use up to <span class="input-unit small"><input type="number" min="1" max="100" step="any" data-field="cap" value="${s.cap}" aria-label="Cap"><em>%</em></span>
-      until <input class="text small-number" type="number" min="1" step="any" data-field="time" value="${days ? s.hours / 24 : s.hours}" aria-label="Time before the reset">
-      <select class="select small" data-field="unit" aria-label="Unit"><option value="24"${days ? " selected" : ""}>days</option><option value="1"${days ? "" : " selected"}>hours</option></select>
-      before the reset
-      ${steps.length > 1 ? `<button type="button" class="icon-button" data-step-remove aria-label="Remove this step"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>` : ""}
-    </div>`;
-  }).join("") + `<button type="button" class="link-button" data-step-add="${scope}">+ Add step</button>`;
+// The window as a bar from its start to its reset: each step's cap over the time it is in force,
+// then `last` (the final cap, or the default 5-hour cap) after the last step.
+function timelineHtml(steps, window, last) {
+  const total = WINDOWS[window].hours;
+  const sorted = [...steps].filter(s => s.hours >= 0 && s.hours < total).sort((x, y) => y.hours - x.hours);
+  const parts = [];
+  let from = 0;
+  for (const s of sorted) {
+    const to = total - s.hours;
+    if (to > from) parts.push({ from, to, cap: s.cap });
+    from = Math.max(from, to);
+  }
+  if (from < total) parts.push({ from, to: total, cap: last });
+  const tone = cap => (cap >= 100 ? "full" : cap >= 75 ? "high" : cap >= 40 ? "mid" : "low");
+  return `<div class="timeline" aria-hidden="true">
+    <div class="bar">${parts.map(p => `<div class="seg ${tone(p.cap)}" style="flex: ${p.to - p.from}" title="${p.cap}%">${p.to - p.from >= total / 14 ? `${p.cap}%` : ""}</div>`).join("")}</div>
+    <div class="axis"><span style="left: 0">start</span>${axisLabels(sorted, window, total)}<span class="end" style="left: 100%">reset</span></div>
+  </div>`;
 }
 
+// The times of the steps under the bar, each left out where it would crowd its neighbour or the end.
+function axisLabels(sorted, window, total) {
+  const out = [];
+  let last = 0;
+  for (const s of sorted.filter(s => s.hours > 0)) {
+    const at = ((total - s.hours) / total) * 100;
+    if (at - last < 7 || 100 - at < 7) continue;
+    out.push(`<span style="left: ${at}%">${timeText(window, s.hours)}</span>`);
+    last = at;
+  }
+  return out.join("");
+}
+
+// One step list: "Until [n] [unit] before the reset → use up to [x]%". `scope` names the list.
+function stepsHtml(steps, scope, window) {
+  return steps.map((s, k) => {
+    const unit = unitOf(window, s.hours), factor = WINDOWS[window].units.find(([u]) => u === unit)[1];
+    return `<div class="step" data-scope="${scope}" data-window="${window}" data-step="${k}">
+      Until <input class="text small-number" type="number" min="0" step="any" data-field="time" value="${Math.round((s.hours / factor) * 100) / 100}" aria-label="Time before the reset">
+      <select class="select small" data-field="unit" aria-label="Unit">${WINDOWS[window].units.map(([u, , l]) => `<option value="${u}"${u === unit ? " selected" : ""}>${l}</option>`).join("")}</select>
+      before the reset <span class="arrow">→</span> use up to
+      <span class="input-unit small"><input type="number" min="1" max="100" step="any" data-field="cap" value="${s.cap}" aria-label="Cap"><em>%</em></span>
+      ${steps.length > 1 ? `<button type="button" class="icon-button" data-step-remove aria-label="Remove this step"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>` : ""}
+    </div>`;
+  }).join("") + `<button type="button" class="link-button" data-step-add="${scope}" data-window="${window}">+ Add step</button>`;
+}
+
+let defaultSteps = [];
+let draft = null; // the account being edited, a copy until Done
+const stepsOf = scope => (scope === "default" ? defaultSteps : scope === "week" ? draft.reserve_steps : draft.session_steps);
+const finalCap = () => Number(document.querySelector('[data-threshold="final_cap"]').value) || 100;
+const sessionCap = () => Number(document.querySelector('[data-threshold="session_cap"]').value) || 100;
+
 function renderDefaultSteps() {
-  $("default-steps").innerHTML = stepsHtml(defaultSteps, "default");
+  $("default-steps").innerHTML = timelineHtml(defaultSteps, "week", finalCap()) + stepsHtml(defaultSteps, "default", "week");
   renderRuler();
 }
 
-const rerender = scope => (scope === "default" ? renderDefaultSteps() : renderAccounts());
+// Edits change the steps in place; only the timeline is redrawn, so the focus stays in its field.
+function stepInput(e) {
+  const row = e.target.closest(".step");
+  if (!row) return false;
+  const step = stepsOf(row.dataset.scope)[+row.dataset.step];
+  const factor = WINDOWS[row.dataset.window].units.find(([u]) => u === row.querySelector('[data-field="unit"]').value)[1];
+  step.cap = Number(row.querySelector('[data-field="cap"]').value);
+  step.hours = Number(row.querySelector('[data-field="time"]').value) * factor;
+  const box = row.closest(".limit-steps");
+  box.querySelector(".timeline").outerHTML = timelineHtml(stepsOf(row.dataset.scope), row.dataset.window, row.dataset.window === "week" ? finalCap() : sessionCap());
+  if (row.dataset.scope === "default") renderRuler();
+  return true;
+}
 
-// One handler for every step editor: edits change the steps in place (no redraw, so focus stays).
-for (const box of [$("default-steps"), $("account-list")]) {
-  box.addEventListener("input", e => {
-    const row = e.target.closest(".step");
-    if (!row) return;
-    const step = stepsOf(row.dataset.scope)[+row.dataset.step];
-    step.cap = Number(row.querySelector('[data-field="cap"]').value);
-    step.hours = Number(row.querySelector('[data-field="time"]').value) * Number(row.querySelector('[data-field="unit"]').value);
-    if (row.dataset.scope === "default") renderRuler();
-  });
-  box.addEventListener("change", e => {
-    if (e.target.matches('[data-field="unit"]')) e.target.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  box.addEventListener("click", e => {
-    const add = e.target.closest("[data-step-add]"), remove = e.target.closest("[data-step-remove]");
-    if (add) {
-      const steps = stepsOf(add.dataset.stepAdd), last = steps[steps.length - 1];
-      // the next step ends a day earlier and caps a little higher, a sensible start to edit
-      steps.push({ cap: Math.min(100, (last?.cap ?? 80) + 5), hours: Math.max(1, (last?.hours ?? 48) - 24) });
-      rerender(add.dataset.stepAdd);
-    } else if (remove) {
-      const row = remove.closest(".step");
-      stepsOf(row.dataset.scope).splice(+row.dataset.step, 1);
-      rerender(row.dataset.scope);
-    }
-  });
+function stepClick(e) {
+  const add = e.target.closest("[data-step-add]"), remove = e.target.closest("[data-step-remove]");
+  if (add) {
+    const steps = stepsOf(add.dataset.stepAdd), window = WINDOWS[add.dataset.window];
+    // the new step takes the first free whole day (or hour) before the reset, the cap of the step
+    // in force there: a start to edit
+    const back = add.dataset.window === "week" ? 24 : 1;
+    let hours = 0;
+    while (steps.some(s => s.hours === hours) && hours + back < window.hours) hours += back;
+    if (steps.some(s => s.hours === hours)) return true;
+    const later = [...steps].filter(s => s.hours < hours).sort((x, y) => y.hours - x.hours)[0];
+    steps.push({ cap: later?.cap ?? (add.dataset.window === "week" ? finalCap() : sessionCap()), hours });
+  } else if (remove) {
+    const row = remove.closest(".step");
+    stepsOf(row.dataset.scope).splice(+row.dataset.step, 1);
+  } else return false;
+  // shown earliest first, so the list reads in the same order as the timeline
+  for (const scope of ["default", ...(draft ? ["week", "five"] : [])]) stepsOf(scope).sort((x, y) => y.hours - x.hours);
+  const scope = (add || remove.closest(".step")).dataset.stepAdd ?? remove.closest(".step").dataset.scope;
+  if (scope === "default") renderDefaultSteps(); else renderEditor();
+  return true;
+}
+
+$("default-steps").addEventListener("input", stepInput);
+$("default-steps").addEventListener("change", e => { if (e.target.matches('[data-field="unit"]')) stepInput(e); });
+$("default-steps").addEventListener("click", stepClick);
+
+// ---------- accounts: one summary line each; Edit opens the account in a dialog ----------
+
+function weeklySummary(a) {
+  if (a.reserve === "off") return "no limit";
+  if (a.reserve === "default") return "default";
+  const caps = a.reserve_steps.map(s => s.cap);
+  return a.reserve_steps.length === 1 ? stepsText(a.reserve_steps) : `${a.reserve_steps.length} steps, ${Math.min(...caps)}–${Math.max(...caps)}%`;
+}
+function fiveSummary(a) {
+  if (!hasFiveHour(a.auth_file)) return "—";
+  if (!a.session_steps.length) return "default";
+  const caps = a.session_steps.map(s => s.cap);
+  return a.session_steps.length === 1 ? stepsText(a.session_steps, "five") : `${a.session_steps.length} steps, ${Math.min(...caps)}–${Math.max(...caps)}%`;
 }
 
 function renderAccounts() {
   $("account-list").innerHTML = accounts.map((a, i) => `<li>
-    <div class="row">
-      <div class="who"><strong>${esc(short(a.auth_file))}</strong><span>${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
-      <input class="text label-input" data-label="${i}" value="${esc(a.label)}" placeholder="name" maxlength="20" aria-label="Name for ${esc(short(a.auth_file))}" title="The name the Management Center, the HUD and its commands use; empty takes one from the e-mail">
-      <div class="reserve"><button type="button" role="switch" class="switch" data-extra="${i}" aria-checked="${a.extra_usage}" aria-label="Extra usage credits are on"><span class="knob"></span></button>Extra usage</div>
-      <button type="button" class="icon-button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
-    </div>
-    <div class="row reserve-field">
-      <span class="field-name">Reserve</span>
-      <div class="segmented" role="group" aria-label="Reserve for ${esc(short(a.auth_file))}">${["off", "default", "custom"].map(r =>
-        `<button type="button" data-reserve="${i}" data-value="${r}" aria-pressed="${a.reserve === r}">${r[0].toUpperCase() + r.slice(1)}</button>`).join("")}</div>
-      ${a.reserve === "custom" ? `<div class="steps">${stepsHtml(a.reserve_steps, i)}</div>` : ""}
-    </div>
-    ${hasFiveHour(a.auth_file) ? `<div class="row reserve-field">
-      <span class="field-name">5-hour</span>
-      <div class="segmented" role="group" aria-label="5-hour cap for ${esc(short(a.auth_file))}">${[["default", "Default"], ["custom", "Custom"]].map(([k, l]) =>
-        `<button type="button" data-session="${i}" data-value="${k}" aria-pressed="${(a.session_cap > 0) === (k === "custom")}">${l}</button>`).join("")}</div>
-      ${a.session_cap > 0
-        ? `<span class="step">switch away at <span class="input-unit small"><input type="number" min="1" max="100" step="any" data-session-cap="${i}" value="${a.session_cap}" aria-label="5-hour cap"><em>%</em></span> of the 5-hour window</span>`
-        : `<span class="step">switch away at the 5-hour cap under Thresholds</span>`}
-    </div>` : ""}</li>`).join("");
+    <div class="who"><strong>${esc(a.label || short(a.auth_file))}</strong><span>${esc(emailOf(a.auth_file))}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
+    <span class="plan">${esc(planOf(a.auth_file))}</span>
+    <span class="sum"><em>Weekly</em> ${esc(weeklySummary(a))}</span>
+    <span class="sum"><em>5-hour</em> ${esc(fiveSummary(a))}</span>
+    ${a.extra_usage ? '<span class="chip">extra usage</span>' : ""}
+    <button type="button" class="button" data-edit="${i}">Edit</button>
+  </li>`).join("");
   const free = credentials.filter(c => !accounts.some(a => a.auth_file === c.auth_file));
   $("account-add").innerHTML = free.length
     ? free.map(c => `<option value="${esc(c.auth_file)}">${esc(c.email || short(c.auth_file))}${c.disabled ? " (disabled)" : ""}</option>`).join("")
@@ -613,33 +682,86 @@ function renderAccounts() {
   $("account-add-button").disabled = !free.length;
 }
 
-$("account-list").addEventListener("click", e => {
-  const reserve = e.target.closest("[data-reserve]"), extra = e.target.closest("[data-extra]"), remove = e.target.closest("[data-remove]");
-  if (extra) {
-    const a = accounts[+extra.dataset.extra];
-    a.extra_usage = !a.extra_usage;
-    extra.setAttribute("aria-checked", String(a.extra_usage));
-  } else if (reserve) {
-    accounts[+reserve.dataset.reserve].reserve = reserve.dataset.value;
-    renderAccounts();
-  } else if (e.target.closest("[data-session]")) {
-    const b = e.target.closest("[data-session]"), a = accounts[+b.dataset.session];
-    a.session_cap = b.dataset.value === "custom" ? (a.session_cap || 70) : 0;
-    renderAccounts();
-  } else if (remove) {
-    accounts.splice(+remove.dataset.remove, 1);
-    renderAccounts();
-  }
+function openEditor(i) {
+  draft = { index: i, ...structuredClone(accounts[i]) };
+  for (const steps of [draft.reserve_steps, draft.session_steps]) steps.sort((x, y) => y.hours - x.hours);
+  renderEditor();
+  $("account-editor").showModal();
+}
+
+function renderEditor() {
+  const a = draft, five = hasFiveHour(a.auth_file);
+  $("editor-body").innerHTML = `
+    <header class="editor-head">
+      <div><strong>${esc(a.label || short(a.auth_file))}</strong><span>${esc(emailOf(a.auth_file))}</span></div>
+      <span class="plan">${esc(planOf(a.auth_file))}</span>
+    </header>
+    <div class="editor-row">
+      <label class="field"><span>Name</span><input class="text" data-draft="label" value="${esc(a.label)}" placeholder="${esc(short(a.auth_file))}" maxlength="20"
+        title="The name the Management Center, the HUD and its commands use; empty takes one from the e-mail"></label>
+      <div class="reserve"><button type="button" role="switch" class="switch" data-draft="extra_usage" aria-checked="${a.extra_usage}" aria-label="Extra usage credits are on"><span class="knob"></span></button>Extra usage</div>
+    </div>
+    <section class="limit">
+      <div class="limit-head"><h3>Weekly limit</h3>
+        <div class="segmented" role="group" aria-label="Weekly limit">${[["off", "No limit"], ["default", "Default"], ["custom", "Custom"]].map(([k, l]) =>
+          `<button type="button" data-weekly="${k}" aria-pressed="${a.reserve === k}">${l}</button>`).join("")}</div></div>
+      ${a.reserve === "off" ? `<p class="hint">Used up to the final cap (${finalCap()}%).</p>`
+        : a.reserve === "default" ? `<div class="limit-steps">${timelineHtml(defaultSteps, "week", finalCap())}</div><p class="hint">The default steps, set under Thresholds.</p>`
+        : `<div class="limit-steps">${timelineHtml(a.reserve_steps, "week", finalCap())}${stepsHtml(a.reserve_steps, "week", "week")}</div>`}
+    </section>
+    ${five ? `<section class="limit">
+      <div class="limit-head"><h3>5-hour limit</h3>
+        <div class="segmented" role="group" aria-label="5-hour limit">${[["default", "Default"], ["custom", "Custom"]].map(([k, l]) =>
+          `<button type="button" data-five="${k}" aria-pressed="${(a.session_steps.length > 0) === (k === "custom")}">${l}</button>`).join("")}</div></div>
+      ${a.session_steps.length
+        ? `<div class="limit-steps">${timelineHtml(a.session_steps, "five", sessionCap())}${stepsHtml(a.session_steps, "five", "five")}</div>`
+        : `<p class="hint">Switches away at the 5-hour cap under Thresholds (${sessionCap()}%).</p>`}
+    </section>` : '<p class="hint">This plan has no 5-hour limit.</p>'}`;
+}
+
+$("editor-body").addEventListener("input", e => {
+  if (stepInput(e)) return;
+  if (e.target.matches('[data-draft="label"]')) draft.label = e.target.value.trim();
 });
-$("account-list").addEventListener("input", e => {
-  const field = e.target.closest("[data-label]");
-  if (field) accounts[+field.dataset.label].label = field.value.trim();
-  const session = e.target.closest("[data-session-cap]");
-  if (session) accounts[+session.dataset.sessionCap].session_cap = Number(session.value);
+$("editor-body").addEventListener("change", e => { if (e.target.matches('[data-field="unit"]')) stepInput(e); });
+$("editor-body").addEventListener("click", e => {
+  if (stepClick(e)) return;
+  const weekly = e.target.closest("[data-weekly]"), five = e.target.closest("[data-five]"), extra = e.target.closest('[data-draft="extra_usage"]');
+  if (weekly) {
+    draft.reserve = weekly.dataset.weekly;
+    if (draft.reserve === "custom" && !draft.reserve_steps.length) draft.reserve_steps = defaultSteps.map(s => ({ ...s }));
+  } else if (five) {
+    draft.session_steps = five.dataset.five === "custom" ? (draft.session_steps.length ? draft.session_steps : [{ cap: 60, hours: 0 }]) : [];
+  } else if (extra) {
+    draft.extra_usage = !draft.extra_usage;
+  } else return;
+  renderEditor();
+});
+$("editor-done").addEventListener("click", () => {
+  const { index, ...a } = draft;
+  accounts[index] = a;
+  draft = null;
+  $("account-editor").close();
+  renderAccounts();
+});
+$("editor-cancel").addEventListener("click", () => { draft = null; $("account-editor").close(); });
+$("editor-remove").addEventListener("click", () => {
+  accounts.splice(draft.index, 1);
+  draft = null;
+  $("account-editor").close();
+  renderAccounts();
+});
+
+$("account-list").addEventListener("click", e => {
+  const edit = e.target.closest("[data-edit]");
+  if (edit) openEditor(+edit.dataset.edit);
 });
 $("account-add-button").addEventListener("click", () => {
   const f = $("account-add").value;
-  if (f) { accounts.push({ auth_file: f, reserve: "off", reserve_steps: [{ cap: 50, hours: 48 }], extra_usage: false, label: "" }); renderAccounts(); }
+  if (!f) return;
+  accounts.push({ auth_file: f, reserve: "off", reserve_steps: [], session_steps: [], extra_usage: false, label: "" });
+  renderAccounts();
+  openEditor(accounts.length - 1);
 });
 
 function collect() {
@@ -652,11 +774,12 @@ function collect() {
     if (el.getAttribute("role") === "switch") anchor[el.dataset.anchor] = el.getAttribute("aria-checked") === "true";
     else if (el.value.trim()) anchor[el.dataset.anchor] = el.value.trim();
   }
-  // An empty label is left out: the balancer then takes a name from the e-mail.
   thresholds.reserve = defaultSteps.map(s => ({ ...s }));
-  // An empty label is left out (the balancer then takes a name from the e-mail); steps go only
-  // with a custom reserve.
-  return { accounts: accounts.map(({ label, reserve_steps, session_cap, ...a }) => ({ ...a, ...(label ? { label } : {}), ...(session_cap > 0 ? { session_cap } : {}), ...(a.reserve === "custom" ? { reserve_steps: reserve_steps.map(s => ({ ...s })) } : {}) })), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
+  // An empty label is left out (the balancer then takes a name from the e-mail); weekly steps go
+  // only with a custom limit, 5-hour steps only when there are any.
+  const copy = steps => steps.map(s => ({ ...s }));
+  return { accounts: accounts.map(({ label, reserve_steps, session_steps, ...a }) => ({ ...a, ...(label ? { label } : {}),
+    ...(a.reserve === "custom" ? { reserve_steps: copy(reserve_steps) } : {}), ...(session_steps.length ? { session_steps: copy(session_steps) } : {}) })), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
 }
 
 // The same rules as config.Validate; the plugin checks them again.
@@ -671,17 +794,17 @@ function validate(c) {
   for (const a of c.accounts) if (a.label && !/^[\p{L}\p{N}_-]{1,20}$/u.test(a.label)) errors.push(`name "${a.label}" must be one word of up to 20 letters, digits, - or _`);
   const final = t.final_cap ?? 100;
   // The same rules as config.validSteps.
-  const checkSteps = (steps, who) => {
-    if (!steps.length) errors.push(`${who}: a reserve needs at least one step`);
+  const checkSteps = (steps, who, max, window, span) => {
+    if (!steps.length) errors.push(`${who}: a limit needs at least one step`);
     for (const st of steps) {
-      if (!(st.cap > 0 && st.cap <= final)) errors.push(`${who}: a step's cap must be above 0 and at most the final cap (${final}%)`);
-      if (!(st.hours > 0 && st.hours < 168)) errors.push(`${who}: a step must end between 0 and 7 days before the reset`);
+      if (!(st.cap > 0 && st.cap <= max)) errors.push(`${who}: a step's cap must be above 0 and at most ${max}%`);
+      if (!(st.hours >= 0 && st.hours < window)) errors.push(`${who}: a step must end from 0 to under ${span} before the reset`);
     }
     if (new Set(steps.map(st => st.hours)).size !== steps.length) errors.push(`${who}: two steps end at the same time`);
   };
-  checkSteps(t.reserve || [], "default reserve");
-  for (const a of c.accounts) if ("session_cap" in a && !(a.session_cap > 0 && a.session_cap <= 100)) errors.push(`${short(a.auth_file)}: the 5-hour cap must be above 0 and at most 100%`);
-  for (const a of c.accounts.filter(a => a.reserve === "custom")) checkSteps(a.reserve_steps, short(a.auth_file));
+  checkSteps(t.reserve || [], "default weekly limit", final, 168, "7 days");
+  for (const a of c.accounts.filter(a => a.reserve === "custom")) checkSteps(a.reserve_steps, `${short(a.auth_file)} weekly`, final, 168, "7 days");
+  for (const a of c.accounts.filter(a => a.session_steps)) checkSteps(a.session_steps, `${short(a.auth_file)} 5-hour`, 100, 5, "5 hours");
   const labels = c.accounts.map(a => (a.label || "").toLowerCase()).filter(Boolean);
   if (new Set(labels).size !== labels.length) errors.push("two accounts have the same name");
   if (!c.buckets.main.length) errors.push("the main bucket needs at least one model");
@@ -700,15 +823,15 @@ function changes(before, after) {
   const lines = [], changed = [];
   for (const k of SECTIONS) {
     if (k === "accounts") {
-      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: reserveText(a), five: a.session_cap || 0, extra: !!a.extra_usage, label: a.label || "" }]));
-      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: reserveText(a), five: a.session_cap || 0, extra: !!a.extra_usage, label: a.label || "" }]));
+      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: reserveText(a), five: a.session_steps?.length ? stepsText(a.session_steps, "five") : "default", extra: !!a.extra_usage, label: a.label || "" }]));
+      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: reserveText(a), five: a.session_steps?.length ? stepsText(a.session_steps, "five") : "default", extra: !!a.extra_usage, label: a.label || "" }]));
       const order = (before.accounts || []).map(a => a.auth_file).join() !== after.accounts.map(a => a.auth_file).join();
       for (const f of Object.keys(now)) {
         if (!(f in was)) lines.push(`add account ${short(f)} (${now[f].reserve})${now[f].extra ? " (extra usage)" : ""}`);
         else {
           if (was[f].reserve !== now[f].reserve) lines.push(`${short(f)}: ${now[f].reserve}`);
           if (was[f].extra !== now[f].extra) lines.push(`${short(f)}: extra usage ${now[f].extra ? "on" : "off"}`);
-          if (was[f].five !== now[f].five) lines.push(`${short(f)}: 5-hour cap ${now[f].five ? `${now[f].five}%` : "default"}`);
+          if (was[f].five !== now[f].five) lines.push(`${short(f)}: 5-hour ${now[f].five}`);
           if (was[f].label !== now[f].label) lines.push(`${short(f)}: name ${now[f].label ? `"${now[f].label}"` : "from the e-mail"}`);
         }
       }

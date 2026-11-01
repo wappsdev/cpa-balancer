@@ -160,12 +160,21 @@ func TestReserveSettings(t *testing.T) {
 	}
 }
 
-func TestFiveHourCapPerAccount(t *testing.T) {
-	c, err := Parse([]byte("accounts: [{auth_file: a.json, session_cap: 70}]\nbuckets: {main: [m]}\n"))
-	if err != nil || c.Accounts[0].SessionCap != 70 {
+func TestFiveHourStepsPerAccount(t *testing.T) {
+	c, err := Parse([]byte("accounts: [{auth_file: a.json, session_steps: [{cap: 60, hours: 2}, {cap: 90, hours: 0}]}]\nbuckets: {main: [m]}\n"))
+	if err != nil || len(c.Accounts[0].SessionSteps) != 2 || c.Accounts[0].SessionSteps[1] != (ReserveStep{Cap: 90, Hours: 0}) {
 		t.Fatalf("%+v %v", c.Accounts, err)
 	}
-	if _, err := Parse([]byte("accounts: [{auth_file: a.json, session_cap: 120}]\nbuckets: {main: [m]}\n")); err == nil {
-		t.Fatal("a 5-hour cap above 100 must be refused")
+	for _, bad := range []string{
+		"[{cap: 60, hours: 5}]",  // a 5-hour window has no step 5 hours before its reset
+		"[{cap: 120, hours: 1}]", // above 100
+	} {
+		if _, err := Parse([]byte("accounts: [{auth_file: a.json, session_steps: " + bad + "}]\nbuckets: {main: [m]}\n")); err == nil {
+			t.Fatalf("%s must be refused", bad)
+		}
+	}
+	// a weekly step may run to the reset itself (0 hours): one cap all week
+	if _, err := Parse([]byte("accounts: [{auth_file: a.json, reserve: custom, reserve_steps: [{cap: 60, hours: 0}]}]\nbuckets: {main: [m]}\n")); err != nil {
+		t.Fatal(err)
 	}
 }

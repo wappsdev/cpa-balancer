@@ -206,15 +206,9 @@ fieldset > .hint { margin: 0 0 12px; }
 .input-unit em { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-style: normal; font-size: 12px; color: var(--muted); pointer-events: none; }
 
 .account-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; }
-.account-list li { display: grid; gap: 10px; padding: 12px; }
-.account-list .row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .account-list li + li { border-top: 1px solid var(--line); }
 .account-list .who { flex: 1; min-width: 0; }
-.account-list .label-input { width: 120px; flex: none; }
-.account-list .reserve-field { flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); }
-.account-list .field-name { width: 56px; }
 .steps { display: grid; gap: 6px; justify-items: start; }
-.account-list .reserve-field .steps { flex-basis: 100%; padding-left: 68px; }
 .step { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .link-button { background: none; border: 0; padding: 2px 0; color: var(--accent); font-size: 12px; cursor: pointer; }
 .field.wide { grid-column: 1 / -1; }
@@ -267,3 +261,41 @@ fieldset > .hint { margin: 0 0 12px; }
   .button:active:not(:disabled), .icon-button:active { transform: none; }
   .button.busy .icon { animation: none; }
 }
+
+/* accounts: one summary line each */
+.account-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px; }
+.account-list .plan, .editor .plan { font-size: 12px; color: var(--muted); padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; }
+.account-list .sum { font-size: 12px; color: var(--fg); min-width: 150px; }
+.account-list .sum em { font-style: normal; color: var(--muted); margin-right: 4px; }
+
+/* the account editor */
+.editor { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); color: var(--fg); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35); }
+.editor::backdrop { background: rgba(0, 0, 0, 0.45); }
+#editor-body { padding: 20px 20px 4px; display: grid; gap: 18px; }
+.editor-head { display: flex; align-items: center; gap: 12px; }
+.editor-head div { flex: 1; min-width: 0; }
+.editor-head strong { display: block; font-size: 16px; }
+.editor-head span { font-size: 12px; color: var(--muted); }
+.editor-row { display: flex; flex-wrap: wrap; align-items: end; gap: 16px 24px; }
+.editor-row .field { flex: 1; min-width: 200px; }
+.editor-row .reserve { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding-bottom: 8px; }
+.limit { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.limit-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.limit-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.limit-steps { display: grid; gap: 8px; justify-items: start; }
+.limit-steps .arrow { color: var(--faint); }
+.editor-foot { display: flex; align-items: center; gap: 8px; padding: 16px 20px; border-top: 1px solid var(--line); margin-top: 14px; }
+.editor-foot .spacer { flex: 1; }
+.danger-text { color: var(--bad); }
+
+/* a limit's timeline: the window from its start to its reset, each step's cap over its time */
+.timeline { width: 100%; padding-bottom: 18px; }
+.timeline .bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; gap: 2px; }
+.timeline .seg { display: flex; align-items: center; justify-content: center; min-width: 2px; font-size: 11px; font-weight: 600; color: #fff; }
+.timeline .seg.low { background: #3b4a8a; } .timeline .seg.mid { background: #4f5fc4; }
+.timeline .seg.high { background: #6c7cf0; } .timeline .seg.full { background: var(--surface-2); color: var(--muted); }
+.timeline .axis { position: relative; height: 0; font-size: 11px; color: var(--muted); }
+.timeline .axis span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
+.timeline .axis span:first-child { transform: none; }
+.timeline .axis span.end { transform: translateX(-100%); }

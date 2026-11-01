@@ -44,12 +44,29 @@ type Active struct {
 	Provisional bool      `json:"provisional,omitempty"`
 }
 
-// SessionCap is where the account's 5-hour window switches it away: its own cap, else the thresholds'.
-func SessionCap(a config.Account, th config.Thresholds) float64 {
-	if a.SessionCap > 0 {
-		return a.SessionCap
+// SessionCap is where the account's 5-hour window switches it away now: its own step in force, else
+// the thresholds' session_cap. A closed window (resetsAt nil) takes the last step.
+func SessionCap(a config.Account, resetsAt *time.Time, now time.Time, th config.Thresholds) float64 {
+	if len(a.SessionSteps) == 0 {
+		return th.SessionCap
 	}
-	return th.SessionCap
+	left := time.Duration(0)
+	if resetsAt != nil {
+		left = resetsAt.Sub(now)
+	}
+	return stepCap(a.SessionSteps, left, th.SessionCap)
+}
+
+// stepCap is the cap of the step with the most hours that have not yet run out, else last.
+func stepCap(steps []config.ReserveStep, left time.Duration, last float64) float64 {
+	best := -1.0
+	limit := last
+	for _, s := range steps {
+		if left >= time.Duration(s.Hours*float64(time.Hour)) && s.Hours > best {
+			best, limit = s.Hours, s.Cap
+		}
+	}
+	return limit
 }
 
 // Cap is the highest weekly utilization (%) the account may reach in a bucket right now: the
@@ -57,15 +74,7 @@ func SessionCap(a config.Account, th config.Thresholds) float64 {
 // that have not yet run out, else the final cap.
 func Cap(a config.Account, resetsAt, now time.Time, th config.Thresholds) float64 {
 	steps := map[string][]config.ReserveStep{config.ReserveDefault: th.Reserve, config.ReserveCustom: a.ReserveSteps}[a.Reserve]
-	left := resetsAt.Sub(now)
-	best := -1.0
-	limit := th.FinalCap
-	for _, s := range steps {
-		if left >= time.Duration(s.Hours*float64(time.Hour)) && s.Hours > best {
-			best, limit = s.Hours, s.Cap
-		}
-	}
-	return limit
+	return stepCap(steps, resetsAt.Sub(now), th.FinalCap)
 }
 
 func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now time.Time, th config.Thresholds,
@@ -97,8 +106,8 @@ func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now 
 			return false, fmt.Sprintf("all-models week %.0f%% >= cap %.0f%%", all.Util, allLimit)
 		}
 	}
-	if session, ok := s.Readings[quota.Session]; ok && now.Sub(session.ObservedAt) <= th.Stale() && session.Util >= SessionCap(a, th) {
-		return false, fmt.Sprintf("5h %.0f%% >= %.0f%%", session.Util, SessionCap(a, th))
+	if session, ok := s.Readings[quota.Session]; ok && now.Sub(session.ObservedAt) <= th.Stale() && session.Util >= SessionCap(a, session.ResetsAt, now, th) {
+		return false, fmt.Sprintf("5h %.0f%% >= %.0f%%", session.Util, SessionCap(a, session.ResetsAt, now, th))
 	}
 	return true, fmt.Sprintf("weekly %.0f%% < cap %.0f%%, resets %s", weekly.Util, limit,
 		weekly.ResetsAt.UTC().Format("2006-01-02 15:04 UTC"))
