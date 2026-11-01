@@ -25,6 +25,9 @@ type Traffic struct {
 	InputTokens     int64 `json:"input_tokens"`
 	OutputTokens    int64 `json:"output_tokens"`
 	CacheReadTokens int64 `json:"cache_read_tokens,omitempty"`
+	// tokens written to the prompt cache: a cold cache after a switch spends them, so the use of
+	// a window cannot be measured without them
+	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
 }
 
 func (t *Traffic) add(o Traffic) {
@@ -33,6 +36,7 @@ func (t *Traffic) add(o Traffic) {
 	t.InputTokens += o.InputTokens
 	t.OutputTokens += o.OutputTokens
 	t.CacheReadTokens += o.CacheReadTokens
+	t.CacheCreationTokens += o.CacheCreationTokens
 }
 
 // Levels are an account's quota values at the end of a slot; nil means unknown.

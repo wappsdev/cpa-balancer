@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -638,5 +639,25 @@ func TestHeldAccountsOfOneReopenQueueByThePlanSize(t *testing.T) {
 	e.Tick()
 	if got := e.Status().Decision.MainOrder; strings.Join(got, ",") != W+","+X+","+G {
 		t.Fatalf("order %v", got)
+	}
+}
+
+func TestCacheWritesAndReadsReachHistory(t *testing.T) {
+	c := &clock{t0}
+	dir := t.TempDir()
+	e := New(testConfig(t), newHost(), c.now, history.NewRecorder(dir))
+	u := usage(G, Opus, headers(52, 90, 30, 3, t0))
+	u.Detail.InputTokens, u.Detail.CacheReadTokens, u.Detail.CacheCreationTokens = 10, 4000, 900
+	e.OnUsage(u)
+	c.t = t0.Add(6 * time.Minute)
+	e.Tick() // closes and writes the 12:00 slot
+	raw, err := os.ReadFile(filepath.Join(dir, "2026-10-03.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"cache_read_tokens":4000`, `"cache_creation_tokens":900`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("missing %s in %s", want, raw)
+		}
 	}
 }

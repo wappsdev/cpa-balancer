@@ -138,7 +138,7 @@ func (e *Engine) OnUsage(rec pluginapi.UsageRecord) {
 	}
 	now := e.now()
 	traffic := history.Traffic{Requests: 1, InputTokens: rec.Detail.InputTokens, OutputTokens: rec.Detail.OutputTokens,
-		CacheReadTokens: rec.Detail.CacheReadTokens}
+		CacheReadTokens: rec.Detail.CacheReadTokens, CacheCreationTokens: rec.Detail.CacheCreationTokens}
 	if rec.Failed {
 		traffic.Failed = 1
 	}
