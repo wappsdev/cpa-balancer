@@ -596,3 +596,12 @@ func TestAnAccountWithoutAFableLimitReportsNone(t *testing.T) {
 		t.Fatalf("no Fable cap without a Fable limit: %+v", w.Caps)
 	}
 }
+
+func TestStatusReportsAnAccountsOwnFiveHourCap(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts[1].SessionCap = 70
+	v := New(cfg, newHost(), (&clock{t0}).now, nil).Status()
+	if v.Accounts[0].Caps[quota.Session] != cfg.Thresholds.SessionCap || v.Accounts[1].Caps[quota.Session] != 70 || v.Accounts[1].SessionCap != 70 {
+		t.Fatalf("caps %v %v, own %v", v.Accounts[0].Caps, v.Accounts[1].Caps, v.Accounts[1].SessionCap)
+	}
+}

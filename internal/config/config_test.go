@@ -159,3 +159,13 @@ func TestReserveSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestFiveHourCapPerAccount(t *testing.T) {
+	c, err := Parse([]byte("accounts: [{auth_file: a.json, session_cap: 70}]\nbuckets: {main: [m]}\n"))
+	if err != nil || c.Accounts[0].SessionCap != 70 {
+		t.Fatalf("%+v %v", c.Accounts, err)
+	}
+	if _, err := Parse([]byte("accounts: [{auth_file: a.json, session_cap: 120}]\nbuckets: {main: [m]}\n")); err == nil {
+		t.Fatal("a 5-hour cap above 100 must be refused")
+	}
+}

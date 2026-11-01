@@ -44,6 +44,14 @@ type Active struct {
 	Provisional bool      `json:"provisional,omitempty"`
 }
 
+// SessionCap is where the account's 5-hour window switches it away: its own cap, else the thresholds'.
+func SessionCap(a config.Account, th config.Thresholds) float64 {
+	if a.SessionCap > 0 {
+		return a.SessionCap
+	}
+	return th.SessionCap
+}
+
 // Cap is the highest weekly utilization (%) the account may reach in a bucket right now: the
 // reserve step (default: the thresholds' steps; custom: the account's own) with the most hours
 // that have not yet run out, else the final cap.
@@ -89,8 +97,8 @@ func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now 
 			return false, fmt.Sprintf("all-models week %.0f%% >= cap %.0f%%", all.Util, allLimit)
 		}
 	}
-	if session, ok := s.Readings[quota.Session]; ok && now.Sub(session.ObservedAt) <= th.Stale() && session.Util >= th.SessionCap {
-		return false, fmt.Sprintf("5h %.0f%% >= %.0f%%", session.Util, th.SessionCap)
+	if session, ok := s.Readings[quota.Session]; ok && now.Sub(session.ObservedAt) <= th.Stale() && session.Util >= SessionCap(a, th) {
+		return false, fmt.Sprintf("5h %.0f%% >= %.0f%%", session.Util, SessionCap(a, th))
 	}
 	return true, fmt.Sprintf("weekly %.0f%% < cap %.0f%%, resets %s", weekly.Util, limit,
 		weekly.ResetsAt.UTC().Format("2006-01-02 15:04 UTC"))
