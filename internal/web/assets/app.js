@@ -569,8 +569,12 @@ function timelineHtml(steps, window, last) {
   if (from < total) parts.push({ from, to: total, cap: last });
   const tone = cap => (cap >= 100 ? "full" : cap >= 75 ? "high" : cap >= 40 ? "mid" : "low");
   const falls = parts.some((p, k) => k > 0 && p.cap < parts[k - 1].cap);
+  // above the bar the total a span allows, inside it what the span adds to the one before
+  const wide = p => p.to - p.from >= total / 14;
+  const added = (p, k) => p.cap - (k ? parts[k - 1].cap : 0);
   return `<div class="timeline">
-    <div class="bar">${parts.map(p => `<div class="seg ${tone(p.cap)}" style="flex: ${p.to - p.from}" title="${p.cap}%">${p.to - p.from >= total / 14 ? `${p.cap}%` : ""}</div>`).join("")}</div>
+    <div class="totals">${parts.map(p => wide(p) ? `<span style="left: ${((p.from + p.to) / 2 / total) * 100}%">${p.cap}%</span>` : "").join("")}</div>
+    <div class="bar">${parts.map((p, k) => `<div class="seg ${tone(p.cap)}" style="flex: ${p.to - p.from}" title="up to ${p.cap}% in all, ${added(p, k) >= 0 ? "+" : ""}${added(p, k)}% in this span">${wide(p) ? `${added(p, k) >= 0 ? "+" : ""}${added(p, k)}%` : ""}</div>`).join("")}</div>
     <div class="axis"><span style="left: 0">start</span>${axisLabels(sorted, window, total)}<span class="end" style="left: 100%">reset</span></div>
     ${falls ? `<p class="step-warning">A later step allows less than an earlier one. Use only grows, so the account would stop there: raise the later cap.</p>` : ""}
   </div>`;
@@ -639,6 +643,14 @@ function stepInput(e) {
   const tail = box.querySelector(".step.tail");
   if (tail) tail.hidden = stepsOf(row.dataset.scope).some(s => s.hours === 0);
   if (row.dataset.scope === "default") renderRuler();
+  if (e.type === "change") {
+    const steps = stepsOf(row.dataset.scope);
+    const sorted = [...steps].sort((x, y) => y.hours - x.hours);
+    if (sorted.some((st, k) => st !== steps[k])) {
+      steps.splice(0, steps.length, ...sorted);
+      if (row.dataset.scope === "default") renderDefaultSteps(); else renderEditor();
+    }
+  }
   return true;
 }
 
