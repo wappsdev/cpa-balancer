@@ -148,28 +148,35 @@ func emailOf(authFile string) string {
 	return strings.TrimSuffix(authPrefix.ReplaceAllString(authFile, ""), ".json")
 }
 
-// Names is each account's name, by auth file: its label, else the e-mail's domain (wapps for
-// me@example.com), else the e-mail's local part when two accounts share a domain. The Management
-// Center, the HUD and their commands all use these.
+// Names is each account's name, by auth file: its label, else the e-mail's local part (adnan for
+// account-a@example.com), with the domain added when two unlabelled accounts share a local part
+// (adnan-wapps, adnan-gmail). The Management Center, the HUD and their commands all use these.
 func (c Config) Names() map[string]string {
-	domain := func(e string) string {
+	split := func(authFile string) (local, domain string) {
+		e := emailOf(authFile)
 		at := strings.LastIndex(e, "@")
-		return strings.SplitN(e[at+1:], ".", 2)[0]
+		if at < 0 {
+			return e, ""
+		}
+		return e[:at], strings.SplitN(e[at+1:], ".", 2)[0]
 	}
 	count := map[string]int{}
 	for _, a := range c.Accounts {
-		count[domain(emailOf(a.AuthFile))]++
+		if a.Label == "" {
+			local, _ := split(a.AuthFile)
+			count[strings.ToLower(local)]++
+		}
 	}
 	out := map[string]string{}
 	for _, a := range c.Accounts {
-		e := emailOf(a.AuthFile)
+		local, domain := split(a.AuthFile)
 		switch {
 		case a.Label != "":
 			out[a.AuthFile] = a.Label
-		case count[domain(e)] > 1 && strings.Contains(e, "@"):
-			out[a.AuthFile] = e[:strings.LastIndex(e, "@")]
+		case count[strings.ToLower(local)] > 1 && domain != "":
+			out[a.AuthFile] = local + "-" + domain
 		default:
-			out[a.AuthFile] = domain(e)
+			out[a.AuthFile] = local
 		}
 	}
 	return out
