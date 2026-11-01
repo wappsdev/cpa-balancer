@@ -166,8 +166,9 @@ func TestFiveHourStepsPerAccount(t *testing.T) {
 		t.Fatalf("%+v %v", c.Accounts, err)
 	}
 	for _, bad := range []string{
-		"[{cap: 60, hours: 5}]",  // a 5-hour window has no step 5 hours before its reset
-		"[{cap: 120, hours: 1}]", // above 100
+		"[{cap: 60, hours: 5}]",                        // a 5-hour window has no step 5 hours before its reset
+		"[{cap: 120, hours: 1}]",                       // above 100
+		"[{cap: 83, hours: 2}, {cap: 60, hours: 0.5}]", // a later step allows less than an earlier one
 	} {
 		if _, err := Parse([]byte("accounts: [{auth_file: a.json, session_steps: " + bad + "}]\nbuckets: {main: [m]}\n")); err == nil {
 			t.Fatalf("%s must be refused", bad)

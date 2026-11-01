@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -195,6 +196,15 @@ func validSteps(steps []ReserveStep, maxCap, window float64) error {
 			return fmt.Errorf("two steps end %v hours before the reset", s.Hours)
 		}
 		seen[s.Hours] = true
+	}
+	// use only grows toward the reset, so a later step allowing less than an earlier one would
+	// just stop the account
+	sorted := append([]ReserveStep(nil), steps...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Hours > sorted[j].Hours })
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i].Cap < sorted[i-1].Cap {
+			return fmt.Errorf("a later step allows less (%v%%) than an earlier one (%v%%)", sorted[i].Cap, sorted[i-1].Cap)
+		}
 	}
 	return nil
 }

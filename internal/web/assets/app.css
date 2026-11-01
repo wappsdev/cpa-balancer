@@ -212,7 +212,7 @@ fieldset > .hint { margin: 0 0 12px; }
 .step { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .link-button { background: none; border: 0; padding: 2px 0; color: var(--accent); font-size: 12px; cursor: pointer; }
 .field.wide { grid-column: 1 / -1; }
-.input-unit.small { width: 72px; }
+.input-unit.small { width: 80px; }
 .input-unit.small input { padding-right: 24px; }
 .text.small-number { width: 56px; }
 .select.small { width: auto; }
@@ -299,3 +299,10 @@ fieldset > .hint { margin: 0 0 12px; }
 .timeline .axis span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
 .timeline .axis span:first-child { transform: none; }
 .timeline .axis span.end { transform: translateX(-100%); }
+.step.tail { padding-left: 2px; }
+.step[hidden] { display: none; }
+.step.tail strong { color: var(--fg); font-weight: 600; }
+.timeline .step-warning { margin: 22px 0 -8px; font-size: 12px; color: var(--warn); }
+/* the step fields are short numbers: no spin buttons eating their width (arrow keys still step) */
+.step input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.step input[type="number"]::-webkit-inner-spin-button, .step input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }

@@ -538,6 +538,8 @@ const WINDOWS = {
   week: { hours: 168, units: [["d", 24, "days"], ["h", 1, "hours"]] },
   five: { hours: 5, units: [["h", 1, "hours"], ["m", 1 / 60, "minutes"]] },
 };
+// The largest time a step may end before the reset, per unit: under the window's length.
+const timeMax = (window, unit) => (window === "week" ? (unit === "d" ? 6 : 167) : unit === "h" ? 4 : 299);
 const unitOf = (window, hours) => (window === "week" ? (hours > 0 && hours % 24 === 0 ? "d" : "h") : (Number.isInteger(hours) ? "h" : "m"));
 const timeText = (window, hours) => {
   if (hours === 0) return "the reset";
@@ -566,9 +568,11 @@ function timelineHtml(steps, window, last) {
   }
   if (from < total) parts.push({ from, to: total, cap: last });
   const tone = cap => (cap >= 100 ? "full" : cap >= 75 ? "high" : cap >= 40 ? "mid" : "low");
-  return `<div class="timeline" aria-hidden="true">
+  const falls = parts.some((p, k) => k > 0 && p.cap < parts[k - 1].cap);
+  return `<div class="timeline">
     <div class="bar">${parts.map(p => `<div class="seg ${tone(p.cap)}" style="flex: ${p.to - p.from}" title="${p.cap}%">${p.to - p.from >= total / 14 ? `${p.cap}%` : ""}</div>`).join("")}</div>
     <div class="axis"><span style="left: 0">start</span>${axisLabels(sorted, window, total)}<span class="end" style="left: 100%">reset</span></div>
+    ${falls ? `<p class="step-warning">A later step allows less than an earlier one. Use only grows, so the account would stop there: raise the later cap.</p>` : ""}
   </div>`;
 }
 
@@ -586,17 +590,19 @@ function axisLabels(sorted, window, total) {
 }
 
 // One step list: "Until [n] [unit] before the reset → use up to [x]%". `scope` names the list.
-function stepsHtml(steps, scope, window) {
+function stepsHtml(steps, scope, window, last, lastName) {
+  const max = window === "week" ? finalCap() : 100;
+  const tail = `<div class="step tail"${steps.some(s => s.hours === 0) ? " hidden" : ""}>Then to the reset <span class="arrow">→</span> use up to <strong>${last}%</strong> (${lastName})</div>`;
   return steps.map((s, k) => {
     const unit = unitOf(window, s.hours), factor = WINDOWS[window].units.find(([u]) => u === unit)[1];
     return `<div class="step" data-scope="${scope}" data-window="${window}" data-step="${k}">
-      Until <input class="text small-number" type="number" min="0" step="any" data-field="time" value="${Math.round((s.hours / factor) * 100) / 100}" aria-label="Time before the reset">
+      Until <input class="text small-number" type="number" min="0" step="any" data-field="time" max="${timeMax(window, unit)}" value="${Math.round((s.hours / factor) * 100) / 100}" aria-label="Time before the reset">
       <select class="select small" data-field="unit" aria-label="Unit">${WINDOWS[window].units.map(([u, , l]) => `<option value="${u}"${u === unit ? " selected" : ""}>${l}</option>`).join("")}</select>
       before the reset <span class="arrow">→</span> use up to
-      <span class="input-unit small"><input type="number" min="1" max="100" step="any" data-field="cap" value="${s.cap}" aria-label="Cap"><em>%</em></span>
+      <span class="input-unit small"><input type="number" min="1" max="${max}" step="1" data-field="cap" value="${s.cap}" aria-label="Cap"><em>%</em></span>
       ${steps.length > 1 ? `<button type="button" class="icon-button" data-step-remove aria-label="Remove this step"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>` : ""}
     </div>`;
-  }).join("") + `<button type="button" class="link-button" data-step-add="${scope}" data-window="${window}">+ Add step</button>`;
+  }).join("") + tail + `<button type="button" class="link-button" data-step-add="${scope}" data-window="${window}">+ Add step</button>`;
 }
 
 let defaultSteps = [];
@@ -606,7 +612,7 @@ const finalCap = () => Number(document.querySelector('[data-threshold="final_cap
 const sessionCap = () => Number(document.querySelector('[data-threshold="session_cap"]').value) || 100;
 
 function renderDefaultSteps() {
-  $("default-steps").innerHTML = timelineHtml(defaultSteps, "week", finalCap()) + stepsHtml(defaultSteps, "default", "week");
+  $("default-steps").innerHTML = timelineHtml(defaultSteps, "week", finalCap()) + stepsHtml(defaultSteps, "default", "week", finalCap(), "final cap");
   renderRuler();
 }
 
@@ -614,12 +620,24 @@ function renderDefaultSteps() {
 function stepInput(e) {
   const row = e.target.closest(".step");
   if (!row) return false;
+  if (e.type === "change") {
+    const unit = row.querySelector('[data-field="unit"]').value;
+    const clamp = (field, lo, hi) => {
+      const el = row.querySelector(`[data-field="${field}"]`);
+      el.max = hi;
+      if (el.value !== "") el.value = Math.min(hi, Math.max(lo, Number(el.value)));
+    };
+    clamp("time", 0, timeMax(row.dataset.window, unit));
+    clamp("cap", 1, row.dataset.window === "week" ? finalCap() : 100);
+  }
   const step = stepsOf(row.dataset.scope)[+row.dataset.step];
   const factor = WINDOWS[row.dataset.window].units.find(([u]) => u === row.querySelector('[data-field="unit"]').value)[1];
   step.cap = Number(row.querySelector('[data-field="cap"]').value);
   step.hours = Number(row.querySelector('[data-field="time"]').value) * factor;
   const box = row.closest(".limit-steps");
   box.querySelector(".timeline").outerHTML = timelineHtml(stepsOf(row.dataset.scope), row.dataset.window, row.dataset.window === "week" ? finalCap() : sessionCap());
+  const tail = box.querySelector(".step.tail");
+  if (tail) tail.hidden = stepsOf(row.dataset.scope).some(s => s.hours === 0);
   if (row.dataset.scope === "default") renderRuler();
   return true;
 }
@@ -648,7 +666,7 @@ function stepClick(e) {
 }
 
 $("default-steps").addEventListener("input", stepInput);
-$("default-steps").addEventListener("change", e => { if (e.target.matches('[data-field="unit"]')) stepInput(e); });
+$("default-steps").addEventListener("change", stepInput);
 $("default-steps").addEventListener("click", stepClick);
 
 // ---------- accounts: one summary line each; Edit opens the account in a dialog ----------
@@ -707,14 +725,14 @@ function renderEditor() {
           `<button type="button" data-weekly="${k}" aria-pressed="${a.reserve === k}">${l}</button>`).join("")}</div></div>
       ${a.reserve === "off" ? `<p class="hint">Used up to the final cap (${finalCap()}%).</p>`
         : a.reserve === "default" ? `<div class="limit-steps">${timelineHtml(defaultSteps, "week", finalCap())}</div><p class="hint">The default steps, set under Thresholds.</p>`
-        : `<div class="limit-steps">${timelineHtml(a.reserve_steps, "week", finalCap())}${stepsHtml(a.reserve_steps, "week", "week")}</div>`}
+        : `<div class="limit-steps">${timelineHtml(a.reserve_steps, "week", finalCap())}${stepsHtml(a.reserve_steps, "week", "week", finalCap(), "final cap")}</div>`}
     </section>
     ${five ? `<section class="limit">
       <div class="limit-head"><h3>5-hour limit</h3>
         <div class="segmented" role="group" aria-label="5-hour limit">${[["default", "Default"], ["custom", "Custom"]].map(([k, l]) =>
           `<button type="button" data-five="${k}" aria-pressed="${(a.session_steps.length > 0) === (k === "custom")}">${l}</button>`).join("")}</div></div>
       ${a.session_steps.length
-        ? `<div class="limit-steps">${timelineHtml(a.session_steps, "five", sessionCap())}${stepsHtml(a.session_steps, "five", "five")}</div>`
+        ? `<div class="limit-steps">${timelineHtml(a.session_steps, "five", sessionCap())}${stepsHtml(a.session_steps, "five", "five", sessionCap(), "default 5-hour cap")}</div>`
         : `<p class="hint">Switches away at the 5-hour cap under Thresholds (${sessionCap()}%).</p>`}
     </section>` : '<p class="hint">This plan has no 5-hour limit.</p>'}`;
 }
@@ -723,7 +741,7 @@ $("editor-body").addEventListener("input", e => {
   if (stepInput(e)) return;
   if (e.target.matches('[data-draft="label"]')) draft.label = e.target.value.trim();
 });
-$("editor-body").addEventListener("change", e => { if (e.target.matches('[data-field="unit"]')) stepInput(e); });
+$("editor-body").addEventListener("change", e => { if (e.target.closest(".step")) stepInput(e); });
 $("editor-body").addEventListener("click", e => {
   if (stepClick(e)) return;
   const weekly = e.target.closest("[data-weekly]"), five = e.target.closest("[data-five]"), extra = e.target.closest('[data-draft="extra_usage"]');
@@ -801,6 +819,8 @@ function validate(c) {
       if (!(st.hours >= 0 && st.hours < window)) errors.push(`${who}: a step must end from 0 to under ${span} before the reset`);
     }
     if (new Set(steps.map(st => st.hours)).size !== steps.length) errors.push(`${who}: two steps end at the same time`);
+    const sorted = [...steps].sort((x, y) => y.hours - x.hours);
+    if (sorted.some((st, k) => k > 0 && st.cap < sorted[k - 1].cap)) errors.push(`${who}: a later step allows less than an earlier one`);
   };
   checkSteps(t.reserve || [], "default weekly limit", final, 168, "7 days");
   for (const a of c.accounts.filter(a => a.reserve === "custom")) checkSteps(a.reserve_steps, `${short(a.auth_file)} weekly`, final, 168, "7 days");
