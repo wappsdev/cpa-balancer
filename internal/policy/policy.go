@@ -43,20 +43,25 @@ type Active struct {
 	Provisional bool      `json:"provisional,omitempty"`
 }
 
-// Cap is the highest weekly utilization (%) the account may reach in a bucket right now.
-func Cap(reserve bool, resetsAt, now time.Time, th config.Thresholds) float64 {
-	if !reserve {
-		return th.FinalCap
-	}
+// Cap is the highest weekly utilization (%) the account may reach in a bucket right now. A default
+// reserve steps up at 48 and 12 hours before the reset; a custom one holds its cap until its own
+// release time; both give way to the final cap at the end.
+func Cap(a config.Account, resetsAt, now time.Time, th config.Thresholds) float64 {
 	left := resetsAt.Sub(now)
-	switch {
-	case left >= 48*time.Hour:
-		return th.ReserveCapFar
-	case left >= 12*time.Hour:
-		return th.ReserveCapNear
-	default:
-		return th.FinalCap
+	switch a.Reserve {
+	case config.ReserveCustom:
+		if left >= time.Duration(a.ReserveHours*float64(time.Hour)) {
+			return a.ReserveCap
+		}
+	case config.ReserveDefault:
+		if left >= 48*time.Hour {
+			return th.ReserveCapFar
+		}
+		if left >= 12*time.Hour {
+			return th.ReserveCapNear
+		}
 	}
+	return th.FinalCap
 }
 
 func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now time.Time, th config.Thresholds,
@@ -73,7 +78,7 @@ func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now 
 	}
 	limit := th.FinalCap
 	if !releaseReserve {
-		limit = Cap(a.Reserve, *weekly.ResetsAt, now, th)
+		limit = Cap(a, *weekly.ResetsAt, now, th)
 	}
 	if weekly.Util >= limit {
 		return false, fmt.Sprintf("weekly %.0f%% >= cap %.0f%%", weekly.Util, limit)
@@ -82,7 +87,7 @@ func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now 
 	if all, ok := s.Readings[quota.Main]; b == quota.Fable && ok && all.ResetsAt != nil && now.Sub(all.ObservedAt) <= th.Stale() {
 		allLimit := th.FinalCap
 		if !releaseReserve {
-			allLimit = Cap(a.Reserve, *all.ResetsAt, now, th)
+			allLimit = Cap(a, *all.ResetsAt, now, th)
 		}
 		if all.Util >= allLimit {
 			return false, fmt.Sprintf("all-models week %.0f%% >= cap %.0f%%", all.Util, allLimit)

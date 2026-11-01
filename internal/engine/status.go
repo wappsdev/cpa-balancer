@@ -11,8 +11,9 @@ import (
 
 type AccountView struct {
 	AuthFile    string                   `json:"auth_file"`
-	Name        string                   `json:"name"` // the account's label, or a name from its e-mail
-	Reserve     bool                     `json:"reserve"`
+	Name        string                   `json:"name"`                  // the account's label, or a name from its e-mail
+	Reserve     string                   `json:"reserve"`               // off, default or custom
+	ReserveCap  float64                  `json:"reserve_cap,omitempty"` // a custom reserve's cap
 	ExtraUsage  bool                     `json:"extra_usage"`
 	Listed      bool                     `json:"listed"`
 	Plan        string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
@@ -46,14 +47,14 @@ func (e *Engine) Status() View {
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
-		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
+		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveCap: a.ReserveCap, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{quota.Session: e.cfg.Thresholds.SessionCap}}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
 			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)
 			av.Eligibility[b] = why
 			if r, ok := snap.Readings[b]; ok && r.ResetsAt != nil {
-				av.Caps[b] = policy.Cap(a.Reserve, *r.ResetsAt, now, e.cfg.Thresholds)
+				av.Caps[b] = policy.Cap(a, *r.ResetsAt, now, e.cfg.Thresholds)
 			}
 		}
 		if acc := e.st.Accounts[a.AuthFile]; acc != nil && !acc.LastAnchor.IsZero() {

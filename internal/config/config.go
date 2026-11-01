@@ -16,12 +16,23 @@ type Account struct {
 	AuthFile string `yaml:"auth_file" json:"auth_file"`
 	// Label names the account in the Management Center, the HUD and its commands; empty means a
 	// name taken from the e-mail (Names).
-	Label   string `yaml:"label,omitempty" json:"label,omitempty"`
-	Reserve bool   `yaml:"reserve" json:"reserve"`
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
+	// Reserve holds quota back until the weekly reset is near: off, default (the thresholds'
+	// reserve caps) or custom: this account's own cap (ReserveCap) until ReserveHours before the
+	// reset, the final cap from then on.
+	Reserve      string  `yaml:"reserve" json:"reserve"` // empty is off
+	ReserveCap   float64 `yaml:"reserve_cap,omitempty" json:"reserve_cap,omitempty"`
+	ReserveHours float64 `yaml:"reserve_hours,omitempty" json:"reserve_hours,omitempty"`
 	// ExtraUsage: the account has extra-usage credits on, so it keeps answering past its plan
 	// limits. It is used only when no account has plan quota left.
 	ExtraUsage bool `yaml:"extra_usage" json:"extra_usage"`
 }
+
+const (
+	ReserveOff     = "off"
+	ReserveDefault = "default"
+	ReserveCustom  = "custom"
+)
 
 type Thresholds struct {
 	ReserveCapFar   float64 `yaml:"reserve_cap_far" json:"reserve_cap_far"`
@@ -76,6 +87,11 @@ func Parse(raw []byte) (Config, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
+	for i := range cfg.Accounts {
+		if cfg.Accounts[i].Reserve == "" {
+			cfg.Accounts[i].Reserve = ReserveOff
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -125,6 +141,16 @@ func (c Config) Validate() error {
 			return fmt.Errorf("account auth files must be unique and non-empty, got %q", a.AuthFile)
 		}
 		seen[a.AuthFile] = true
+		switch {
+		case a.Reserve != "" && a.Reserve != ReserveOff && a.Reserve != ReserveDefault && a.Reserve != ReserveCustom:
+			return fmt.Errorf("%s: reserve must be off, default or custom, got %q", a.AuthFile, a.Reserve)
+		case a.Reserve == ReserveCustom && (a.ReserveCap <= 0 || a.ReserveCap > th.FinalCap):
+			return fmt.Errorf("%s: a custom reserve cap must be above 0 and at most the final cap %v, got %v", a.AuthFile, th.FinalCap, a.ReserveCap)
+		case a.Reserve == ReserveCustom && (a.ReserveHours <= 0 || a.ReserveHours >= 7*24):
+			return fmt.Errorf("%s: a custom reserve is released between 0 and 168 hours before the reset, got %v", a.AuthFile, a.ReserveHours)
+		case a.Reserve != ReserveCustom && (a.ReserveCap != 0 || a.ReserveHours != 0):
+			return fmt.Errorf("%s: reserve_cap and reserve_hours go only with a custom reserve", a.AuthFile)
+		}
 		if a.Label != "" && !labelPattern.MatchString(a.Label) {
 			return fmt.Errorf("label %q must be one word of up to 20 letters, digits, - or _", a.Label)
 		}
