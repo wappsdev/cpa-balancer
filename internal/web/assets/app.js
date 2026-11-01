@@ -20,6 +20,9 @@ const hoursText = h => (h % 24 === 0 ? `${h / 24} d` : `${h} h`);
 // Each account's name as the balancer reports it (its label, or one from its e-mail): the same
 // name the HUD and its commands use. An account the status does not list yet shows its e-mail.
 let names = {};
+// Accounts whose plan has no 5-hour limit get no 5-hour setting (from the status; unknown: shown).
+let noFiveHour = new Set();
+const hasFiveHour = f => !noFiveHour.has(f);
 const short = f => names[f] || (f || "—").replace(/^claude-[0-9a-f]+-/, "").replace(/\.json$/, "");
 const time = t => t ? new Date(t).toLocaleString() : "—";
 // Relative time: "in 4d 3h", "12m ago"; the exact time goes into a title attribute.
@@ -88,6 +91,7 @@ function renderStatus(v) {
   }
   view = v;
   names = Object.fromEntries((v.accounts || []).map(a => [a.auth_file, a.name]));
+  noFiveHour = new Set((v.accounts || []).filter(a => a.five_hour === false).map(a => a.auth_file));
   $("meta").textContent = `${v.paused ? "Paused" : v.mode === "shadow" ? "Shadow mode — deciding, not applying" : "Balancing"} · updated ${rel(v.generated_at)}`;
   $("live-dot").className = "dot " + (v.paused ? "paused" : "on");
   const pause = $("pause");
@@ -464,7 +468,7 @@ async function loadSettings() {
 }
 
 function fillForm(c) {
-  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: a.reserve || "off", reserve_steps: (a.reserve_steps || [{ cap: 50, hours: 48 }]).map(s => ({ ...s })), extra_usage: !!a.extra_usage, label: a.label || "" }));
+  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: a.reserve || "off", reserve_steps: (a.reserve_steps || [{ cap: 50, hours: 48 }]).map(s => ({ ...s })), session_cap: a.session_cap || 0, extra_usage: !!a.extra_usage, label: a.label || "" }));
   defaultSteps = (c.thresholds?.reserve || []).map(s => ({ ...s }));
   renderAccounts();
   renderDefaultSteps();
@@ -593,7 +597,15 @@ function renderAccounts() {
       <div class="segmented" role="group" aria-label="Reserve for ${esc(short(a.auth_file))}">${["off", "default", "custom"].map(r =>
         `<button type="button" data-reserve="${i}" data-value="${r}" aria-pressed="${a.reserve === r}">${r[0].toUpperCase() + r.slice(1)}</button>`).join("")}</div>
       ${a.reserve === "custom" ? `<div class="steps">${stepsHtml(a.reserve_steps, i)}</div>` : ""}
-    </div></li>`).join("");
+    </div>
+    ${hasFiveHour(a.auth_file) ? `<div class="row reserve-field">
+      <span class="field-name">5-hour</span>
+      <div class="segmented" role="group" aria-label="5-hour cap for ${esc(short(a.auth_file))}">${[["default", "Default"], ["custom", "Custom"]].map(([k, l]) =>
+        `<button type="button" data-session="${i}" data-value="${k}" aria-pressed="${(a.session_cap > 0) === (k === "custom")}">${l}</button>`).join("")}</div>
+      ${a.session_cap > 0
+        ? `<span class="step">switch away at <span class="input-unit small"><input type="number" min="1" max="100" step="any" data-session-cap="${i}" value="${a.session_cap}" aria-label="5-hour cap"><em>%</em></span> of the 5-hour window</span>`
+        : `<span class="step">switch away at the 5-hour cap under Thresholds</span>`}
+    </div>` : ""}</li>`).join("");
   const free = credentials.filter(c => !accounts.some(a => a.auth_file === c.auth_file));
   $("account-add").innerHTML = free.length
     ? free.map(c => `<option value="${esc(c.auth_file)}">${esc(c.email || short(c.auth_file))}${c.disabled ? " (disabled)" : ""}</option>`).join("")
@@ -610,6 +622,10 @@ $("account-list").addEventListener("click", e => {
   } else if (reserve) {
     accounts[+reserve.dataset.reserve].reserve = reserve.dataset.value;
     renderAccounts();
+  } else if (e.target.closest("[data-session]")) {
+    const b = e.target.closest("[data-session]"), a = accounts[+b.dataset.session];
+    a.session_cap = b.dataset.value === "custom" ? (a.session_cap || 70) : 0;
+    renderAccounts();
   } else if (remove) {
     accounts.splice(+remove.dataset.remove, 1);
     renderAccounts();
@@ -618,6 +634,8 @@ $("account-list").addEventListener("click", e => {
 $("account-list").addEventListener("input", e => {
   const field = e.target.closest("[data-label]");
   if (field) accounts[+field.dataset.label].label = field.value.trim();
+  const session = e.target.closest("[data-session-cap]");
+  if (session) accounts[+session.dataset.sessionCap].session_cap = Number(session.value);
 });
 $("account-add-button").addEventListener("click", () => {
   const f = $("account-add").value;
@@ -638,7 +656,7 @@ function collect() {
   thresholds.reserve = defaultSteps.map(s => ({ ...s }));
   // An empty label is left out (the balancer then takes a name from the e-mail); steps go only
   // with a custom reserve.
-  return { accounts: accounts.map(({ label, reserve_steps, ...a }) => ({ ...a, ...(label ? { label } : {}), ...(a.reserve === "custom" ? { reserve_steps: reserve_steps.map(s => ({ ...s })) } : {}) })), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
+  return { accounts: accounts.map(({ label, reserve_steps, session_cap, ...a }) => ({ ...a, ...(label ? { label } : {}), ...(session_cap > 0 ? { session_cap } : {}), ...(a.reserve === "custom" ? { reserve_steps: reserve_steps.map(s => ({ ...s })) } : {}) })), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
 }
 
 // The same rules as config.Validate; the plugin checks them again.
@@ -662,6 +680,7 @@ function validate(c) {
     if (new Set(steps.map(st => st.hours)).size !== steps.length) errors.push(`${who}: two steps end at the same time`);
   };
   checkSteps(t.reserve || [], "default reserve");
+  for (const a of c.accounts) if ("session_cap" in a && !(a.session_cap > 0 && a.session_cap <= 100)) errors.push(`${short(a.auth_file)}: the 5-hour cap must be above 0 and at most 100%`);
   for (const a of c.accounts.filter(a => a.reserve === "custom")) checkSteps(a.reserve_steps, short(a.auth_file));
   const labels = c.accounts.map(a => (a.label || "").toLowerCase()).filter(Boolean);
   if (new Set(labels).size !== labels.length) errors.push("two accounts have the same name");
@@ -681,14 +700,15 @@ function changes(before, after) {
   const lines = [], changed = [];
   for (const k of SECTIONS) {
     if (k === "accounts") {
-      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: reserveText(a), extra: !!a.extra_usage, label: a.label || "" }]));
-      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: reserveText(a), extra: !!a.extra_usage, label: a.label || "" }]));
+      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: reserveText(a), five: a.session_cap || 0, extra: !!a.extra_usage, label: a.label || "" }]));
+      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: reserveText(a), five: a.session_cap || 0, extra: !!a.extra_usage, label: a.label || "" }]));
       const order = (before.accounts || []).map(a => a.auth_file).join() !== after.accounts.map(a => a.auth_file).join();
       for (const f of Object.keys(now)) {
         if (!(f in was)) lines.push(`add account ${short(f)} (${now[f].reserve})${now[f].extra ? " (extra usage)" : ""}`);
         else {
           if (was[f].reserve !== now[f].reserve) lines.push(`${short(f)}: ${now[f].reserve}`);
           if (was[f].extra !== now[f].extra) lines.push(`${short(f)}: extra usage ${now[f].extra ? "on" : "off"}`);
+          if (was[f].five !== now[f].five) lines.push(`${short(f)}: 5-hour cap ${now[f].five ? `${now[f].five}%` : "default"}`);
           if (was[f].label !== now[f].label) lines.push(`${short(f)}: name ${now[f].label ? `"${now[f].label}"` : "from the e-mail"}`);
         }
       }

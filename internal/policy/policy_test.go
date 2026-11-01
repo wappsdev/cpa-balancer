@@ -286,3 +286,21 @@ func TestTheOrderPutsAccountsThatCanTakeWorkFirst(t *testing.T) {
 		t.Fatalf("main %q order %v", d.Main.Account, d.MainOrder)
 	}
 }
+
+func TestAnAccountsOwnFiveHourCap(t *testing.T) {
+	c := testConfig()
+	c.Accounts[0].SessionCap = 70 // W switches away at 70% of its 5-hour window
+	snaps := map[string]Snapshot{
+		W: snap(quota.Readings{quota.Main: rd(10, 20), quota.Session: rd(75, 3)}),
+		G: snap(quota.Readings{quota.Main: rd(10, 100), quota.Session: rd(75, 3)}),
+	}
+	if ok, why := Eligibility(c.Accounts[0], snaps[W], true, quota.Main, now, c.Thresholds, false); ok || !strings.Contains(why, "70") {
+		t.Fatalf("W at 75%% of its 5 hours must be out at its own 70%%: %v %q", ok, why)
+	}
+	if ok, _ := Eligibility(c.Accounts[1], snaps[G], true, quota.Main, now, c.Thresholds, false); !ok {
+		t.Fatal("G uses the default 5-hour cap (98) and stays in")
+	}
+	if got := SessionCap(c.Accounts[0], c.Thresholds); got != 70 {
+		t.Fatalf("SessionCap %v", got)
+	}
+}

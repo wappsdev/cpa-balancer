@@ -21,6 +21,8 @@ type Account struct {
 	// steps) or custom (ReserveSteps, this account's own).
 	Reserve      string        `yaml:"reserve" json:"reserve"` // empty is off
 	ReserveSteps []ReserveStep `yaml:"reserve_steps,omitempty" json:"reserve_steps,omitempty"`
+	// SessionCap is where this account's 5-hour window switches it away; 0 is the thresholds' one.
+	SessionCap float64 `yaml:"session_cap,omitempty" json:"session_cap,omitempty"`
 	// ExtraUsage: the account has extra-usage credits on, so it keeps answering past its plan
 	// limits. It is used only when no account has plan quota left.
 	ExtraUsage bool `yaml:"extra_usage" json:"extra_usage"`
@@ -155,6 +157,9 @@ func (c Config) Validate() error {
 			}
 		case len(a.ReserveSteps) > 0:
 			return fmt.Errorf("%s: reserve_steps go only with a custom reserve", a.AuthFile)
+		}
+		if a.SessionCap < 0 || a.SessionCap > 100 {
+			return fmt.Errorf("%s: session_cap must be within 0-100, got %v", a.AuthFile, a.SessionCap)
 		}
 		if a.Label != "" && !labelPattern.MatchString(a.Label) {
 			return fmt.Errorf("label %q must be one word of up to 20 letters, digits, - or _", a.Label)
