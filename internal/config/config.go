@@ -18,11 +18,9 @@ type Account struct {
 	// name taken from the e-mail (Names).
 	Label string `yaml:"label,omitempty" json:"label,omitempty"`
 	// Reserve holds quota back until the weekly reset is near: off, default (the thresholds'
-	// reserve caps) or custom: this account's own cap (ReserveCap) until ReserveHours before the
-	// reset, the final cap from then on.
-	Reserve      string  `yaml:"reserve" json:"reserve"` // empty is off
-	ReserveCap   float64 `yaml:"reserve_cap,omitempty" json:"reserve_cap,omitempty"`
-	ReserveHours float64 `yaml:"reserve_hours,omitempty" json:"reserve_hours,omitempty"`
+	// steps) or custom (ReserveSteps, this account's own).
+	Reserve      string        `yaml:"reserve" json:"reserve"` // empty is off
+	ReserveSteps []ReserveStep `yaml:"reserve_steps,omitempty" json:"reserve_steps,omitempty"`
 	// ExtraUsage: the account has extra-usage credits on, so it keeps answering past its plan
 	// limits. It is used only when no account has plan quota left.
 	ExtraUsage bool `yaml:"extra_usage" json:"extra_usage"`
@@ -34,13 +32,20 @@ const (
 	ReserveCustom  = "custom"
 )
 
+// ReserveStep caps an account's weekly use at Cap until Hours before its reset. Of a list, the
+// step with the most hours that have not yet run out is in force; after the last, the final cap.
+type ReserveStep struct {
+	Cap   float64 `yaml:"cap" json:"cap"`
+	Hours float64 `yaml:"hours" json:"hours"`
+}
+
 type Thresholds struct {
-	ReserveCapFar   float64 `yaml:"reserve_cap_far" json:"reserve_cap_far"`
-	ReserveCapNear  float64 `yaml:"reserve_cap_near" json:"reserve_cap_near"`
-	FinalCap        float64 `yaml:"final_cap" json:"final_cap"`
-	SessionCap      float64 `yaml:"session_cap" json:"session_cap"`
-	MinDwellMinutes int     `yaml:"min_dwell_minutes" json:"min_dwell_minutes"`
-	StaleHours      float64 `yaml:"stale_hours" json:"stale_hours"`
+	// Reserve is the default reserve's steps, for every account set to default.
+	Reserve         []ReserveStep `yaml:"reserve" json:"reserve"`
+	FinalCap        float64       `yaml:"final_cap" json:"final_cap"`
+	SessionCap      float64       `yaml:"session_cap" json:"session_cap"`
+	MinDwellMinutes int           `yaml:"min_dwell_minutes" json:"min_dwell_minutes"`
+	StaleHours      float64       `yaml:"stale_hours" json:"stale_hours"`
 }
 
 func (t Thresholds) MinDwell() time.Duration { return time.Duration(t.MinDwellMinutes) * time.Minute }
@@ -74,7 +79,8 @@ func Default() Config {
 		Mode:      "apply",
 		StatePath: "~/.cli-proxy-api/cpa-balancer/state.json",
 		Thresholds: Thresholds{
-			ReserveCapFar: 85, ReserveCapNear: 90, FinalCap: 99, SessionCap: 98,
+			Reserve:  []ReserveStep{{Cap: 85, Hours: 48}, {Cap: 90, Hours: 12}},
+			FinalCap: 99, SessionCap: 98,
 			MinDwellMinutes: 60, StaleHours: 6,
 		},
 		Anchor: Anchor{Enabled: true, Model: "claude-haiku-4-5-20251001", FallbackModel: "claude-sonnet-5-5"},
@@ -114,14 +120,13 @@ func (c Config) Validate() error {
 	for _, p := range []struct {
 		name  string
 		value float64
-	}{{"reserve_cap_far", th.ReserveCapFar}, {"reserve_cap_near", th.ReserveCapNear}, {"final_cap", th.FinalCap}, {"session_cap", th.SessionCap}} {
+	}{{"final_cap", th.FinalCap}, {"session_cap", th.SessionCap}} {
 		if p.value < 0 || p.value > 100 {
 			return fmt.Errorf("%s must be within 0-100, got %v", p.name, p.value)
 		}
 	}
-	if th.ReserveCapFar > th.ReserveCapNear || th.ReserveCapNear > th.FinalCap {
-		return fmt.Errorf("caps must satisfy reserve_cap_far <= reserve_cap_near <= final_cap, got %v / %v / %v",
-			th.ReserveCapFar, th.ReserveCapNear, th.FinalCap)
+	if err := validSteps(th.Reserve, th.FinalCap); err != nil {
+		return fmt.Errorf("default reserve: %w", err)
 	}
 	if th.MinDwellMinutes < 0 {
 		return fmt.Errorf("min_dwell_minutes must not be negative")
@@ -144,12 +149,12 @@ func (c Config) Validate() error {
 		switch {
 		case a.Reserve != "" && a.Reserve != ReserveOff && a.Reserve != ReserveDefault && a.Reserve != ReserveCustom:
 			return fmt.Errorf("%s: reserve must be off, default or custom, got %q", a.AuthFile, a.Reserve)
-		case a.Reserve == ReserveCustom && (a.ReserveCap <= 0 || a.ReserveCap > th.FinalCap):
-			return fmt.Errorf("%s: a custom reserve cap must be above 0 and at most the final cap %v, got %v", a.AuthFile, th.FinalCap, a.ReserveCap)
-		case a.Reserve == ReserveCustom && (a.ReserveHours <= 0 || a.ReserveHours >= 7*24):
-			return fmt.Errorf("%s: a custom reserve is released between 0 and 168 hours before the reset, got %v", a.AuthFile, a.ReserveHours)
-		case a.Reserve != ReserveCustom && (a.ReserveCap != 0 || a.ReserveHours != 0):
-			return fmt.Errorf("%s: reserve_cap and reserve_hours go only with a custom reserve", a.AuthFile)
+		case a.Reserve == ReserveCustom:
+			if err := validSteps(a.ReserveSteps, th.FinalCap); err != nil {
+				return fmt.Errorf("%s: %w", a.AuthFile, err)
+			}
+		case len(a.ReserveSteps) > 0:
+			return fmt.Errorf("%s: reserve_steps go only with a custom reserve", a.AuthFile)
 		}
 		if a.Label != "" && !labelPattern.MatchString(a.Label) {
 			return fmt.Errorf("label %q must be one word of up to 20 letters, digits, - or _", a.Label)
@@ -161,6 +166,27 @@ func (c Config) Validate() error {
 			return fmt.Errorf("accounts %s and %s are both named %q; give one a label", other, file, name)
 		}
 		taken[strings.ToLower(name)] = file
+	}
+	return nil
+}
+
+// validSteps: at least one step, each capping above 0 and at most the final cap, until between 0
+// and 168 hours before the reset, no two at the same hours.
+func validSteps(steps []ReserveStep, finalCap float64) error {
+	if len(steps) == 0 {
+		return fmt.Errorf("a reserve needs at least one step")
+	}
+	seen := map[float64]bool{}
+	for _, s := range steps {
+		switch {
+		case s.Cap <= 0 || s.Cap > finalCap:
+			return fmt.Errorf("a step's cap must be above 0 and at most the final cap %v, got %v", finalCap, s.Cap)
+		case s.Hours <= 0 || s.Hours >= 7*24:
+			return fmt.Errorf("a step ends between 0 and 168 hours before the reset, got %v", s.Hours)
+		case seen[s.Hours]:
+			return fmt.Errorf("two steps end %v hours before the reset", s.Hours)
+		}
+		seen[s.Hours] = true
 	}
 	return nil
 }

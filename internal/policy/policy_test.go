@@ -48,7 +48,8 @@ func act(account string, minutesAgo float64) map[quota.Bucket]Active {
 func TestCapTiersAtExactBoundaries(t *testing.T) {
 	th := config.Default().Thresholds
 	def := config.Account{Reserve: config.ReserveDefault}
-	custom := config.Account{Reserve: config.ReserveCustom, ReserveCap: 50, ReserveHours: 120}
+	// steps in any order: 50% until 5 days, 70% until 2 days before the reset
+	custom := config.Account{Reserve: config.ReserveCustom, ReserveSteps: []config.ReserveStep{{Cap: 70, Hours: 48}, {Cap: 50, Hours: 120}}}
 	off := config.Account{Reserve: config.ReserveOff}
 	cases := []struct {
 		account config.Account
@@ -57,8 +58,9 @@ func TestCapTiersAtExactBoundaries(t *testing.T) {
 	}{
 		{def, 48 * time.Hour, 85}, {def, 48*time.Hour - time.Second, 90},
 		{def, 12 * time.Hour, 90}, {def, 12*time.Hour - time.Second, 99}, {off, 150 * time.Hour, 99},
-		// a custom reserve holds its own cap until its release time, 5 days before the reset here
-		{custom, 150 * time.Hour, 50}, {custom, 120 * time.Hour, 50}, {custom, 120*time.Hour - time.Second, 99},
+		// a custom reserve steps through its own caps, then gives way to the final cap
+		{custom, 150 * time.Hour, 50}, {custom, 120 * time.Hour, 50}, {custom, 120*time.Hour - time.Second, 70},
+		{custom, 48 * time.Hour, 70}, {custom, 48*time.Hour - time.Second, 99},
 	}
 	for _, c := range cases {
 		if got := Cap(c.account, now.Add(c.left), now, th); got != c.want {

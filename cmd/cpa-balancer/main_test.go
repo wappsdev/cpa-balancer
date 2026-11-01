@@ -27,7 +27,7 @@ func TestRejectedConfigKeepsTheEngineAndReportsTheError(t *testing.T) {
 	}
 	rec := recorder
 
-	configureYAML(t, valid+"thresholds: {reserve_cap_far: 95, reserve_cap_near: 90}\n")
+	configureYAML(t, valid+"thresholds: {final_cap: 80}\n")
 	v, ok := pluginAPI{}.Status().(engine.View)
 	if !ok || v.ConfigError == "" || engineNow() != first {
 		t.Fatalf("invalid config must keep the engine and report: %+v", v)

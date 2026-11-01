@@ -44,25 +44,20 @@ type Active struct {
 	Provisional bool      `json:"provisional,omitempty"`
 }
 
-// Cap is the highest weekly utilization (%) the account may reach in a bucket right now. A default
-// reserve steps up at 48 and 12 hours before the reset; a custom one holds its cap until its own
-// release time; both give way to the final cap at the end.
+// Cap is the highest weekly utilization (%) the account may reach in a bucket right now: the
+// reserve step (default: the thresholds' steps; custom: the account's own) with the most hours
+// that have not yet run out, else the final cap.
 func Cap(a config.Account, resetsAt, now time.Time, th config.Thresholds) float64 {
+	steps := map[string][]config.ReserveStep{config.ReserveDefault: th.Reserve, config.ReserveCustom: a.ReserveSteps}[a.Reserve]
 	left := resetsAt.Sub(now)
-	switch a.Reserve {
-	case config.ReserveCustom:
-		if left >= time.Duration(a.ReserveHours*float64(time.Hour)) {
-			return a.ReserveCap
-		}
-	case config.ReserveDefault:
-		if left >= 48*time.Hour {
-			return th.ReserveCapFar
-		}
-		if left >= 12*time.Hour {
-			return th.ReserveCapNear
+	best := -1.0
+	limit := th.FinalCap
+	for _, s := range steps {
+		if left >= time.Duration(s.Hours*float64(time.Hour)) && s.Hours > best {
+			best, limit = s.Hours, s.Cap
 		}
 	}
-	return th.FinalCap
+	return limit
 }
 
 func Eligibility(a config.Account, s Snapshot, listed bool, b quota.Bucket, now time.Time, th config.Thresholds,

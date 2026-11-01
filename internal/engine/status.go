@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/adnankurt/cpa-balancer/internal/config"
 	"time"
 
 	"github.com/adnankurt/cpa-balancer/internal/policy"
@@ -13,8 +14,7 @@ type AccountView struct {
 	AuthFile     string                   `json:"auth_file"`
 	Name         string                   `json:"name"`                    // the account's label, or a name from its e-mail
 	Reserve      string                   `json:"reserve"`                 // off, default or custom
-	ReserveCap   float64                  `json:"reserve_cap,omitempty"`   // a custom reserve's cap
-	ReserveHours float64                  `json:"reserve_hours,omitempty"` // and how long before the reset it is released
+	ReserveSteps []config.ReserveStep     `json:"reserve_steps,omitempty"` // a custom reserve's steps
 	ExtraUsage   bool                     `json:"extra_usage"`
 	Listed       bool                     `json:"listed"`
 	FiveHour     bool                     `json:"five_hour"`        // the plan has a 5-hour limit (true until a probe says otherwise)
@@ -49,7 +49,7 @@ func (e *Engine) Status() View {
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
-		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveCap: a.ReserveCap, ReserveHours: a.ReserveHours, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
+		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}}
 		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour

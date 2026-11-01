@@ -15,8 +15,7 @@ accounts:
     reserve: "off"
   - auth_file: claude-g.json
     reserve: custom
-    reserve_cap: 60
-    reserve_hours: 48
+    reserve_steps: [{cap: 50, hours: 120}, {cap: 70, hours: 48}]
 buckets:
   main: [claude-opus-5-5]
   fable: [claude-fable-5-1]
@@ -36,7 +35,8 @@ func TestDefaultsWhenOnlyRequiredKeysAreGiven(t *testing.T) {
 	if cfg.Paused {
 		t.Fatal("paused must default to false")
 	}
-	if cfg.Mode != "apply" || cfg.Thresholds.SessionCap != 98 || cfg.Thresholds.ReserveCapFar != 85 {
+	if cfg.Mode != "apply" || cfg.Thresholds.SessionCap != 98 ||
+		len(cfg.Thresholds.Reserve) != 2 || cfg.Thresholds.Reserve[0] != (ReserveStep{Cap: 85, Hours: 48}) || cfg.Thresholds.Reserve[1] != (ReserveStep{Cap: 90, Hours: 12}) {
 		t.Fatalf("defaults not applied: %+v", cfg)
 	}
 	if !cfg.Anchor.Enabled || cfg.Anchor.Model != "claude-haiku-4-5-20251001" || cfg.Anchor.FallbackModel != "claude-sonnet-5-5" {
@@ -52,7 +52,7 @@ func TestOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != "shadow" || cfg.StatePath != "/tmp/x/state.json" || len(cfg.Accounts) != 2 || cfg.Accounts[1].Reserve != ReserveCustom || cfg.Accounts[1].ReserveCap != 60 || cfg.Accounts[1].ReserveHours != 48 {
+	if cfg.Mode != "shadow" || cfg.StatePath != "/tmp/x/state.json" || len(cfg.Accounts) != 2 || cfg.Accounts[1].Reserve != ReserveCustom || len(cfg.Accounts[1].ReserveSteps) != 2 || cfg.Accounts[1].ReserveSteps[1] != (ReserveStep{Cap: 70, Hours: 48}) {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 	if cfg.Thresholds.SessionCap != 97 || cfg.Thresholds.FinalCap != 99 || cfg.Anchor.Enabled {
@@ -65,14 +65,17 @@ func TestOverrides(t *testing.T) {
 
 func TestValidation(t *testing.T) {
 	bad := map[string]string{
-		"mode":           "mode: yolo\n" + minimal,
-		"cap range":      "thresholds: {session_cap: 120}\n" + minimal,
-		"cap order":      "thresholds: {reserve_cap_far: 95}\n" + minimal,
-		"dwell":          "thresholds: {min_dwell_minutes: -1}\n" + minimal,
-		"stale":          "thresholds: {stale_hours: 0}\n" + minimal,
-		"no accounts":    "buckets: {main: [claude-opus-5-5]}\n",
-		"no main models": "accounts: [{auth_file: claude-w.json}]\n",
-		"duplicate":      "accounts: [{auth_file: a.json}, {auth_file: a.json}]\nbuckets: {main: [m]}\n",
+		"mode":             "mode: yolo\n" + minimal,
+		"cap range":        "thresholds: {session_cap: 120}\n" + minimal,
+		"step above final": "thresholds: {final_cap: 90, reserve: [{cap: 95, hours: 24}]}\n" + minimal,
+		"step at a week":   "thresholds: {reserve: [{cap: 50, hours: 168}]}\n" + minimal,
+		"same hours twice": "thresholds: {reserve: [{cap: 50, hours: 24}, {cap: 60, hours: 24}]}\n" + minimal,
+		"no default step":  "thresholds: {reserve: []}\n" + minimal,
+		"dwell":            "thresholds: {min_dwell_minutes: -1}\n" + minimal,
+		"stale":            "thresholds: {stale_hours: 0}\n" + minimal,
+		"no accounts":      "buckets: {main: [claude-opus-5-5]}\n",
+		"no main models":   "accounts: [{auth_file: claude-w.json}]\n",
+		"duplicate":        "accounts: [{auth_file: a.json}, {auth_file: a.json}]\nbuckets: {main: [m]}\n",
 	}
 	for name, raw := range bad {
 		if _, err := Parse([]byte(raw)); err == nil {
@@ -138,14 +141,18 @@ func TestReserveSettings(t *testing.T) {
 	if c, err := parse("auth_file: a.json"); err != nil || c.Accounts[0].Reserve != ReserveOff {
 		t.Fatalf("no reserve given must mean off: %+v %v", c.Accounts, err)
 	}
+	// a thresholds reserve replaces the default steps rather than adding to them
+	c, err := Parse([]byte("thresholds: {reserve: [{cap: 70, hours: 72}]}\naccounts: [{auth_file: a.json}]\nbuckets: {main: [m]}\n"))
+	if err != nil || len(c.Thresholds.Reserve) != 1 || c.Thresholds.Reserve[0] != (ReserveStep{Cap: 70, Hours: 72}) {
+		t.Fatalf("thresholds reserve: %+v %v", c.Thresholds.Reserve, err)
+	}
 	for _, bad := range []string{
-		"{auth_file: a.json, reserve: custom, reserve_hours: 24}",                   // a custom reserve needs its cap
-		"{auth_file: a.json, reserve: custom, reserve_cap: 50}",                     // and its release time
-		"{auth_file: a.json, reserve: custom, reserve_cap: 120, reserve_hours: 24}", // above the final cap
-		"{auth_file: a.json, reserve: custom, reserve_cap: 50, reserve_hours: 200}", // more than a week
+		"{auth_file: a.json, reserve: custom}",                                         // a custom reserve needs steps
+		"{auth_file: a.json, reserve: custom, reserve_steps: [{cap: 120, hours: 24}]}", // above the final cap
+		"{auth_file: a.json, reserve: custom, reserve_steps: [{cap: 50, hours: 200}]}", // more than a week
+		"{auth_file: a.json, reserve: custom, reserve_steps: [{cap: 0, hours: 24}]}",   // no cap
 		"{auth_file: a.json, reserve: sometimes}",
-		"{auth_file: a.json, reserve: default, reserve_cap: 50}", // a cap only goes with custom
-		"{auth_file: a.json, reserve: off, reserve_hours: 12}",
+		"{auth_file: a.json, reserve: default, reserve_steps: [{cap: 50, hours: 24}]}", // steps go only with custom
 	} {
 		if _, err := parse(bad); err == nil {
 			t.Fatalf("%s must be refused", bad)
