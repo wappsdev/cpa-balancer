@@ -271,3 +271,18 @@ func TestFableNeedsRoomInTheAllModelsWeekToo(t *testing.T) {
 		t.Fatalf("Fable must go where the week has room, got %+v", d.Fable)
 	}
 }
+
+func TestTheOrderPutsAccountsThatCanTakeWorkFirst(t *testing.T) {
+	// three accounts: X is chosen; G resets sooner than W but is at its cap, so W comes next
+	c := testConfig()
+	c.Accounts = append(c.Accounts, config.Account{AuthFile: "claude-x.json"})
+	snaps := map[string]Snapshot{
+		W:               snap(quota.Readings{quota.Main: rd(66, 100)}),
+		G:               snap(quota.Readings{quota.Main: rd(98, 40)}),
+		"claude-x.json": snap(quota.Readings{quota.Main: rd(10, 20)}),
+	}
+	d := Decide(snaps, c, now, nil)
+	if d.Main.Account != "claude-x.json" || strings.Join(d.MainOrder, ",") != "claude-x.json,"+W+","+G {
+		t.Fatalf("main %q order %v", d.Main.Account, d.MainOrder)
+	}
+}

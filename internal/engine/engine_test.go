@@ -572,9 +572,27 @@ func TestAnAccountWithoutAFiveHourLimitHasNoFiveHourWindowAndNoAnchor(t *testing
 	if !e.Status().Accounts[1].FiveHour {
 		t.Fatal("G has a 5-hour limit")
 	}
+	if !w.Fable || !e.Status().Accounts[1].Fable {
+		t.Fatal("W's usage lists a Fable limit, so it has one; G was never probed and keeps it")
+	}
 	for _, x := range h.execs {
 		if x.AuthID == W {
 			t.Fatal("an account without a 5-hour limit must not be anchored")
 		}
+	}
+}
+
+func TestAnAccountWithoutAFableLimitReportsNone(t *testing.T) {
+	h := newHost()
+	h.probeBody["tok-w-secret"] = `{"limits":[{"kind":"session","percent":5,"resets_at":"2026-10-03T15:00:00+00:00"},` +
+		`{"kind":"weekly_all","percent":10,"resets_at":"2026-10-09T00:00:00+00:00"}]}`
+	e := New(testConfig(t), h, (&clock{t0}).now, nil)
+	e.Recheck(W)
+	w := e.Status().Accounts[0]
+	if w.Fable || !w.FiveHour {
+		t.Fatalf("fable %v, five hour %v", w.Fable, w.FiveHour)
+	}
+	if _, ok := w.Caps[quota.Fable]; ok {
+		t.Fatalf("no Fable cap without a Fable limit: %+v", w.Caps)
 	}
 }

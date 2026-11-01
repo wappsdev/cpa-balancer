@@ -66,7 +66,7 @@ func (e *Engine) recheckOne(r *RecheckResult, now time.Time) {
 		return
 	}
 	acc.Probe = res.Readings
-	acc.NoFiveHour = !res.FiveHour
+	acc.NoFiveHour, acc.NoFable = !res.Limits[quota.Session], !res.Limits[quota.Fable]
 	weekly, hasWeekly := res.Readings[quota.Main]
 	session := res.Readings[quota.Session]
 	r.Weekly, r.Session = weekly.Util, session.Util

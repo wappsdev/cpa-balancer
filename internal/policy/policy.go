@@ -177,19 +177,36 @@ func resetOf(snaps map[string]Snapshot, account string, b quota.Bucket) time.Tim
 	return farFuture
 }
 
-// order puts the chosen account first and the rest by reset time, for pick fallbacks.
-func order(b quota.Bucket, chosen string, cfg config.Config, snaps map[string]Snapshot) []string {
+// order puts the chosen account first, then the accounts that can take work now, then the rest,
+// each group by reset time: the next account shown, and the pick's fallbacks, never skip an
+// account with room for one at its cap.
+func order(b quota.Bucket, chosen string, cfg config.Config, snaps map[string]Snapshot, now time.Time) []string {
 	if chosen == "" {
 		return nil
 	}
-	var rest []string
+	var rest []config.Account
 	for _, a := range cfg.Accounts {
 		if a.AuthFile != chosen {
-			rest = append(rest, a.AuthFile)
+			rest = append(rest, a)
 		}
 	}
-	sort.SliceStable(rest, func(i, j int) bool { return resetOf(snaps, rest[i], b).Before(resetOf(snaps, rest[j], b)) })
-	return append([]string{chosen}, rest...)
+	open := map[string]bool{}
+	for _, a := range rest {
+		s, listed := snaps[a.AuthFile]
+		open[a.AuthFile], _ = Eligibility(a, s, listed, b, now, cfg.Thresholds, false)
+	}
+	sort.SliceStable(rest, func(i, j int) bool {
+		x, y := rest[i].AuthFile, rest[j].AuthFile
+		if open[x] != open[y] {
+			return open[x]
+		}
+		return resetOf(snaps, x, b).Before(resetOf(snaps, y, b))
+	})
+	out := []string{chosen}
+	for _, a := range rest {
+		out = append(out, a.AuthFile)
+	}
+	return out
 }
 
 func Decide(snaps map[string]Snapshot, cfg config.Config, now time.Time, active map[quota.Bucket]Active) Decision {
@@ -199,8 +216,8 @@ func Decide(snaps map[string]Snapshot, cfg config.Config, now time.Time, active 
 	} else {
 		d.Fable = Choice{Reason: "fable bucket not configured"}
 	}
-	d.MainOrder = order(quota.Main, d.Main.Account, cfg, snaps)
-	d.FableOrder = order(quota.Fable, d.Fable.Account, cfg, snaps)
+	d.MainOrder = order(quota.Main, d.Main.Account, cfg, snaps, now)
+	d.FableOrder = order(quota.Fable, d.Fable.Account, cfg, snaps, now)
 	for _, x := range []struct {
 		b quota.Bucket
 		c Choice

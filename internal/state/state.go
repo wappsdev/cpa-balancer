@@ -28,6 +28,7 @@ type Account struct {
 	Plan             probe.Plan     `json:"plan,omitzero"` // empty until the profile was read
 	PlanCheckedAt    time.Time      `json:"plan_checked_at,omitzero"`
 	NoFiveHour       bool           `json:"no_five_hour,omitempty"` // the usage endpoint lists no 5-hour limit
+	NoFable          bool           `json:"no_fable,omitempty"`     // nor a Fable weekly limit
 }
 
 type Change struct {
