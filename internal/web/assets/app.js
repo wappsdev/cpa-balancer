@@ -7,6 +7,14 @@ const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#06b6d4", "#8b5cf6"
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// How an account holds quota back, in words: "no reserve", "default reserve", "50% until 5 d before reset".
+function reserveText(a) {
+  if (a.reserve === "default") return "default reserve";
+  if (a.reserve === "custom") return `${a.reserve_cap}% until ${hoursText(a.reserve_hours)} before reset`;
+  return "no reserve";
+}
+const hoursText = h => (h % 24 === 0 ? `${h / 24} d` : `${h} h`);
+
 // Each account's name as the balancer reports it (its label, or one from its e-mail): the same
 // name the HUD and its commands use. An account the status does not list yet shows its e-mail.
 let names = {};
@@ -138,7 +146,7 @@ function accountCard(a, v) {
     <div class="account-head">
       <span class="name">${esc(short(a.auth_file))}</span>
       ${activeIn.length ? `<span class="chip accent">● active · ${activeIn.join(", ")}</span>` : ""}
-      <span class="chip">${a.reserve ? "keeps a reserve" : "no reserve"}</span>
+      <span class="chip">${esc(reserveText(a))}</span>
       ${a.plan ? `<span class="chip">${esc({ max_20x: "Ultra", max_5x: "Max", pro: "Pro" }[a.plan] || a.plan)}</span>` : ""}
       ${a.extra_usage ? '<span class="chip">extra usage on</span>' : ""}
       ${a.listed ? "" : '<span class="chip bad">not listed by CPA</span>'}
@@ -453,7 +461,7 @@ async function loadSettings() {
 }
 
 function fillForm(c) {
-  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: !!a.reserve, extra_usage: !!a.extra_usage, label: a.label || "" }));
+  accounts = (c.accounts || []).map(a => ({ auth_file: a.auth_file, reserve: a.reserve || "off", reserve_cap: a.reserve_cap || 50, reserve_hours: a.reserve_hours || 48, extra_usage: !!a.extra_usage, label: a.label || "" }));
   renderAccounts();
   for (const el of document.querySelectorAll("[data-threshold]")) el.value = c.thresholds?.[el.dataset.threshold] ?? "";
   for (const b of Object.keys(buckets)) { buckets[b] = [...(c.buckets?.[b] || [])]; renderChips(b); }
@@ -515,7 +523,17 @@ function renderAccounts() {
   $("account-list").innerHTML = accounts.map((a, i) => `<li>
     <div class="who"><strong>${esc(short(a.auth_file))}</strong><span>${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
     <input class="text label-input" data-label="${i}" value="${esc(a.label)}" placeholder="name" maxlength="20" aria-label="Name for ${esc(short(a.auth_file))}" title="The name the Management Center, the HUD and its commands use; empty takes one from the e-mail">
-    <div class="reserve"><button type="button" role="switch" class="switch" data-reserve="${i}" aria-checked="${a.reserve}" aria-label="Keeps a reserve"><span class="knob"></span></button>Reserve</div>
+    <div class="reserve-field">
+      <div class="segmented" role="group" aria-label="Reserve for ${esc(short(a.auth_file))}">${["off", "default", "custom"].map(r =>
+        `<button type="button" data-reserve="${i}" data-value="${r}" aria-pressed="${a.reserve === r}">${r[0].toUpperCase() + r.slice(1)}</button>`).join("")}</div>
+      <span class="custom-reserve" ${a.reserve === "custom" ? "" : "hidden"}>
+        <span class="input-unit small"><input type="number" min="1" max="100" step="any" data-reserve-cap="${i}" value="${a.reserve_cap}" aria-label="Cap"><em>%</em></span>
+        until
+        <span class="input-unit small"><input type="number" min="1" step="any" data-reserve-time="${i}" value="${a.reserve_hours % 24 === 0 ? a.reserve_hours / 24 : a.reserve_hours}" aria-label="Release time"></span>
+        <select class="select small" data-reserve-unit="${i}" aria-label="Unit"><option value="24"${a.reserve_hours % 24 === 0 ? " selected" : ""}>days</option><option value="1"${a.reserve_hours % 24 === 0 ? "" : " selected"}>hours</option></select>
+        before reset
+      </span>
+    </div>
     <div class="reserve"><button type="button" role="switch" class="switch" data-extra="${i}" aria-checked="${a.extra_usage}" aria-label="Extra usage credits are on"><span class="knob"></span></button>Extra usage</div>
     <button type="button" class="icon-button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">
       <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></li>`).join("");
@@ -533,9 +551,8 @@ $("account-list").addEventListener("click", e => {
     a.extra_usage = !a.extra_usage;
     extra.setAttribute("aria-checked", String(a.extra_usage));
   } else if (reserve) {
-    const a = accounts[+reserve.dataset.reserve];
-    a.reserve = !a.reserve;
-    reserve.setAttribute("aria-checked", String(a.reserve));
+    accounts[+reserve.dataset.reserve].reserve = reserve.dataset.value;
+    renderAccounts();
   } else if (remove) {
     accounts.splice(+remove.dataset.remove, 1);
     renderAccounts();
@@ -544,10 +561,20 @@ $("account-list").addEventListener("click", e => {
 $("account-list").addEventListener("input", e => {
   const field = e.target.closest("[data-label]");
   if (field) accounts[+field.dataset.label].label = field.value.trim();
+  const cap = e.target.closest("[data-reserve-cap]");
+  if (cap) accounts[+cap.dataset.reserveCap].reserve_cap = Number(cap.value);
+  const row = e.target.closest("[data-reserve-time], [data-reserve-unit]");
+  if (row) {
+    const i = +(row.dataset.reserveTime ?? row.dataset.reserveUnit), li = row.closest("li");
+    accounts[i].reserve_hours = Number(li.querySelector("[data-reserve-time]").value) * Number(li.querySelector("[data-reserve-unit]").value);
+  }
+});
+$("account-list").addEventListener("change", e => {
+  if (e.target.matches("[data-reserve-unit]")) e.target.dispatchEvent(new Event("input", { bubbles: true }));
 });
 $("account-add-button").addEventListener("click", () => {
   const f = $("account-add").value;
-  if (f) { accounts.push({ auth_file: f, reserve: false, extra_usage: false, label: "" }); renderAccounts(); }
+  if (f) { accounts.push({ auth_file: f, reserve: "off", reserve_cap: 50, reserve_hours: 48, extra_usage: false, label: "" }); renderAccounts(); }
 });
 
 function collect() {
@@ -561,7 +588,9 @@ function collect() {
     else if (el.value.trim()) anchor[el.dataset.anchor] = el.value.trim();
   }
   // An empty label is left out: the balancer then takes a name from the e-mail.
-  return { accounts: accounts.map(({ label, ...a }) => (label ? { ...a, label } : a)), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
+  // An empty label is left out (the balancer then takes a name from the e-mail); a cap and a
+  // release time go only with a custom reserve.
+  return { accounts: accounts.map(({ label, reserve_cap, reserve_hours, ...a }) => ({ ...a, ...(label ? { label } : {}), ...(a.reserve === "custom" ? { reserve_cap, reserve_hours } : {}) })), buckets: { main: [...buckets.main], fable: [...buckets.fable] }, thresholds, anchor };
 }
 
 // The same rules as config.Validate; the plugin checks them again.
@@ -576,6 +605,11 @@ function validate(c) {
   if ("stale_hours" in t && !(t.stale_hours > 0)) errors.push("stale after must be more than 0 hours");
   if (!c.accounts.length) errors.push("at least one account is required");
   for (const a of c.accounts) if (a.label && !/^[\p{L}\p{N}_-]{1,20}$/u.test(a.label)) errors.push(`name "${a.label}" must be one word of up to 20 letters, digits, - or _`);
+  const final = t.final_cap ?? 100;
+  for (const a of c.accounts.filter(a => a.reserve === "custom")) {
+    if (!(a.reserve_cap > 0 && a.reserve_cap <= final)) errors.push(`${short(a.auth_file)}: the reserve cap must be above 0 and at most the final cap (${final}%)`);
+    if (!(a.reserve_hours > 0 && a.reserve_hours < 168)) errors.push(`${short(a.auth_file)}: the reserve must end between 0 and 7 days before the reset`);
+  }
   const labels = c.accounts.map(a => (a.label || "").toLowerCase()).filter(Boolean);
   if (new Set(labels).size !== labels.length) errors.push("two accounts have the same name");
   if (!c.buckets.main.length) errors.push("the main bucket needs at least one model");
@@ -594,13 +628,13 @@ function changes(before, after) {
   const lines = [], changed = [];
   for (const k of SECTIONS) {
     if (k === "accounts") {
-      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage, label: a.label || "" }]));
-      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: !!a.reserve, extra: !!a.extra_usage, label: a.label || "" }]));
+      const was = Object.fromEntries((before.accounts || []).map(a => [a.auth_file, { reserve: reserveText(a), extra: !!a.extra_usage, label: a.label || "" }]));
+      const now = Object.fromEntries(after.accounts.map(a => [a.auth_file, { reserve: reserveText(a), extra: !!a.extra_usage, label: a.label || "" }]));
       const order = (before.accounts || []).map(a => a.auth_file).join() !== after.accounts.map(a => a.auth_file).join();
       for (const f of Object.keys(now)) {
-        if (!(f in was)) lines.push(`add account ${short(f)}${now[f].reserve ? " (keeps a reserve)" : ""}${now[f].extra ? " (extra usage)" : ""}`);
+        if (!(f in was)) lines.push(`add account ${short(f)} (${now[f].reserve})${now[f].extra ? " (extra usage)" : ""}`);
         else {
-          if (was[f].reserve !== now[f].reserve) lines.push(`${short(f)}: ${now[f].reserve ? "keeps a reserve" : "no reserve"}`);
+          if (was[f].reserve !== now[f].reserve) lines.push(`${short(f)}: ${now[f].reserve}`);
           if (was[f].extra !== now[f].extra) lines.push(`${short(f)}: extra usage ${now[f].extra ? "on" : "off"}`);
           if (was[f].label !== now[f].label) lines.push(`${short(f)}: name ${now[f].label ? `"${now[f].label}"` : "from the e-mail"}`);
         }

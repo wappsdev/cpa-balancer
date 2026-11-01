@@ -85,7 +85,7 @@ func (c *clock) now() time.Time { return c.t }
 func testConfig(t *testing.T) config.Config {
 	c := config.Default()
 	c.StatePath = filepath.Join(t.TempDir(), "state.json")
-	c.Accounts = []config.Account{{AuthFile: W}, {AuthFile: G, Reserve: true}}
+	c.Accounts = []config.Account{{AuthFile: W}, {AuthFile: G, Reserve: config.ReserveDefault}}
 	c.Buckets.Main = []string{Opus}
 	c.Buckets.Fable = []string{Fable}
 	return c

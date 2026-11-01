@@ -208,6 +208,11 @@ fieldset > .hint { margin: 0 0 12px; }
 .account-list li + li { border-top: 1px solid var(--line); }
 .account-list .who { flex: 1; min-width: 0; }
 .account-list .label-input { width: 120px; flex: none; }
+.account-list .reserve-field { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.account-list .custom-reserve { display: inline-flex; align-items: center; gap: 6px; }
+.account-list .custom-reserve[hidden] { display: none; }
+.input-unit.small input { width: 64px; padding-right: 22px; }
+.select.small { padding: 4px 6px; }
 .account-list .who strong { display: block; }
 .account-list .who span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-list .reserve { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }

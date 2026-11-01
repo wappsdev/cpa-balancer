@@ -12,9 +12,11 @@ mode: shadow
 state_path: /tmp/x/state.json
 accounts:
   - auth_file: claude-w.json
-    reserve: false
+    reserve: "off"
   - auth_file: claude-g.json
-    reserve: true
+    reserve: custom
+    reserve_cap: 60
+    reserve_hours: 48
 buckets:
   main: [claude-opus-5-5]
   fable: [claude-fable-5-1]
@@ -50,7 +52,7 @@ func TestOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != "shadow" || cfg.StatePath != "/tmp/x/state.json" || len(cfg.Accounts) != 2 || !cfg.Accounts[1].Reserve {
+	if cfg.Mode != "shadow" || cfg.StatePath != "/tmp/x/state.json" || len(cfg.Accounts) != 2 || cfg.Accounts[1].Reserve != ReserveCustom || cfg.Accounts[1].ReserveCap != 60 || cfg.Accounts[1].ReserveHours != 48 {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 	if cfg.Thresholds.SessionCap != 97 || cfg.Thresholds.FinalCap != 99 || cfg.Anchor.Enabled {
@@ -126,5 +128,27 @@ func TestAccountNames(t *testing.T) {
 	}
 	if err := cfg(Account{AuthFile: "claude-1-a@x.com.json", Label: "personal-2"}).Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReserveSettings(t *testing.T) {
+	parse := func(account string) (Config, error) {
+		return Parse([]byte("accounts:\n  - " + account + "\nbuckets: {main: [m]}\n"))
+	}
+	if c, err := parse("auth_file: a.json"); err != nil || c.Accounts[0].Reserve != ReserveOff {
+		t.Fatalf("no reserve given must mean off: %+v %v", c.Accounts, err)
+	}
+	for _, bad := range []string{
+		"{auth_file: a.json, reserve: custom, reserve_hours: 24}",                   // a custom reserve needs its cap
+		"{auth_file: a.json, reserve: custom, reserve_cap: 50}",                     // and its release time
+		"{auth_file: a.json, reserve: custom, reserve_cap: 120, reserve_hours: 24}", // above the final cap
+		"{auth_file: a.json, reserve: custom, reserve_cap: 50, reserve_hours: 200}", // more than a week
+		"{auth_file: a.json, reserve: sometimes}",
+		"{auth_file: a.json, reserve: default, reserve_cap: 50}", // a cap only goes with custom
+		"{auth_file: a.json, reserve: off, reserve_hours: 12}",
+	} {
+		if _, err := parse(bad); err == nil {
+			t.Fatalf("%s must be refused", bad)
+		}
 	}
 }

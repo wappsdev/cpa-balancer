@@ -398,7 +398,7 @@ func (e *Engine) record(now time.Time) {
 			if !ok || r.ResetsAt == nil {
 				return nil, nil
 			}
-			util, limit := r.Util, policy.Cap(a.Reserve, *r.ResetsAt, now, e.cfg.Thresholds)
+			util, limit := r.Util, policy.Cap(a, *r.ResetsAt, now, e.cfg.Thresholds)
 			return &util, &limit
 		}
 		l.Main, l.MainCap = weekly(quota.Main)

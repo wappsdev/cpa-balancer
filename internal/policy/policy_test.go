@@ -18,7 +18,7 @@ const (
 
 func testConfig() config.Config {
 	c := config.Default()
-	c.Accounts = []config.Account{{AuthFile: W}, {AuthFile: G, Reserve: true}}
+	c.Accounts = []config.Account{{AuthFile: W}, {AuthFile: G, Reserve: config.ReserveDefault}}
 	c.Buckets.Main = []string{"claude-opus-5-5"}
 	c.Buckets.Fable = []string{"claude-fable-5-1"}
 	return c
@@ -47,17 +47,22 @@ func act(account string, minutesAgo float64) map[quota.Bucket]Active {
 
 func TestCapTiersAtExactBoundaries(t *testing.T) {
 	th := config.Default().Thresholds
+	def := config.Account{Reserve: config.ReserveDefault}
+	custom := config.Account{Reserve: config.ReserveCustom, ReserveCap: 50, ReserveHours: 120}
+	off := config.Account{Reserve: config.ReserveOff}
 	cases := []struct {
-		reserve bool
+		account config.Account
 		left    time.Duration
 		want    float64
 	}{
-		{true, 48 * time.Hour, 85}, {true, 48*time.Hour - time.Second, 90},
-		{true, 12 * time.Hour, 90}, {true, 12*time.Hour - time.Second, 99}, {false, 150 * time.Hour, 99},
+		{def, 48 * time.Hour, 85}, {def, 48*time.Hour - time.Second, 90},
+		{def, 12 * time.Hour, 90}, {def, 12*time.Hour - time.Second, 99}, {off, 150 * time.Hour, 99},
+		// a custom reserve holds its own cap until its release time, 5 days before the reset here
+		{custom, 150 * time.Hour, 50}, {custom, 120 * time.Hour, 50}, {custom, 120*time.Hour - time.Second, 99},
 	}
 	for _, c := range cases {
-		if got := Cap(c.reserve, now.Add(c.left), now, th); got != c.want {
-			t.Errorf("Cap(%v, %v) = %v, want %v", c.reserve, c.left, got, c.want)
+		if got := Cap(c.account, now.Add(c.left), now, th); got != c.want {
+			t.Errorf("Cap(%+v, %v) = %v, want %v", c.account, c.left, got, c.want)
 		}
 	}
 }
@@ -210,7 +215,7 @@ func TestProvisionalChoiceIsLeftWithoutDwell(t *testing.T) {
 
 func extraConfig(w, g bool) config.Config {
 	c := testConfig()
-	c.Accounts = []config.Account{{AuthFile: W, ExtraUsage: w}, {AuthFile: G, Reserve: true, ExtraUsage: g}}
+	c.Accounts = []config.Account{{AuthFile: W, ExtraUsage: w}, {AuthFile: G, Reserve: config.ReserveDefault, ExtraUsage: g}}
 	return c
 }
 
