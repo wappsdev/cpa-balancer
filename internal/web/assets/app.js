@@ -521,22 +521,26 @@ for (const el of document.querySelectorAll("[data-threshold]")) el.addEventListe
 
 function renderAccounts() {
   $("account-list").innerHTML = accounts.map((a, i) => `<li>
-    <div class="who"><strong>${esc(short(a.auth_file))}</strong><span>${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
-    <input class="text label-input" data-label="${i}" value="${esc(a.label)}" placeholder="name" maxlength="20" aria-label="Name for ${esc(short(a.auth_file))}" title="The name the Management Center, the HUD and its commands use; empty takes one from the e-mail">
-    <div class="reserve-field">
+    <div class="row">
+      <div class="who"><strong>${esc(short(a.auth_file))}</strong><span>${esc(a.auth_file)}${credentials.some(c => c.auth_file === a.auth_file) ? "" : " · not known to CPA"}</span></div>
+      <input class="text label-input" data-label="${i}" value="${esc(a.label)}" placeholder="name" maxlength="20" aria-label="Name for ${esc(short(a.auth_file))}" title="The name the Management Center, the HUD and its commands use; empty takes one from the e-mail">
+      <div class="reserve"><button type="button" role="switch" class="switch" data-extra="${i}" aria-checked="${a.extra_usage}" aria-label="Extra usage credits are on"><span class="knob"></span></button>Extra usage</div>
+      <button type="button" class="icon-button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+    </div>
+    <div class="row reserve-field">
+      <span class="field-name">Reserve</span>
       <div class="segmented" role="group" aria-label="Reserve for ${esc(short(a.auth_file))}">${["off", "default", "custom"].map(r =>
         `<button type="button" data-reserve="${i}" data-value="${r}" aria-pressed="${a.reserve === r}">${r[0].toUpperCase() + r.slice(1)}</button>`).join("")}</div>
       <span class="custom-reserve" ${a.reserve === "custom" ? "" : "hidden"}>
+        use up to
         <span class="input-unit small"><input type="number" min="1" max="100" step="any" data-reserve-cap="${i}" value="${a.reserve_cap}" aria-label="Cap"><em>%</em></span>
         until
-        <span class="input-unit small"><input type="number" min="1" step="any" data-reserve-time="${i}" value="${a.reserve_hours % 24 === 0 ? a.reserve_hours / 24 : a.reserve_hours}" aria-label="Release time"></span>
+        <input class="text small-number" type="number" min="1" step="any" data-reserve-time="${i}" value="${a.reserve_hours % 24 === 0 ? a.reserve_hours / 24 : a.reserve_hours}" aria-label="Release time">
         <select class="select small" data-reserve-unit="${i}" aria-label="Unit"><option value="24"${a.reserve_hours % 24 === 0 ? " selected" : ""}>days</option><option value="1"${a.reserve_hours % 24 === 0 ? "" : " selected"}>hours</option></select>
-        before reset
+        before the reset
       </span>
-    </div>
-    <div class="reserve"><button type="button" role="switch" class="switch" data-extra="${i}" aria-checked="${a.extra_usage}" aria-label="Extra usage credits are on"><span class="knob"></span></button>Extra usage</div>
-    <button type="button" class="icon-button" data-remove="${i}" aria-label="Remove ${esc(short(a.auth_file))}">
-      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></li>`).join("");
+    </div></li>`).join("");
   const free = credentials.filter(c => !accounts.some(a => a.auth_file === c.auth_file));
   $("account-add").innerHTML = free.length
     ? free.map(c => `<option value="${esc(c.auth_file)}">${esc(c.email || short(c.auth_file))}${c.disabled ? " (disabled)" : ""}</option>`).join("")
