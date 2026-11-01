@@ -17,6 +17,7 @@ type AccountView struct {
 	ReserveHours float64                  `json:"reserve_hours,omitempty"` // and how long before the reset it is released
 	ExtraUsage   bool                     `json:"extra_usage"`
 	Listed       bool                     `json:"listed"`
+	FiveHour     bool                     `json:"five_hour"`        // the plan has a 5-hour limit (true until a probe says otherwise)
 	Plan         string                   `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
 	Weight       float64                  `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
 	Unavailable  bool                     `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
@@ -50,7 +51,11 @@ func (e *Engine) Status() View {
 		cred, listed := e.credentials[a.AuthFile]
 		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveCap: a.ReserveCap, ReserveHours: a.ReserveHours, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
-			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{quota.Session: e.cfg.Thresholds.SessionCap}}
+			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}}
+		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour
+		if av.FiveHour {
+			av.Caps[quota.Session] = e.cfg.Thresholds.SessionCap
+		}
 		for _, b := range []quota.Bucket{quota.Main, quota.Fable} {
 			_, why := policy.Eligibility(a, snap, true, b, now, e.cfg.Thresholds, false)
 			av.Eligibility[b] = why

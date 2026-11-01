@@ -18,6 +18,7 @@ var farFuture = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 type Snapshot struct {
 	Readings    quota.Readings
 	Unavailable bool
+	NoFiveHour  bool // the plan has no 5-hour limit, so it has no window to start
 }
 
 type Choice struct {
@@ -227,7 +228,7 @@ func AnchorTargets(d Decision, snaps map[string]Snapshot, cfg config.Config, now
 	for _, a := range cfg.Accounts {
 		name := a.AuthFile
 		s, ok := snaps[name]
-		if name == active || !ok || s.Unavailable || s.Readings[quota.Session].Running(now) {
+		if name == active || !ok || s.Unavailable || s.NoFiveHour || s.Readings[quota.Session].Running(now) {
 			continue
 		}
 		if weekly, ok := s.Readings[quota.Main]; !ok || weekly.Util >= cfg.Thresholds.FinalCap {
