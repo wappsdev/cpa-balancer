@@ -22,6 +22,7 @@ const (
 type API interface {
 	Status() any
 	History(rangeName string) (any, error)
+	Outlook() (any, error)
 	Run() any
 	Recheck(authFile string) any // "" = every account
 	Credentials() (any, error)
@@ -48,6 +49,7 @@ var contentTypes = map[string]string{
 var routes = []struct{ method, path string }{
 	{http.MethodGet, "/status"},
 	{http.MethodGet, "/history"},
+	{http.MethodGet, "/outlook"},
 	{http.MethodPost, "/run"},
 	{http.MethodPost, "/recheck"},
 	{http.MethodGet, "/credentials"},
@@ -87,6 +89,8 @@ func Handle(req pluginapi.ManagementRequest, api API) pluginapi.ManagementRespon
 		return jsonResponse(api.Status(), nil)
 	case "GET /history":
 		return jsonResponse(api.History(req.Query.Get("range")))
+	case "GET /outlook":
+		return jsonResponse(api.Outlook())
 	case "POST /run":
 		return jsonResponse(api.Run(), nil)
 	case "POST /recheck":

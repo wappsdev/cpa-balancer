@@ -35,6 +35,12 @@ function rel(t) {
   const span = d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m` : "now";
   return span === "now" ? "just now" : future ? `in ${span}` : `${span} ago`;
 }
+// A length of seconds as "3d 13h", "5h 10m" or "12m".
+function span(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
 const when = t => `<span class="when" title="${esc(time(t))}">${esc(rel(t))}</span>`;
 const num = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
 
@@ -173,6 +179,47 @@ async function refreshStatus() {
     renderStatus(await api("GET", ROUTES + "/status"));
     showError(null);
   } catch (e) { showError(e); }
+  try { renderOutlook(await api("GET", ROUTES + "/outlook")); } catch { $("outlook").hidden = true; }
+}
+
+// What the outlook says, in words: a verdict chip and the lines under it. Pure, so it is tested.
+function outlookView(o) {
+  const clock = t => new Date(t).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const pct = x => x >= 10 ? "1000%+" : `${Math.round(x * 100)}%`;
+  const lines = [];
+  let chip = { tone: "", text: "No pace yet" };
+  if (o.verdict === "lasts") {
+    chip = { tone: "accent", text: "Lasts" };
+    lines.push(`At this pace the room lasts until the resets bring more. It would still last at ${pct(o.lasts)} of this pace.`);
+  } else if (o.verdict === "tight") {
+    chip = { tone: "warn", text: "Tight" };
+    lines.push(`At this pace the room lasts, but only up to ${pct(o.lasts)} of it: a heavier day or two runs it out.`);
+  } else if (o.verdict === "out") {
+    chip = { tone: "bad", text: "Runs out" };
+    const dry = o.dry;
+    lines.push(`At this pace the room runs out ${clock(o.stops)}${dry ? `, and stays out ${span(dry.seconds)} until ${dry.refill} resets (${clock(dry.at)})` : ""}. Work about ${100 - Math.round(o.lasts * 100)}% slower to last.`);
+    if (dry && dry.next) lines.push(dry.next.lasts ? "The refill after that lasts at this pace." : `After that refill the room runs out again, for ${span(dry.next.seconds)}.`);
+  } else {
+    lines.push("Not enough use in the last week to tell.");
+  }
+  if (o.room_seconds) lines.push(`The room open now lasts ${span(o.room_seconds)} at this pace, before any reset adds more.`);
+  if (o.pace) {
+    const p = o.pace;
+    lines.push(p.source === "measured"
+      ? `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour over the week (${p.active_per_hour.toFixed(1)} while working, about ${p.hours_per_day.toFixed(0)} h a day).`
+      : `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour, each window's own average (too little recent work to measure).`);
+  }
+  return { chip, lines, used: Math.round(o.percent) };
+}
+
+function renderOutlook(o) {
+  const card = $("outlook");
+  if (!o || o.verdict === undefined) { card.hidden = true; return; }
+  const v = outlookView(o);
+  card.hidden = false;
+  card.innerHTML = `<div class="eyebrow">All accounts · the week ahead</div>
+    <div class="outlook-head"><span class="chip ${v.chip.tone}">${esc(v.chip.text)}</span><span class="reason">${v.used}% of all the weekly room used</span></div>
+    ${v.lines.map(l => `<p class="reason">${esc(l)}</p>`).join("")}`;
 }
 
 // A config write makes CPA rebuild the plugin; read the status back once it has settled.

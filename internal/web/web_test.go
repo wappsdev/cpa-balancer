@@ -27,6 +27,7 @@ func (f *fakeAPI) History(r string) (any, error) {
 	}
 	return map[string]int{"step": 1800}, nil
 }
+func (f *fakeAPI) Outlook() (any, error) { return map[string]string{"verdict": "lasts"}, nil }
 func (f *fakeAPI) Credentials() (any, error) {
 	return ClaudeCredentials([]pluginapi.HostAuthFileEntry{
 		{ID: "claude-a.json", Provider: "claude", Email: "a@x", Status: "active", AuthIndex: "7", Path: "/secret/path"},
@@ -82,6 +83,9 @@ func TestRoutes(t *testing.T) {
 	if res.StatusCode != 200 || string(res.Body) != `[{"auth_file":"claude-a.json","email":"a@x","status":"active"}]` {
 		t.Fatalf("credentials: %d %s", res.StatusCode, res.Body)
 	}
+	if res := call(api, "GET", base+"/outlook", nil); res.StatusCode != 200 || string(res.Body) != `{"verdict":"lasts"}` {
+		t.Fatalf("outlook: %d %s", res.StatusCode, res.Body)
+	}
 	if call(api, "GET", "/v0/management/other", nil).StatusCode != 404 {
 		t.Fatal("unknown path must be 404")
 	}
@@ -89,7 +93,7 @@ func TestRoutes(t *testing.T) {
 
 func TestRegistrationListsEveryRouteAndResource(t *testing.T) {
 	reg := Registration()
-	if len(reg["routes"].([]map[string]any)) != 5 || len(reg["resources"].([]map[string]any)) != len(resources) {
+	if len(reg["routes"].([]map[string]any)) != 6 || len(reg["resources"].([]map[string]any)) != len(resources) {
 		t.Fatalf("%+v", reg)
 	}
 	menus := 0

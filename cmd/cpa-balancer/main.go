@@ -40,6 +40,7 @@ import (
 	"github.com/adnankurt/cpa-balancer/internal/config"
 	"github.com/adnankurt/cpa-balancer/internal/engine"
 	"github.com/adnankurt/cpa-balancer/internal/history"
+	"github.com/adnankurt/cpa-balancer/internal/outlook"
 	"github.com/adnankurt/cpa-balancer/internal/web"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -238,6 +239,22 @@ func (pluginAPI) History(rangeName string) (any, error) {
 		return nil, errors.New("not configured")
 	}
 	return rec.Query(rangeName, time.Now())
+}
+
+// Outlook looks a week ahead at all accounts together.
+func (pluginAPI) Outlook() (any, error) {
+	mu.Lock()
+	e, rec := current, recorder
+	mu.Unlock()
+	if e == nil || rec == nil {
+		return nil, errors.New("not configured")
+	}
+	now := time.Now()
+	h, err := rec.Query("7d", now)
+	if err != nil {
+		return nil, err
+	}
+	return outlook.Build(e.Status(), h, now), nil
 }
 
 func (a pluginAPI) Run() any {
