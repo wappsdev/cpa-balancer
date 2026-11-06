@@ -179,7 +179,7 @@ async function refreshStatus() {
     renderStatus(await api("GET", ROUTES + "/status"));
     showError(null);
   } catch (e) { showError(e); }
-  try { renderOutlook(await api("GET", ROUTES + "/outlook")); } catch { $("outlook").hidden = true; }
+  try { renderOutlook((await api("GET", ROUTES + "/outlook")).week); } catch { $("outlook").hidden = true; }
 }
 
 // What the outlook says, in words: a verdict chip and the lines under it. Pure, so it is tested.

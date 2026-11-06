@@ -1,6 +1,6 @@
-// Package outlook looks ahead at the weekly quota of all accounts together: at the pace the work
-// has gone, does the room last until the resets bring more? Pure: it takes readings and history
-// and answers numbers; the panel draws them.
+// Package outlook looks ahead at the quota of all accounts together, the weekly window and the
+// 5-hour one: at the pace the work has gone, does the room last until the resets bring more? Pure:
+// it takes readings and history and answers numbers; the panel and the HUD draw them.
 package outlook
 
 import (
@@ -10,18 +10,21 @@ import (
 )
 
 const (
-	window = 7 * 24 * time.Hour
+	Week = 7 * 24 * time.Hour
+	Five = 5 * time.Hour
 	// the work pace needs this much worked time in the history, else each window's own average is used
 	MinWork = 2 * time.Hour
 	// the largest multiple of the pace the headroom search tries
 	maxMultiple = 10.0
 )
 
-// Account is one account's weekly reading. Weight is its weekly limit in Pro plans.
+// Account is one account's reading in one window kind. Weight is its weekly limit in Pro plans;
+// Cap is the use it can reach in that window.
 type Account struct {
 	Key      string
 	Name     string
 	Weight   float64
+	Cap      float64
 	Util     float64
 	ResetsAt time.Time // zero: no reading, the window counts as closed (full room)
 }
@@ -39,6 +42,9 @@ type Pace struct {
 	ActivePerHour float64 `json:"active_per_hour"` // while working
 	HoursPerDay   float64 `json:"hours_per_day"`   // worked on a day with any work
 	Source        string  `json:"source"`          // measured (history) or average (each window's own)
+	// Each account's own percent an hour over the calendar, by key (measured only): an account
+	// with no use of its own in the history is paced by the work, in its own percent.
+	Accounts map[string]float64 `json:"accounts,omitempty"`
 }
 
 // Next is the stretch after the refill at the same pace.
@@ -76,9 +82,19 @@ type pool struct {
 	room, cap, over float64 // over: resets at, seconds from now (+Inf: closed)
 }
 
-// Compute combines the accounts against finalCap. `measured` is the work pace from the history
-// (nil: each open window's own average).
-func Compute(accounts []Account, finalCap float64, measured *Pace, now time.Time) Outlook {
+// Both is the outlook of each window kind; one with fewer than two accounts is left out. Pace is
+// the weekly work pace measured from the history, with each account's own: it paces each
+// account's flag too, so it stands apart from the combined outlook (nil: too little work).
+type Both struct {
+	Week     *Outlook `json:"week,omitempty"`
+	FiveHour *Outlook `json:"five_hour,omitempty"`
+	Pace     *Pace    `json:"pace,omitempty"`
+}
+
+// Compute combines the accounts over a window of length `window`, each against its own cap.
+// `measured` is the work pace from the history (nil: each open window's own average). False with
+// fewer than two accounts: there is nothing to combine.
+func Compute(accounts []Account, window time.Duration, measured *Pace, now time.Time) (Outlook, bool) {
 	w := weightsOf(accounts)
 	var used, total, average float64
 	soonest := math.Inf(1)
@@ -89,9 +105,9 @@ func Compute(accounts []Account, finalCap float64, measured *Pace, now time.Time
 		if open {
 			util = a.Util
 		}
-		used += math.Min(util, finalCap) * w[i]
-		total += finalCap * w[i]
-		p := pool{key: a.Key, name: a.Name, room: math.Max(0, finalCap-util) * w[i], cap: finalCap * w[i], over: math.Inf(1)}
+		used += math.Min(util, a.Cap) * w[i]
+		total += a.Cap * w[i]
+		p := pool{key: a.Key, name: a.Name, room: math.Max(0, a.Cap-util) * w[i], cap: a.Cap * w[i], over: math.Inf(1)}
 		if open {
 			p.over = a.ResetsAt.Sub(now).Seconds()
 			elapsed := window.Seconds() - p.over
@@ -103,8 +119,9 @@ func Compute(accounts []Account, finalCap float64, measured *Pace, now time.Time
 		pools = append(pools, p)
 	}
 	if len(pools) < 2 || total == 0 {
-		return Outlook{Verdict: "unknown"}
+		return Outlook{}, false
 	}
+	span := window.Seconds()
 	o := Outlook{Percent: used / total * 100, Verdict: "unknown"}
 	var speed float64 // points a second
 	switch {
@@ -122,10 +139,10 @@ func Compute(accounts []Account, finalCap float64, measured *Pace, now time.Time
 		room += p.room
 	}
 	if speed <= 0 || room <= 0 || math.IsInf(soonest, 1) {
-		return o
+		return o, true
 	}
 	o.RoomSeconds = room / speed
-	stop := runOut(pools, speed, 0, window.Seconds())
+	stop := runOut(pools, speed, 0, span, span)
 	switch {
 	case stop != nil:
 		o.Verdict = "out"
@@ -133,22 +150,22 @@ func Compute(accounts []Account, finalCap float64, measured *Pace, now time.Time
 		o.Stops = &at
 		if !math.IsInf(stop.at, 1) {
 			d := &Dry{Seconds: math.Max(0, stop.at-stop.seconds), Refill: stop.refill, At: now.Add(secs(stop.at))}
-			d.Next = afterRefill(stop, speed)
+			d.Next = afterRefill(stop, speed, span)
 			o.Dry = d
 		}
-	case runOut(pools, speed*1.2, 0, window.Seconds()) != nil:
+	case runOut(pools, speed*1.2, 0, span, span) != nil:
 		o.Verdict = "tight"
 	default:
 		o.Verdict = "lasts"
 	}
 	// the largest multiple of the pace that lasts the window (bisection)
 	lo, hi := 0.0, maxMultiple
-	if runOut(pools, speed*hi, 0, window.Seconds()) == nil {
+	if runOut(pools, speed*hi, 0, span, span) == nil {
 		lo = hi
 	}
 	for i := 0; i < 30 && lo != hi && hi-lo > 1e-4; i++ {
 		mid := (lo + hi) / 2
-		if runOut(pools, speed*mid, 0, window.Seconds()) == nil {
+		if runOut(pools, speed*mid, 0, span, span) == nil {
 			lo = mid
 		} else {
 			hi = mid
@@ -156,7 +173,7 @@ func Compute(accounts []Account, finalCap float64, measured *Pace, now time.Time
 	}
 	o.Lasts = lo
 
-	return o
+	return o, true
 }
 
 func secs(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
@@ -184,8 +201,9 @@ type stop struct {
 
 // runOut: when every account is out of room at `rate` points a second, from `from` to `end`
 // (seconds from now), and the reset that brings room back; nil when the room lasts. Use drains the
-// account that resets first (the balancer's order); a reset refills that account to its cap.
-func runOut(start []pool, rate, from, end float64) *stop {
+// account that resets first (the balancer's order); a reset refills that account to its cap and
+// starts its next window, `span` seconds long.
+func runOut(start []pool, rate, from, end, span float64) *stop {
 	pools := append([]pool(nil), start...)
 	t := from
 	for {
@@ -230,22 +248,22 @@ func runOut(start []pool, rate, from, end float64) *stop {
 		for i := range pools {
 			if pools[i].over == next {
 				pools[i].room = pools[i].cap
-				pools[i].over += window.Seconds()
+				pools[i].over += span
 			}
 		}
 	}
 }
 
 // afterRefill: the stretch after the refill at the same pace, up to two windows from now.
-func afterRefill(s *stop, rate float64) *Next {
+func afterRefill(s *stop, rate, span float64) *Next {
 	pools := append([]pool(nil), s.pools...)
 	for i := range pools {
 		if pools[i].over == s.at {
 			pools[i].room = pools[i].cap
-			pools[i].over += window.Seconds()
+			pools[i].over += span
 		}
 	}
-	again := runOut(pools, rate, s.at, 2*window.Seconds())
+	again := runOut(pools, rate, s.at, 2*span, span)
 	switch {
 	case again == nil:
 		return &Next{Lasts: true}
@@ -266,17 +284,17 @@ func workPace(h Series, weights map[string]float64, minActive float64) *Pace {
 	var total float64
 	active := 0
 	days := map[int64]bool{}
+	risen := map[string]float64{}
+	worked := map[string]int{}
 	for i := 1; i < len(h.T); i++ {
 		var rise float64
 		for name, series := range h.Main {
 			if i >= len(series) || series[i] == nil || series[i-1] == nil || *series[i] <= *series[i-1] {
 				continue
 			}
-			wt, ok := weights[name]
-			if !ok {
-				wt = 1
-			}
-			rise += (*series[i] - *series[i-1]) * wt
+			risen[name] += *series[i] - *series[i-1]
+			worked[name]++
+			rise += (*series[i] - *series[i-1]) * weightOf(weights, name)
 		}
 		if rise <= 0 {
 			continue
@@ -290,8 +308,24 @@ func workPace(h Series, weights map[string]float64, minActive float64) *Pace {
 	}
 	activePerSecond := total / (float64(active) * step)
 	hoursPerDay := float64(active) * step / 3600 / float64(len(days))
+	share := hoursPerDay / 24
+	accounts := map[string]float64{}
+	for name := range h.Main {
+		own := activePerSecond / weightOf(weights, name)
+		if worked[name] > 0 {
+			own = risen[name] / (float64(worked[name]) * step)
+		}
+		accounts[name] = own * 3600 * share
+	}
 
-	return &Pace{PerHour: activePerSecond * 3600 * hoursPerDay / 24, ActivePerHour: activePerSecond * 3600, HoursPerDay: hoursPerDay}
+	return &Pace{PerHour: activePerSecond * 3600 * share, ActivePerHour: activePerSecond * 3600, HoursPerDay: hoursPerDay, Accounts: accounts}
+}
+
+func weightOf(weights map[string]float64, name string) float64 {
+	if wt, ok := weights[name]; ok {
+		return wt
+	}
+	return 1
 }
 
 // MeasurePace reads the work pace from a history with the accounts' weights.
