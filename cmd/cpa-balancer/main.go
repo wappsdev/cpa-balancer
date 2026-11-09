@@ -254,7 +254,7 @@ func (pluginAPI) Outlook() (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return outlook.Build(e.Status(), e.Config(), h, now), nil
+	return outlook.Build(e.Status(), e.Config(), h, now)
 }
 
 func (a pluginAPI) Run() any {

@@ -34,6 +34,16 @@ func compute(t *testing.T, accounts []Account, measured *Pace) Outlook {
 	return o
 }
 
+// build is Build with no configured accounts, which must not fail.
+func build(t *testing.T, v engine.View, h history.Series) Both {
+	t.Helper()
+	o, err := Build(v, config.Config{}, h, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
 // History with one rise per account: `rises` points in each of `n` half-hour steps ending now.
 func rising(key string, n int, perStep float64) Series {
 	s := Series{Step: 1800, Main: map[string][]*float64{}}
@@ -121,7 +131,7 @@ func TestBuildReadsStatusAndHistory(t *testing.T) {
 		{AuthFile: "a", Name: "A", Weight: 10, FiveHour: true, Caps: caps, Readings: r(20)},
 		{AuthFile: "b", Name: "B", Weight: 1, FiveHour: true, Caps: caps, Readings: r(0)},
 	}}
-	o := Build(v, config.Config{}, history.Series{Step: 1800}, now)
+	o := build(t, v, history.Series{Step: 1800})
 	// no history: each window's own average; weekly against the final cap, not the account's
 	if o.Week == nil || o.Week.Pace == nil || o.Week.Pace.Source != "average" {
 		t.Fatalf("%+v", o.Week)
@@ -138,7 +148,7 @@ func TestBuildReadsStatusAndHistory(t *testing.T) {
 	}
 	// an account without a 5-hour limit has no 5-hour room: one left, nothing to combine
 	v.Accounts[1].FiveHour = false
-	if o := Build(v, config.Config{}, history.Series{Step: 1800}, now); o.FiveHour != nil || o.Week == nil {
+	if o := build(t, v, history.Series{Step: 1800}); o.FiveHour != nil || o.Week == nil {
 		t.Fatalf("%+v", o)
 	}
 }
@@ -149,7 +159,7 @@ func TestFiveHourClosedWindowIsFullRoomAndDefaultCap(t *testing.T) {
 		{AuthFile: "a", Weight: 1, FiveHour: true, Readings: quota.Readings{quota.Session: {Util: 49, ResetsAt: &session}}},
 		{AuthFile: "b", Weight: 1, FiveHour: true, Readings: quota.Readings{quota.Session: {Util: 30}}},
 	}}
-	o := Build(v, config.Config{}, history.Series{Step: 1800}, now).FiveHour
+	o := build(t, v, history.Series{Step: 1800}).FiveHour
 	// 98 a window when the balancer reports no cap; b's window is not running: 0 used of 98
 	if o == nil {
 		t.Fatal("five-hour outlook expected")
@@ -205,22 +215,22 @@ func TestFollowsResetsThroughToTheNextOne(t *testing.T) {
 	}
 }
 
-// gmail has used 40 and resets in 48 h; wapps has used 98 and resets in 120 h; both are weight 1, cap
+// first has used 40 and resets in 48 h; second has used 98 and resets in 120 h; both are weight 1, cap
 // 100, and the week is 168 h.
-func gmailAndWapps() []Account {
+func firstAndSecond() []Account {
 	return []Account{
-		{Key: "gmail", Name: "gmail", Weight: 1, Cap: 100, Util: 40, ResetsAt: in(48)},
-		{Key: "wapps", Name: "wapps", Weight: 1, Cap: 100, Util: 98, ResetsAt: in(120)},
+		{Key: "first", Name: "first", Weight: 1, Cap: 100, Util: 40, ResetsAt: in(48)},
+		{Key: "second", Name: "second", Weight: 1, Cap: 100, Util: 98, ResetsAt: in(120)},
 	}
 }
 
 func TestRunsOutCountsTheResetsAndTheStretchAfterTheLastOne(t *testing.T) {
 	// At 1.25 points an hour:
-	//   0-48 h: 60 needed, gmail's 60 go; wapps keeps its 2. At 48 h gmail refills to 100 (not 60).
-	//   48-120 h: 90 needed; wapps's 2, then 88 of gmail's 100: gmail 12 left. At 120 h wapps refills to 100.
-	//   120 h on, no reset until gmail's second at 216 h: 112 left (12 + 100) last 89.6 h, so the room
+	//   0-48 h: 60 needed, first's 60 go; second keeps its 2. At 48 h first refills to 100 (not 60).
+	//   48-120 h: 90 needed; second's 2, then 88 of first's 100: first 12 left. At 120 h second refills to 100.
+	//   120 h on, no reset until first's next one at 216 h: 112 left (12 + 100) last 89.6 h, so the room
 	//   runs out at 209.6 h, 6.4 h before it. The room open now alone (62) would last 49.6 h.
-	o := compute(t, gmailAndWapps(), &Pace{PerHour: 1.25})
+	o := compute(t, firstAndSecond(), &Pace{PerHour: 1.25})
 	// one window (168 h) still holds: the verdict keeps its meaning, 1.5 an hour does not last
 	if o.Verdict != "tight" || o.Dry != nil {
 		t.Fatalf("%+v", o)
@@ -235,8 +245,8 @@ func TestRunsOutCountsTheResetsAndTheStretchAfterTheLastOne(t *testing.T) {
 }
 
 func TestRunsOutIsAbsentWhenTheRoomLastsBothWindows(t *testing.T) {
-	// 0.5 an hour: every stretch holds through 336 h (gmail ends 18 at 216 h, wapps 64 at 288 h)
-	o := compute(t, gmailAndWapps(), &Pace{PerHour: 0.5})
+	// 0.5 an hour: every stretch holds through 336 h (first ends 18 at 216 h, second 64 at 288 h)
+	o := compute(t, firstAndSecond(), &Pace{PerHour: 0.5})
 	if o.Verdict != "lasts" || o.RunsOut != nil {
 		t.Fatalf("%+v", o)
 	}
@@ -274,7 +284,7 @@ func TestOneAccountStillHasItsMeasuredPace(t *testing.T) {
 	}}
 	s := rising("a", 6, 1)
 	h := history.Series{Step: s.Step, T: s.T, Accounts: map[string]*history.AccountSeries{"a": {Main: s.Main["a"]}}}
-	o := Build(v, config.Config{}, h, now)
+	o := build(t, v, h)
 	// nothing to combine, but the pane still has the measured pace
 	if o.Week != nil || o.Pace == nil || o.Pace.Source != "measured" {
 		t.Fatalf("%+v %+v", o.Week, o.Pace)

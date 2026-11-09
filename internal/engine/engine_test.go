@@ -469,6 +469,15 @@ func TestStatusReportsWhichCredentialsCPAHoldsBack(t *testing.T) {
 	if v.Accounts[0].Unavailable || !v.Accounts[1].Unavailable {
 		t.Fatalf("unavailable per account: %v %v", v.Accounts[0].Unavailable, v.Accounts[1].Unavailable)
 	}
+	// a cooldown ends at a reset; a credential switched off by hand stays off, and says so
+	if v.Accounts[1].Disabled {
+		t.Fatal("a cooldown is not a hand disable")
+	}
+	h.files[0].Disabled = true
+	e.Tick()
+	if v := e.Status(); !v.Accounts[0].Unavailable || !v.Accounts[0].Disabled {
+		t.Fatalf("disabled: %+v", v.Accounts[0])
+	}
 }
 
 func TestRecheckDoesNotReportADisabledCredentialAsLocked(t *testing.T) {

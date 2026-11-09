@@ -29,6 +29,7 @@ type AccountView struct {
 	Plan         string                     `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
 	Weight       float64                    `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
 	Unavailable  bool                       `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
+	Disabled     bool                       `json:"disabled"`         // switched off by hand: no reset brings it back
 	Readings     quota.Readings             `json:"readings"`
 	Eligibility  map[quota.Bucket]string    `json:"eligibility"`
 	Caps         map[quota.Bucket]float64   `json:"caps"`                // the switch threshold in force per bucket
@@ -62,7 +63,7 @@ func (e *Engine) Status() View {
 	for _, a := range e.cfg.Accounts {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
-		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, SessionSteps: a.SessionSteps, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable,
+		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, SessionSteps: a.SessionSteps, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable, Disabled: cred.disabled,
 			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}, NextCaps: map[quota.Bucket]NextCap{}, Reopens: map[quota.Bucket]time.Time{}}
 		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour

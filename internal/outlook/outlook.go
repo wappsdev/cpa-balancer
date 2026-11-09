@@ -29,11 +29,12 @@ type Account struct {
 	ResetsAt time.Time // zero: no reading, the window counts as closed (full room)
 }
 
-// Series is the history's weekly utilization per account and step.
+// Series is the history's weekly and 5-hour utilization per account and step.
 type Series struct {
-	Step int64
-	T    []int64
-	Main map[string][]*float64
+	Step    int64
+	T       []int64
+	Main    map[string][]*float64
+	Session map[string][]*float64
 }
 
 // Pace is how fast quota goes, in Pro-plan points an hour.
@@ -107,7 +108,8 @@ type Both struct {
 // drains the account that resets first. `measured` is the work pace from the history (nil: each
 // open window's own average). False with fewer than two accounts: there is nothing to combine.
 func Compute(accounts []Account, window time.Duration, measured *Pace, now time.Time) (Outlook, bool) {
-	return look(accounts, window, measured, now, nil)
+	o, ok, _ := look(accounts, window, measured, now, nil) // the pools' drain never fails
+	return o, ok
 }
 
 // spell is a stretch with no room, in seconds from now: from the stop to the refill (+Inf: none
@@ -126,12 +128,28 @@ type run struct {
 
 // drain runs the use at `rate` points a second through the accounts, up to `end` seconds from
 // now: every dry spell that starts before it.
-type drain func(rate, end float64) run
+type drain func(rate, end float64) (run, error)
+
+// windowAverage is how fast the open windows have been used since each opened, in Pro-plan points
+// a second; a window in its first twentieth is too young to count.
+func windowAverage(accounts []Account, window time.Duration, now time.Time) float64 {
+	w := weightsOf(accounts)
+	var average float64
+	for i, a := range accounts {
+		if a.ResetsAt.IsZero() || !a.ResetsAt.After(now) || a.Util <= 0 {
+			continue
+		}
+		if elapsed := window.Seconds() - a.ResetsAt.Sub(now).Seconds(); elapsed >= window.Seconds()/20 {
+			average += a.Util * w[i] / elapsed
+		}
+	}
+	return average
+}
 
 // look is Compute with the use moved by `d` (nil: the account that resets first takes it).
-func look(accounts []Account, window time.Duration, measured *Pace, now time.Time, d drain) (Outlook, bool) {
+func look(accounts []Account, window time.Duration, measured *Pace, now time.Time, d drain) (Outlook, bool, error) {
 	w := weightsOf(accounts)
-	var used, total, average float64
+	var used, total float64
 	soonest := math.Inf(1)
 	var pools []pool
 	for i, a := range accounts {
@@ -145,21 +163,17 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 		p := pool{key: a.Key, name: a.Name, room: math.Max(0, a.Cap-util) * w[i], cap: a.Cap * w[i], over: math.Inf(1)}
 		if open {
 			p.over = a.ResetsAt.Sub(now).Seconds()
-			elapsed := window.Seconds() - p.over
 			soonest = math.Min(soonest, p.over)
-			if util > 0 && elapsed >= window.Seconds()/20 {
-				average += util * w[i] / elapsed
-			}
 		}
 		pools = append(pools, p)
 	}
 	if len(pools) < 2 || total == 0 {
-		return Outlook{}, false
+		return Outlook{}, false, nil
 	}
 	span := window.Seconds()
 	o := Outlook{Percent: used / total * 100, Verdict: "unknown"}
 	var speed float64 // points a second
-	switch {
+	switch average := windowAverage(accounts, window, now); {
 	case measured != nil:
 		speed = measured.PerHour / 3600
 		pc := *measured
@@ -169,21 +183,26 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 		speed = average
 		o.Pace = &Pace{PerHour: average * 3600, Source: "average"}
 	}
-	var room float64
-	for _, p := range pools {
-		room += p.room
+	// a room already out is looked at too: it says when room comes back
+	if speed <= 0 || math.IsInf(soonest, 1) {
+		return o, true, nil
 	}
-	if speed <= 0 || room <= 0 || math.IsInf(soonest, 1) {
-		return o, true
+	if d == nil {
+		d = poolsDrain(pools, span)
+	}
+	var err error
+	try := func(rate, end float64) run {
+		r, e := d(rate, end)
+		if err == nil {
+			err = e
+		}
+		return r
 	}
 	// the verdict looks one window ahead; the moment the room runs out, two, so the stretch after
 	// the last reset of the first window counts
 	horizon := now.Add(secs(2 * span))
 	o.Horizon = &horizon
-	if d == nil {
-		d = poolsDrain(pools, span)
-	}
-	ahead := d(speed, 2*span)
+	ahead := try(speed, 2*span)
 	o.Accounts = ahead.accounts
 	if len(ahead.spells) > 0 {
 		at := now.Add(secs(ahead.spells[0].from))
@@ -204,27 +223,30 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 				o.Dry.Next = &Next{Seconds: math.Max(0, ahead.spells[1].to-ahead.spells[1].from)}
 			}
 		}
-	case out(d(speed*1.2, span)):
+	case out(try(speed*1.2, span)):
 		o.Verdict = "tight"
 	default:
 		o.Verdict = "lasts"
 	}
 	// the largest multiple of the pace that lasts the window (bisection)
 	lo, hi := 0.0, maxMultiple
-	if !out(d(speed*hi, span)) {
+	if !out(try(speed*hi, span)) {
 		lo = hi
 	}
-	for i := 0; i < 30 && lo != hi && hi-lo > 1e-4; i++ {
+	for i := 0; i < 30 && lo != hi && hi-lo > 1e-4 && err == nil; i++ {
 		mid := (lo + hi) / 2
-		if !out(d(speed*mid, span)) {
+		if !out(try(speed*mid, span)) {
 			lo = mid
 		} else {
 			hi = mid
 		}
 	}
 	o.Lasts = lo
+	if err != nil {
+		return Outlook{}, false, err
+	}
 
-	return o, true
+	return o, true, nil
 }
 
 func secs(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
@@ -248,7 +270,7 @@ func weightsOf(accounts []Account) []float64 {
 // and starts its next window, `span` seconds long. With every account out of room, the next reset
 // brings room back.
 func poolsDrain(start []pool, span float64) drain {
-	return func(rate, end float64) run {
+	return func(rate, end float64) (run, error) {
 		pools := append([]pool(nil), start...)
 		refill := func(at float64) {
 			for i := range pools {
@@ -279,7 +301,7 @@ func poolsDrain(start []pool, span float64) drain {
 				}
 				out.spells = append(out.spells, spell{from: t + room/rate, to: back.over, refill: back.name})
 				if back.over >= end {
-					return out
+					return out, nil
 				}
 				for i := range pools {
 					pools[i].room = 0
@@ -301,7 +323,7 @@ func poolsDrain(start []pool, span float64) drain {
 				left -= take
 			}
 			if next >= end {
-				return out
+				return out, nil
 			}
 			t = next
 			refill(next)

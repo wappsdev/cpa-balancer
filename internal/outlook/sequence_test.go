@@ -4,27 +4,34 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wappsdev/cpa-balancer/internal/config"
 	"github.com/wappsdev/cpa-balancer/internal/engine"
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/policy"
 	"github.com/wappsdev/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/state"
 )
 
 // seat is one account of a sequence test: its weekly use, its reset in hours from now, its weight
-// and, with steps, a custom reserve.
+// and, with steps, a custom reserve; with `five`, its 5-hour window.
 type seat struct {
 	key           string
 	util, resets  float64
 	weight        float64
 	steps         []config.ReserveStep
+	five          *five
 	unavailable   bool
+	disabled      bool
 	notConfigured bool
 }
 
-// world is the status and the configuration of accounts with only a weekly reading; `active` is
-// the balancer's pick now, and every account reaches `final` once reserves are released.
+// five is a 5-hour window: its use and its reset in hours from now (0: closed, not started).
+type five struct{ util, resets float64 }
+
+// world is the status and the configuration of accounts; `active` is the balancer's pick now, and
+// every account reaches `final` once reserves are released.
 func world(final float64, active string, seats ...seat) (engine.View, config.Config) {
 	cfg := config.Default()
 	cfg.Thresholds.FinalCap = final
@@ -38,18 +45,40 @@ func world(final float64, active string, seats ...seat) (engine.View, config.Con
 			cfg.Accounts = append(cfg.Accounts, a)
 		}
 		reset := in(s.resets)
-		v.Accounts = append(v.Accounts, engine.AccountView{AuthFile: s.key, Name: strings.ToUpper(s.key), Weight: s.weight,
-			Listed: true, Unavailable: s.unavailable, Readings: quota.Readings{quota.Main: {Util: s.util, ResetsAt: &reset, ObservedAt: now}}})
+		av := engine.AccountView{AuthFile: s.key, Name: strings.ToUpper(s.key), Weight: s.weight, Listed: true,
+			Unavailable: s.unavailable || s.disabled, Disabled: s.disabled, FiveHour: s.five != nil,
+			Readings: quota.Readings{quota.Main: {Util: s.util, ResetsAt: &reset, ObservedAt: now}}}
+		if s.five != nil {
+			r := quota.Reading{Util: s.five.util, ObservedAt: now}
+			if s.five.resets > 0 {
+				at := in(s.five.resets)
+				r.ResetsAt = &at
+			}
+			av.Readings[quota.Session] = r
+		}
+		v.Accounts = append(v.Accounts, av)
 	}
 	return v, cfg
 }
 
-// week is the weekly outlook at `perHour` Pro-plan points an hour.
+// week is the weekly outlook at `perHour` Pro-plan points an hour, with no 5-hour pace.
 func week(t *testing.T, perHour float64, v engine.View, cfg config.Config) Outlook {
 	t.Helper()
-	o, ok := weekly(v, cfg, &Pace{PerHour: perHour}, now)
-	if !ok {
-		t.Fatal("two accounts or more combine")
+	return weekAt(t, perHour, 0, v, cfg)
+}
+
+// weekAt is the weekly outlook with every 5-hour window used at `sessionPerHour` percent an hour.
+func weekAt(t *testing.T, perHour, sessionPerHour float64, v engine.View, cfg config.Config) Outlook {
+	t.Helper()
+	sessions := map[string]float64{}
+	for _, a := range v.Accounts {
+		if sessionPerHour > 0 {
+			sessions[a.AuthFile] = sessionPerHour / 3600
+		}
+	}
+	o, ok, err := weekly(v, cfg, &Pace{PerHour: perHour}, sessions, now)
+	if err != nil || !ok {
+		t.Fatalf("two accounts or more combine: %v", err)
 	}
 	return o
 }
@@ -169,35 +198,152 @@ func TestReservesAreReleasedAndTheLastAccountExhausts(t *testing.T) {
 	near(t, "dry hours", o.Dry.Seconds/3600, 80, 1e-6)
 }
 
-func TestAnUnavailableOrUnconfiguredAccountTakesNoTurn(t *testing.T) {
-	// B is held back by CPA and C is not in the balancer's configuration: A's 20 points go in
-	// 10 h and the room is out, though B and C have room.
+func TestACooledAccountComesBackAtItsWeeklyResetADisabledOrUnconfiguredOneNever(t *testing.T) {
+	// B is cooled by CPA after its weekly 429, D is switched off by hand and C is not in the
+	// balancer's configuration. A's 20 points go in 10 h and the room is out; B's reset at 50 h
+	// ends its cooldown and brings room back, though D (reset at 30 h) and C have room.
 	v, cfg := world(100, "a",
 		seat{key: "a", util: 80, resets: 100, weight: 1},
-		seat{key: "b", util: 0, resets: 50, weight: 1, unavailable: true},
-		seat{key: "c", util: 0, resets: 60, weight: 1, notConfigured: true})
+		seat{key: "b", util: 100, resets: 50, weight: 1, unavailable: true},
+		seat{key: "c", util: 0, resets: 60, weight: 1, notConfigured: true},
+		seat{key: "d", util: 0, resets: 30, weight: 1, disabled: true})
 	o := week(t, 2, v, cfg)
 	got, exhausts := handoffs(t, o)
 	near(t, "a", got["a"], 10, 1e-6)
-	if exhausts != "a" || got["b"] != -1 || got["c"] != -1 {
+	if exhausts != "a" || got["b"] != -1 || got["c"] != -1 || got["d"] != -1 {
 		t.Fatalf("handoffs %v, exhausts %q", got, exhausts)
 	}
 	near(t, "runs out", o.RunsOut.Sub(now).Hours(), 10, 1e-6)
+	if o.Dry == nil || o.Dry.Refill != "B" {
+		t.Fatalf("%+v", o.Dry)
+	}
+	near(t, "dry hours", o.Dry.Seconds/3600, 40, 1e-6)
 }
 
-func TestTheSequenceFollowsResetsLikeThePools(t *testing.T) {
+func TestACooldownFromTheFiveHourWindowEndsAtItsReset(t *testing.T) {
+	// B was cooled after a 5-hour 429 (its window full, resetting in 2 h). At one point an hour B,
+	// the earlier weekly reset, then takes the work from A (82% by then) until B's weekly reset at
+	// 50 h, and A goes on from 82% to 100 at 68 h. Held for good, B would leave A to fill at 20 h.
+	v, cfg := world(100, "a",
+		seat{key: "a", util: 80, resets: 100, weight: 1},
+		seat{key: "b", util: 0, resets: 50, weight: 1, unavailable: true, five: &five{util: 100, resets: 2}})
+	got, exhausts := handoffs(t, week(t, 1, v, cfg))
+	near(t, "a", got["a"], 68, 1e-6)
+	if got["b"] != -1 || exhausts != "" {
+		t.Fatalf("handoffs %v, exhausts %q", got, exhausts)
+	}
+}
+
+func TestTheSimulationStartsOnTheLiveAccountAndKeepsItsDwell(t *testing.T) {
+	// A has the earlier weekly reset (20 h) but its 5-hour window is full until 30 minutes from
+	// now, so the balancer is on B (99.3%). At one point an hour B reaches its cap at 42 minutes.
+	v, cfg := world(100, "b",
+		seat{key: "a", util: 0, resets: 20, weight: 1, five: &five{util: 98, resets: 0.5}},
+		seat{key: "b", util: 99.3, resets: 100, weight: 1, five: &five{util: 10, resets: 4}})
+	// with no switch in the view the dwell counts as passed: A takes the work back at 30 minutes
+	// (B at 99.8%), and B only gets it again after A's reset at 20 h, reaching its cap at 20.2 h
+	got, _ := handoffs(t, week(t, 1, v, cfg))
+	near(t, "b without a dwell", got["b"], 20.2, 1e-6)
+	// the balancer moved to B 10 minutes ago, so it stays there for its dwell (to 50 minutes):
+	// B reaches its cap first
+	v.Changes = []state.Change{{At: now.Add(-10 * time.Minute), Bucket: quota.Main, From: "a", To: "b"}}
+	got, _ = handoffs(t, week(t, 1, v, cfg))
+	near(t, "b", got["b"], 0.7, 1e-6)
+}
+
+func TestTheFiveHourWindowMovesTheWorkAsLive(t *testing.T) {
+	// A has the earlier weekly reset (40 h) but its 5-hour window is full until 3 h from now, so
+	// the balancer is on B. Two points an hour on the week, 20% an hour on a 5-hour window:
+	//   B 95 -> 100 at 2.5 h (its 5-hour window, started at 0, at 50%): B hands off. A is still
+	//   held, but the week has room, so this is a wait, not a run-out.
+	//   At 3 h A's window resets; A starts a new one and fills it (98%) at 7.9 h, its week at 99.8.
+	//   A waits for that window's reset at 8 h, then reaches 100 at 8.1 h: no account has room left.
+	v, cfg := world(100, "b",
+		seat{key: "a", util: 90, resets: 40, weight: 1, five: &five{util: 98, resets: 3}},
+		seat{key: "b", util: 95, resets: 100, weight: 1, five: &five{util: 0, resets: 0}})
+	o := weekAt(t, 2, 20, v, cfg)
+	got, exhausts := handoffs(t, o)
+	near(t, "b", got["b"], 2.5, 1e-6)
+	near(t, "a", got["a"], 8.1, 1e-6)
+	if exhausts != "a" {
+		t.Fatalf("exhausts %q", exhausts)
+	}
+	near(t, "runs out", o.RunsOut.Sub(now).Hours(), 8.1, 1e-6)
+}
+
+func TestTheRunOutIsMarkedInAnyWindow(t *testing.T) {
 	// The pools' case without reserves (TestFollowsResetsThroughToTheNextOne): the balancer's
 	// order gives the same run-out, 101.6 h. G hands off at 94/1.91 = 49.2 h to W, refilled at
-	// 14 h; the room runs out on W in its next window, so no account's current window marks it.
+	// 14 h; the room runs out on W in its next window, and W is marked there.
 	v, cfg := world(100, "g", seat{key: "w", util: 100, resets: 14, weight: 1}, seat{key: "g", util: 6, resets: 137, weight: 1})
 	o := week(t, 1.91, v, cfg)
 	near(t, "runs out in hours", o.RunsOut.Sub(now).Hours(), 101.6, 0.05)
 	near(t, "dry hours", o.Dry.Seconds/3600, 35.4, 0.05)
 	got, exhausts := handoffs(t, o)
-	if exhausts != "" || got["w"] != -1 {
+	if exhausts != "w" {
 		t.Fatalf("handoffs %v, exhausts %q", got, exhausts)
 	}
+	near(t, "w", got["w"], o.RunsOut.Sub(now).Hours(), 1e-9)
 	near(t, "g", got["g"], 94/1.91, 1e-6)
+}
+
+func TestARoomAlreadyOutIsMarkedOnTheLiveAccount(t *testing.T) {
+	v, cfg := world(100, "a", seat{key: "a", util: 100, resets: 50, weight: 1}, seat{key: "b", util: 100, resets: 60, weight: 1})
+	o := week(t, 1, v, cfg)
+	got, exhausts := handoffs(t, o)
+	if exhausts != "a" || got["a"] != 0 || o.RunsOut == nil || !o.RunsOut.Equal(now) {
+		t.Fatalf("handoffs %v, exhausts %q, runs out %v", got, exhausts, o.RunsOut)
+	}
+	if o.Verdict != "out" || o.Dry == nil || o.Dry.Refill != "A" {
+		t.Fatalf("%+v %+v", o, o.Dry)
+	}
+}
+
+func TestACapReachedAtAnotherEventStillHandsOff(t *testing.T) {
+	// A reaches 100 at 10 h, the very moment B resets
+	v, cfg := world(100, "a", seat{key: "a", util: 80, resets: 100, weight: 1}, seat{key: "b", util: 100, resets: 10, weight: 1})
+	got, _ := handoffs(t, week(t, 2, v, cfg))
+	near(t, "a", got["a"], 10, 1e-6)
+}
+
+func TestAResetAlreadyPastStartsTheNextWindow(t *testing.T) {
+	// A's last reading says 99% and a reset 2 h ago: it is at 0% now, resetting in 166 h, so B
+	// (resets in 60 h) goes first, to 100 at 50 h, and A after it, to 100 at 100 h, inside A's
+	// window. B, refilled at 60 h, then runs out at 150 h: its flag is that run-out.
+	v, cfg := world(100, "a", seat{key: "a", util: 99, resets: -2, weight: 1}, seat{key: "b", util: 0, resets: 60, weight: 1})
+	got, exhausts := handoffs(t, week(t, 2, v, cfg))
+	near(t, "a", got["a"], 100, 1e-6)
+	near(t, "b", got["b"], 150, 1e-6)
+	if exhausts != "b" {
+		t.Fatalf("exhausts %q", exhausts)
+	}
+}
+
+func TestTheSimulationStopsWithAnErrorRatherThanRunOn(t *testing.T) {
+	defer func(n int) { maxEvents = n }(maxEvents)
+	maxEvents = 2
+	v, cfg := world(100, "a", seat{key: "a", util: 80, resets: 100, weight: 1}, seat{key: "b", util: 90, resets: 120, weight: 1})
+	if _, _, err := weekly(v, cfg, &Pace{PerHour: 2}, nil, now); err == nil {
+		t.Fatal("an error expected")
+	}
+}
+
+func TestSessionPacesComeFromTheHistoryElseTheFiveHourAverage(t *testing.T) {
+	// A's 5-hour window rose 3 points a step for 4 steps of 30 minutes: 6% an hour while working.
+	// B has no 5-hour use of its own: the 5-hour windows' average now, 10 Pro points over 2 h of
+	// A's window (weight 1), is 5 an hour, 2.5% an hour of B (weight 2).
+	v, _ := world(100, "a",
+		seat{key: "a", util: 0, resets: 100, weight: 1, five: &five{util: 10, resets: 3}},
+		seat{key: "b", util: 0, resets: 100, weight: 2, five: &five{util: 0, resets: 0}})
+	s := Series{Step: 1800, Main: map[string][]*float64{}, Session: map[string][]*float64{}}
+	x := func(f float64) *float64 { return &f }
+	for i, a := range []float64{0, 3, 6, 9, 12, 12} {
+		s.T = append(s.T, now.Add(-time.Duration(5-i)*30*time.Minute).Unix())
+		s.Session["a"] = append(s.Session["a"], x(a))
+	}
+	got := sessionPaces(v, s, now)
+	near(t, "a", got["a"]*3600, 6, 1e-9)
+	near(t, "b", got["b"]*3600, 2.5, 1e-9)
 }
 
 func TestHandoffsInTheJSON(t *testing.T) {
@@ -211,8 +357,8 @@ func TestHandoffsInTheJSON(t *testing.T) {
 		t.Fatalf("%s", b)
 	}
 	// the 5-hour window has no sequence
-	five, _ := Compute([]Account{{Key: "a", Weight: 1, Cap: 98, Util: 10, ResetsAt: in(2)}, {Key: "b", Weight: 1, Cap: 98, Util: 10, ResetsAt: in(3)}}, Five, nil, now)
-	if b, _ := json.Marshal(five); strings.Contains(string(b), "accounts") {
+	session, _ := Compute([]Account{{Key: "a", Weight: 1, Cap: 98, Util: 10, ResetsAt: in(2)}, {Key: "b", Weight: 1, Cap: 98, Util: 10, ResetsAt: in(3)}}, Five, nil, now)
+	if b, _ := json.Marshal(session); strings.Contains(string(b), "accounts") {
 		t.Fatalf("%s", b)
 	}
 }
@@ -221,8 +367,8 @@ func TestBuildLooksAheadWithTheConfiguration(t *testing.T) {
 	v, cfg := world(100, "a", seat{key: "a", util: 80, resets: 100, weight: 1}, seat{key: "b", util: 90, resets: 120, weight: 1})
 	s := rising("a", 6, 1)
 	h := history.Series{Step: s.Step, T: s.T, Accounts: map[string]*history.AccountSeries{"a": {Main: s.Main["a"]}}}
-	o := Build(v, cfg, h, now)
-	if o.Week == nil || o.Pace == nil || len(o.Week.Accounts) != 2 || o.Week.Accounts[0].Key != "a" {
+	o, err := Build(v, cfg, h, now)
+	if err != nil || o.Week == nil || o.Pace == nil || len(o.Week.Accounts) != 2 || o.Week.Accounts[0].Key != "a" {
 		t.Fatalf("%+v %+v", o.Week, o.Pace)
 	}
 }
