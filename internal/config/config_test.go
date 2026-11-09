@@ -114,7 +114,7 @@ func TestAccountNames(t *testing.T) {
 	).Names()
 	want := map[string]string{
 		"claude-1a-ali@sirket.com.json": "Work", "claude-2b-ali@gmail.com.json": "ali",
-		"claude-3c-veli@gmail.com.json": "veli", "claude-4d-me@example.com.json": "me-wapps",
+		"claude-3c-veli@gmail.com.json": "veli", "claude-4d-me@example.com.json": "me-example",
 		"claude-5e-me@gmail.com.json": "me-gmail",
 	}
 	for f, n := range want {
