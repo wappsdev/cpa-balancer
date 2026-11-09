@@ -69,7 +69,10 @@ type Dry struct {
 	Seconds float64   `json:"seconds"`
 	Refill  string    `json:"refill"` // the account whose reset brings room back
 	At      time.Time `json:"at"`
-	Next    *Next     `json:"next,omitempty"`
+	// The largest multiple of the pace at which this dry spell does not come: the room then lasts
+	// until the refill (0.8: 20% slower keeps work going).
+	Lasts float64 `json:"lasts"`
+	Next  *Next   `json:"next,omitempty"`
 }
 
 // Outlook answers whether the room lasts until the resets bring more.
@@ -239,6 +242,18 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 		o.Verdict = "out"
 		if stop := ahead.spells[0]; !math.IsInf(stop.to, 1) {
 			o.Dry = &Dry{Seconds: math.Max(0, stop.to-stop.from), Refill: stop.refill, At: now.Add(secs(stop.to))}
+			// the slower pace that keeps work going until that refill (bisection below the pace)
+			before := func(r run) bool { return len(r.spells) > 0 && r.spells[0].from < stop.to }
+			lo, hi := 0.0, 1.0
+			for i := 0; i < 30 && hi-lo > 1e-4 && err == nil; i++ {
+				mid := (lo + hi) / 2
+				if before(try(speed*mid, 2*span)) {
+					hi = mid
+				} else {
+					lo = mid
+				}
+			}
+			o.Dry.Lasts = lo
 			// the stretch after that refill at the same pace, up to two windows from now
 			switch {
 			case len(ahead.spells) == 1:

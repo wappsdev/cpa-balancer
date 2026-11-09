@@ -91,6 +91,8 @@ func TestOutlookLastsWithMarginAndRunsOut(t *testing.T) {
 	if o.Verdict != "out" || o.Dry == nil || o.Dry.Next == nil || !o.Dry.Next.Lasts {
 		t.Fatalf("1/h: %+v %+v", o, o.Dry)
 	}
+	// to keep working until B's reset at 20 h, the 10 left must last 20 h: half the pace
+	near(t, "avoids the dry spell", o.Dry.Lasts, 0.5, 1e-3)
 	// 3 an hour: out at 10 h, B's reset at 20 h refills, G... the stretch after is dry again
 	o = compute(t, accounts, pace(3))
 	if o.Verdict != "out" || o.Dry == nil {
@@ -102,6 +104,8 @@ func TestOutlookLastsWithMarginAndRunsOut(t *testing.T) {
 	}
 	// the dry spell runs from the stop to the refill
 	near(t, "dry hours", o.Dry.Seconds/3600, 20-10.0/3, 1e-6)
+	// the same 10 over the same 20 h: a sixth of 3 an hour
+	near(t, "avoids the dry spell", o.Dry.Lasts, 0.5/3, 1e-3)
 	// B's 100 from 20 h last 33.3 h; A's reset at 100 h ends that dry 46.7 h
 	if o.Dry.Next == nil || o.Dry.Next.Lasts {
 		t.Fatalf("next stretch: %+v", o.Dry.Next)
