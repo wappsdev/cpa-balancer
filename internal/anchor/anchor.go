@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 // Request is sent through host.model.execute pinned to the account; CPA applies its own Claude

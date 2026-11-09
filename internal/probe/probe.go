@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 const (

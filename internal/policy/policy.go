@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/config"
-	"github.com/adnankurt/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/config"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 const AnchorSpacing = 10 * time.Minute

@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/config"
-	"github.com/adnankurt/cpa-balancer/internal/history"
-	"github.com/adnankurt/cpa-balancer/internal/probe"
-	"github.com/adnankurt/cpa-balancer/internal/quota"
-	"github.com/adnankurt/cpa-balancer/internal/state"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	"github.com/wappsdev/cpa-balancer/internal/config"
+	"github.com/wappsdev/cpa-balancer/internal/history"
+	"github.com/wappsdev/cpa-balancer/internal/probe"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/state"
 )
 
 var t0 = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)

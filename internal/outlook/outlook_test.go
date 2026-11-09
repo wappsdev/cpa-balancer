@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/engine"
-	"github.com/adnankurt/cpa-balancer/internal/history"
-	"github.com/adnankurt/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/engine"
+	"github.com/wappsdev/cpa-balancer/internal/history"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 var now = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)

@@ -3,9 +3,9 @@ package outlook
 import (
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/engine"
-	"github.com/adnankurt/cpa-balancer/internal/history"
-	"github.com/adnankurt/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/engine"
+	"github.com/wappsdev/cpa-balancer/internal/history"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 // sessionCap is the 5-hour cap of an account the balancer reports none for.

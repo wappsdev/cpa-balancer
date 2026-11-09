@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/adnankurt/cpa-balancer/internal/engine"
+	"github.com/wappsdev/cpa-balancer/internal/engine"
 )
 
 func configureYAML(t *testing.T, yaml string) {

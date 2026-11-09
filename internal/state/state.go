@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/policy"
-	"github.com/adnankurt/cpa-balancer/internal/probe"
-	"github.com/adnankurt/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/policy"
+	"github.com/wappsdev/cpa-balancer/internal/probe"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 const MaxChanges = 50

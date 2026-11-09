@@ -1,4 +1,4 @@
-module github.com/adnankurt/cpa-balancer
+module github.com/wappsdev/cpa-balancer
 
 go 1.26.0
 

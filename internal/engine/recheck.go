@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 // RecheckResult is one account's state right after a probe made on request.

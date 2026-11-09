@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/policy"
-	"github.com/adnankurt/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/policy"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 var now = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)

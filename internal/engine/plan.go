@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/probe"
+	"github.com/wappsdev/cpa-balancer/internal/probe"
 )
 
 const (

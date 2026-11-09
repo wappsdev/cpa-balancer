@@ -9,14 +9,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adnankurt/cpa-balancer/internal/anchor"
-	"github.com/adnankurt/cpa-balancer/internal/config"
-	"github.com/adnankurt/cpa-balancer/internal/history"
-	"github.com/adnankurt/cpa-balancer/internal/policy"
-	"github.com/adnankurt/cpa-balancer/internal/probe"
-	"github.com/adnankurt/cpa-balancer/internal/quota"
-	"github.com/adnankurt/cpa-balancer/internal/state"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	"github.com/wappsdev/cpa-balancer/internal/anchor"
+	"github.com/wappsdev/cpa-balancer/internal/config"
+	"github.com/wappsdev/cpa-balancer/internal/history"
+	"github.com/wappsdev/cpa-balancer/internal/policy"
+	"github.com/wappsdev/cpa-balancer/internal/probe"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
+	"github.com/wappsdev/cpa-balancer/internal/state"
 )
 
 // Host is the subset of CPA host callbacks the engine uses.

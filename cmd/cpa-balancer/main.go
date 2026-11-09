@@ -37,13 +37,13 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/adnankurt/cpa-balancer/internal/config"
-	"github.com/adnankurt/cpa-balancer/internal/engine"
-	"github.com/adnankurt/cpa-balancer/internal/history"
-	"github.com/adnankurt/cpa-balancer/internal/outlook"
-	"github.com/adnankurt/cpa-balancer/internal/web"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	"github.com/wappsdev/cpa-balancer/internal/config"
+	"github.com/wappsdev/cpa-balancer/internal/engine"
+	"github.com/wappsdev/cpa-balancer/internal/history"
+	"github.com/wappsdev/cpa-balancer/internal/outlook"
+	"github.com/wappsdev/cpa-balancer/internal/web"
 )
 
 const tickInterval = 30 * time.Second
@@ -210,7 +210,7 @@ func configure(req []byte) []byte {
 	return ok(map[string]any{
 		"schema_version": pluginabi.SchemaVersion,
 		"metadata": pluginapi.Metadata{Name: web.PluginID, Version: "0.2.0", Author: "Adnan Kurt",
-			GitHubRepository: "https://github.com/adnankurt/cpa-balancer"},
+			GitHubRepository: "https://github.com/wappsdev/cpa-balancer"},
 		"capabilities": map[string]bool{"scheduler": true, "scheduler_across_priorities": true,
 			"usage_plugin": true, "management_api": true},
 	})
