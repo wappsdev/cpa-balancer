@@ -67,13 +67,15 @@ type Outlook struct {
 	Pace    *Pace   `json:"pace,omitempty"`
 	// lasts, tight (lasts, but not at 1.2 times the pace), out (runs out before a reset) or unknown
 	Verdict string `json:"verdict"`
-	// How long the room open now lasts at the pace, resets not counted.
-	RoomSeconds float64 `json:"room_seconds,omitempty"`
 	// The largest multiple of the pace the room still lasts (1.14: 14% faster is the limit; 0.8:
 	// 20% slower is needed).
-	Lasts float64    `json:"lasts,omitempty"`
-	Stops *time.Time `json:"stops,omitempty"`
-	Dry   *Dry       `json:"dry,omitempty"`
+	Lasts float64 `json:"lasts,omitempty"`
+	// When the room runs out at the pace, counting every reset before it: each refills its account
+	// to the cap and starts its next window. Absent: the room lasts to Horizon.
+	RunsOut *time.Time `json:"runs_out,omitempty"`
+	// The end of the stretch RunsOut looks at: two windows from now.
+	Horizon *time.Time `json:"horizon,omitempty"`
+	Dry     *Dry       `json:"dry,omitempty"`
 }
 
 type pool struct {
@@ -141,13 +143,18 @@ func Compute(accounts []Account, window time.Duration, measured *Pace, now time.
 	if speed <= 0 || room <= 0 || math.IsInf(soonest, 1) {
 		return o, true
 	}
-	o.RoomSeconds = room / speed
+	// the verdict looks one window ahead; the moment the room runs out, two, so the stretch after
+	// the last reset of the first window counts
+	horizon := now.Add(secs(2 * span))
+	o.Horizon = &horizon
+	if long := runOut(pools, speed, 0, 2*span, span); long != nil {
+		at := now.Add(secs(long.seconds))
+		o.RunsOut = &at
+	}
 	stop := runOut(pools, speed, 0, span, span)
 	switch {
 	case stop != nil:
 		o.Verdict = "out"
-		at := now.Add(secs(stop.seconds))
-		o.Stops = &at
 		if !math.IsInf(stop.at, 1) {
 			d := &Dry{Seconds: math.Max(0, stop.at-stop.seconds), Refill: stop.refill, At: now.Add(secs(stop.at))}
 			d.Next = afterRefill(stop, speed, span)

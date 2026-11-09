@@ -197,12 +197,16 @@ function outlookView(o) {
   } else if (o.verdict === "out") {
     chip = { tone: "bad", text: "Runs out" };
     const dry = o.dry;
-    lines.push(`At this pace the room runs out ${clock(o.stops)}${dry ? `, and stays out ${span(dry.seconds)} until ${dry.refill} resets (${clock(dry.at)})` : ""}. Work about ${100 - Math.round(o.lasts * 100)}% slower to last.`);
+    lines.push(`At this pace the room runs out ${clock(o.runs_out)}${dry ? `, and stays out ${span(dry.seconds)} until ${dry.refill} resets (${clock(dry.at)})` : ""}. Work about ${100 - Math.round(o.lasts * 100)}% slower to last.`);
     if (dry && dry.next) lines.push(dry.next.lasts ? "The refill after that lasts at this pace." : `After that refill the room runs out again, for ${span(dry.next.seconds)}.`);
   } else {
     lines.push("Not enough use in the last week to tell.");
   }
-  if (o.room_seconds) lines.push(`The room open now lasts ${span(o.room_seconds)} at this pace, before any reset adds more.`);
+  if (o.verdict !== "out" && o.horizon) {
+    lines.push(o.runs_out
+      ? `At this pace the room runs out ${clock(o.runs_out)} (counting the resets before it).`
+      : `At this pace the room lasts past ${clock(o.horizon)} (counting the resets before it).`);
+  }
   if (o.pace) {
     const p = o.pace;
     lines.push(p.source === "measured"

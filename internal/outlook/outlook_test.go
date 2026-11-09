@@ -1,7 +1,9 @@
 package outlook
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,7 +85,7 @@ func TestOutlookLastsWithMarginAndRunsOut(t *testing.T) {
 	if o.Verdict != "out" || o.Dry == nil {
 		t.Fatalf("3/h: %+v", o)
 	}
-	near(t, "stops in hours", o.Stops.Sub(now).Hours(), 10.0/3, 1e-6)
+	near(t, "runs out in hours", o.RunsOut.Sub(now).Hours(), 10.0/3, 1e-6)
 	if o.Dry.Refill != "B" {
 		t.Fatalf("refill: %s", o.Dry.Refill)
 	}
@@ -196,7 +198,7 @@ func TestFollowsResetsThroughToTheNextOne(t *testing.T) {
 	if o.Verdict != "out" || o.Dry == nil || o.Dry.Refill != "G" {
 		t.Fatalf("%+v", o)
 	}
-	near(t, "stops in hours", o.Stops.Sub(now).Hours(), 101.6, 0.05)
+	near(t, "runs out in hours", o.RunsOut.Sub(now).Hours(), 101.6, 0.05)
 	near(t, "dry hours", o.Dry.Seconds/3600, 35.4, 0.05)
 	// to last: G's 94 and W's refill (194) by G's reset at 137 h, so 1.416 an hour: 26% slower
 	near(t, "slower", 1-o.Lasts, 0.26, 0.005)
@@ -204,6 +206,68 @@ func TestFollowsResetsThroughToTheNextOne(t *testing.T) {
 	if o := compute(t, accounts, &Pace{PerHour: 0.6}); o.Verdict == "out" {
 		t.Fatalf("%+v", o)
 	}
+}
+
+// gmail has used 40 and resets in 48 h; wapps has used 98 and resets in 120 h; both are weight 1, cap
+// 100, and the week is 168 h.
+func gmailAndWapps() []Account {
+	return []Account{
+		{Key: "gmail", Name: "gmail", Weight: 1, Cap: 100, Util: 40, ResetsAt: in(48)},
+		{Key: "wapps", Name: "wapps", Weight: 1, Cap: 100, Util: 98, ResetsAt: in(120)},
+	}
+}
+
+func TestRunsOutCountsTheResetsAndTheStretchAfterTheLastOne(t *testing.T) {
+	// At 1.25 points an hour:
+	//   0-48 h: 60 needed, gmail's 60 go; wapps keeps its 2. At 48 h gmail refills to 100 (not 60).
+	//   48-120 h: 90 needed; wapps's 2, then 88 of gmail's 100: gmail 12 left. At 120 h wapps refills to 100.
+	//   120 h on, no reset until gmail's second at 216 h: 112 left (12 + 100) last 89.6 h, so the room
+	//   runs out at 209.6 h, 6.4 h before it. The room open now alone (62) would last 49.6 h.
+	o := compute(t, gmailAndWapps(), &Pace{PerHour: 1.25})
+	// one window (168 h) still holds: the verdict keeps its meaning, 1.5 an hour does not last
+	if o.Verdict != "tight" || o.Dry != nil {
+		t.Fatalf("%+v", o)
+	}
+	if o.RunsOut == nil {
+		t.Fatal("the room runs out at 209.6 h, inside the two windows looked at")
+	}
+	near(t, "runs out in hours", o.RunsOut.Sub(now).Hours(), 209.6, 1e-6)
+	if o.Horizon == nil || !o.Horizon.Equal(in(336)) {
+		t.Fatalf("horizon: %v", o.Horizon)
+	}
+}
+
+func TestRunsOutIsAbsentWhenTheRoomLastsBothWindows(t *testing.T) {
+	// 0.5 an hour: every stretch holds through 336 h (gmail ends 18 at 216 h, wapps 64 at 288 h)
+	o := compute(t, gmailAndWapps(), &Pace{PerHour: 0.5})
+	if o.Verdict != "lasts" || o.RunsOut != nil {
+		t.Fatalf("%+v", o)
+	}
+	b, err := json.Marshal(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"runs_out", "room_seconds", "stops"} {
+		if strings.Contains(string(b), gone) {
+			t.Fatalf("%s in json: %s", gone, b)
+		}
+	}
+}
+
+func TestRunsOutForOutIsTheStopBeforeTheFirstRefill(t *testing.T) {
+	// B (resets in 20 h) is empty; A has 10 left. At 3 an hour A's 10 last 10/3 h, the stop the
+	// verdict "out" reports; the two windows looked at do not move it.
+	accounts := []Account{
+		{Key: "a", Name: "A", Weight: 1, Cap: 100, Util: 90, ResetsAt: in(100)},
+		{Key: "b", Name: "B", Weight: 1, Cap: 100, Util: 100, ResetsAt: in(20)},
+	}
+	o := compute(t, accounts, &Pace{PerHour: 3})
+	if o.Verdict != "out" || o.RunsOut == nil || o.Dry == nil {
+		t.Fatalf("%+v", o)
+	}
+	near(t, "runs out in hours", o.RunsOut.Sub(now).Hours(), 10.0/3, 1e-6)
+	// the dry spell starts where the room runs out
+	near(t, "dry starts", o.Dry.At.Sub(*o.RunsOut).Hours(), o.Dry.Seconds/3600, 1e-6)
 }
 
 func TestOneAccountStillHasItsMeasuredPace(t *testing.T) {
