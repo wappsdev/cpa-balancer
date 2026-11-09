@@ -22,7 +22,7 @@ func Build(v engine.View, cfg config.Config, h history.Series, now time.Time) (B
 	for name, s := range h.Accounts {
 		series.Main[name], series.Session[name] = s.Main, s.Session
 	}
-	out := Both{Pace: MeasurePace(series, weekAccounts(v))}
+	out := Both{Pace: MeasurePace(series, weekAccounts(v), now)}
 	if out.Pace != nil {
 		out.Pace.Source = "measured"
 	}

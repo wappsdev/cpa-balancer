@@ -43,6 +43,19 @@ type Pace struct {
 	ActivePerHour float64 `json:"active_per_hour"` // while working
 	HoursPerDay   float64 `json:"hours_per_day"`   // worked on a day with any work
 	Source        string  `json:"source"`          // measured (history) or average (each window's own)
+	// The method the numbers above come from (peak, trend, now, or 7d when none is present), and
+	// every method present; measured only.
+	Basis   string   `json:"basis,omitempty"`
+	Methods []Method `json:"methods,omitempty"`
+}
+
+// Method is the work pace by one way of measuring it (see MeasurePace). A method that measures no
+// worked time of its own (trend) has 0 active pace and hours a day.
+type Method struct {
+	Name          string  `json:"name"`
+	PerHour       float64 `json:"per_hour"`
+	ActivePerHour float64 `json:"active_per_hour"`
+	HoursPerDay   float64 `json:"hours_per_day"`
 }
 
 // Next is the stretch after the refill at the same pace.
@@ -331,8 +344,21 @@ func poolsDrain(start []pool, span float64) drain {
 	}
 }
 
-// workPace reads the pace from the history: each rise of an account's weekly utilization is use (a
-// drop is a reset); a step with any rise is worked time. Nil with less than `minActive` seconds of work.
+// riseAt is the use in step i, from T[i-1] to T[i]: each rise of an account's weekly utilization
+// in Pro-plan points (a drop is a reset). A step with any rise is worked time.
+func riseAt(h Series, weights map[string]float64, i int) float64 {
+	var rise float64
+	for name, series := range h.Main {
+		if i >= len(series) || series[i] == nil || series[i-1] == nil || *series[i] <= *series[i-1] {
+			continue
+		}
+		rise += (*series[i] - *series[i-1]) * weightOf(weights, name)
+	}
+	return rise
+}
+
+// workPace reads the pace over the whole history: the use while working times the share of a day
+// worked on a day with any work. Nil with less than `minActive` seconds of work.
 func workPace(h Series, weights map[string]float64, minActive float64) *Pace {
 	step := float64(h.Step)
 	if len(h.T) == 0 {
@@ -343,13 +369,7 @@ func workPace(h Series, weights map[string]float64, minActive float64) *Pace {
 	active := 0
 	days := map[int64]bool{}
 	for i := 1; i < len(h.T); i++ {
-		var rise float64
-		for name, series := range h.Main {
-			if i >= len(series) || series[i] == nil || series[i-1] == nil || *series[i] <= *series[i-1] {
-				continue
-			}
-			rise += (*series[i] - *series[i-1]) * weightOf(weights, name)
-		}
+		rise := riseAt(h, weights, i)
 		if rise <= 0 {
 			continue
 		}
@@ -374,12 +394,100 @@ func weightOf(weights map[string]float64, name string) float64 {
 	return 1
 }
 
-// MeasurePace reads the work pace from a history with the accounts' weights.
-func MeasurePace(h Series, accounts []Account) *Pace {
+// sums is the history's use and worked seconds summed from its start through each step.
+type sums struct {
+	t            []int64
+	use, seconds []float64
+}
+
+func sumsOf(h Series, weights map[string]float64) sums {
+	s := sums{t: h.T, use: make([]float64, len(h.T)), seconds: make([]float64, len(h.T))}
+	for i := 1; i < len(h.T); i++ {
+		rise := riseAt(h, weights, i)
+		s.use[i], s.seconds[i] = s.use[i-1]+rise, s.seconds[i-1]
+		if rise > 0 {
+			s.seconds[i] += float64(h.Step)
+		}
+	}
+	return s
+}
+
+// in is the use and the worked seconds of the steps that lie wholly between `from` and `to`.
+func (s sums) in(from, to int64) (use, seconds float64) {
+	i := sort.Search(len(s.t), func(i int) bool { return s.t[i] >= from })
+	j := sort.Search(len(s.t), func(i int) bool { return s.t[i] > to }) - 1
+	if j <= i {
+		return 0, 0
+	}
+	return s.use[j] - s.use[i], s.seconds[j] - s.seconds[i]
+}
+
+const day = 24 * time.Hour
+
+// MeasurePace reads the work pace from a history with the accounts' weights. Each method catches
+// a different way the use goes faster; the pace is the fastest method present (the worst case),
+// on a tie now, then trend, then peak:
+//   - peak: the heaviest 24 h ending on a step of the last 7 days, as if it came every day;
+//   - trend: the last day's pace plus how much it passes the last 3 days' (only when it does);
+//   - now: the last 5 h's pace while working, at the hours a day worked over the 7 days.
+//
+// With no method present it is the 7 days' pace (basis 7d); nil with less than `MinWork` in them.
+func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	w := weightsOf(accounts)
 	byKey := map[string]float64{}
 	for i, a := range accounts {
 		byKey[a.Key] = w[i]
 	}
-	return workPace(h, byKey, MinWork.Seconds())
+	s := sumsOf(h, byKey)
+	end := now.Unix()
+	minWork := MinWork.Seconds()
+	var methods []Method
+
+	// peak: every 24 h with enough work in it
+	peak := Method{Name: "peak"}
+	for _, t := range h.T {
+		if t <= end-int64(Week.Seconds()) || t > end {
+			continue
+		}
+		if use, worked := s.in(t-int64(day.Seconds()), t); worked >= minWork && use/24 > peak.PerHour {
+			peak = Method{Name: "peak", PerHour: use / 24, ActivePerHour: use / worked * 3600, HoursPerDay: worked / 3600}
+		}
+	}
+	if peak.PerHour > 0 {
+		methods = append(methods, peak)
+	}
+
+	// trend: the day's calendar pace rising past the 3 days'
+	use1, worked1 := s.in(end-int64(day.Seconds()), end)
+	use3, worked3 := s.in(end-int64(3*day.Seconds()), end)
+	if pace1, pace3 := use1/24, use3/72; worked1 >= minWork && worked3 >= minWork && pace1 > pace3 {
+		methods = append(methods, Method{Name: "trend", PerHour: math.Max(0, 2*pace1-pace3)})
+	}
+
+	// now: the session's pace while working, over the hours a day of the week
+	if use, worked := s.in(end-int64(Five.Seconds()), end); worked >= (30 * time.Minute).Seconds() {
+		if week := workPace(h, byKey, 0); week != nil {
+			active := use / worked * 3600
+			methods = append(methods, Method{Name: "now", PerHour: active * week.HoursPerDay / 24,
+				ActivePerHour: active, HoursPerDay: week.HoursPerDay})
+		}
+	}
+
+	if len(methods) == 0 {
+		p := workPace(h, byKey, minWork)
+		if p != nil {
+			p.Basis = "7d"
+		}
+		return p
+	}
+	// the fastest; a tie (to rounding) goes to the later method: now, then trend, then peak
+	worst := methods[0]
+	for _, m := range methods[1:] {
+		if m.PerHour >= worst.PerHour*(1-1e-9) {
+			worst = m
+		}
+	}
+
+	return &Pace{PerHour: worst.PerHour, ActivePerHour: worst.ActivePerHour, HoursPerDay: worst.HoursPerDay,
+		Basis: worst.Name, Methods: methods}
 }
