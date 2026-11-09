@@ -42,9 +42,6 @@ type Pace struct {
 	ActivePerHour float64 `json:"active_per_hour"` // while working
 	HoursPerDay   float64 `json:"hours_per_day"`   // worked on a day with any work
 	Source        string  `json:"source"`          // measured (history) or average (each window's own)
-	// Each account's own percent an hour over the calendar, by key (measured only): an account
-	// with no use of its own in the history is paced by the work, in its own percent.
-	Accounts map[string]float64 `json:"accounts,omitempty"`
 }
 
 // Next is the stretch after the refill at the same pace.
@@ -98,8 +95,8 @@ type pool struct {
 }
 
 // Both is the outlook of each window kind; one with fewer than two accounts is left out. Pace is
-// the weekly work pace measured from the history, with each account's own: it paces each
-// account's flag too, so it stands apart from the combined outlook (nil: too little work).
+// the weekly work pace measured from the history; it stands apart from the combined outlook, so
+// one account still has it (nil: too little work).
 type Both struct {
 	Week     *Outlook `json:"week,omitempty"`
 	FiveHour *Outlook `json:"five_hour,omitempty"`
@@ -323,16 +320,12 @@ func workPace(h Series, weights map[string]float64, minActive float64) *Pace {
 	var total float64
 	active := 0
 	days := map[int64]bool{}
-	risen := map[string]float64{}
-	worked := map[string]int{}
 	for i := 1; i < len(h.T); i++ {
 		var rise float64
 		for name, series := range h.Main {
 			if i >= len(series) || series[i] == nil || series[i-1] == nil || *series[i] <= *series[i-1] {
 				continue
 			}
-			risen[name] += *series[i] - *series[i-1]
-			worked[name]++
 			rise += (*series[i] - *series[i-1]) * weightOf(weights, name)
 		}
 		if rise <= 0 {
@@ -348,16 +341,8 @@ func workPace(h Series, weights map[string]float64, minActive float64) *Pace {
 	activePerSecond := total / (float64(active) * step)
 	hoursPerDay := float64(active) * step / 3600 / float64(len(days))
 	share := hoursPerDay / 24
-	accounts := map[string]float64{}
-	for name := range h.Main {
-		own := activePerSecond / weightOf(weights, name)
-		if worked[name] > 0 {
-			own = risen[name] / (float64(worked[name]) * step)
-		}
-		accounts[name] = own * 3600 * share
-	}
 
-	return &Pace{PerHour: activePerSecond * 3600 * share, ActivePerHour: activePerSecond * 3600, HoursPerDay: hoursPerDay, Accounts: accounts}
+	return &Pace{PerHour: activePerSecond * 3600 * share, ActivePerHour: activePerSecond * 3600, HoursPerDay: hoursPerDay}
 }
 
 func weightOf(weights map[string]float64, name string) float64 {

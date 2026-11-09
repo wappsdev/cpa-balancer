@@ -168,7 +168,7 @@ func TestOneAccountHasNothingToCombine(t *testing.T) {
 	}
 }
 
-func TestWorkPacePerAccountInItsOwnPercent(t *testing.T) {
+func TestWorkPaceWeighsEachAccount(t *testing.T) {
 	// only the Ultra (weight 10) works, 1 point a step for 4 steps: 40 units over 2 h
 	s := Series{Step: 1800, Main: map[string][]*float64{}}
 	v := func(x float64) *float64 { return &x }
@@ -182,10 +182,6 @@ func TestWorkPacePerAccountInItsOwnPercent(t *testing.T) {
 		t.Fatal("pace expected")
 	}
 	near(t, "active rate per hour", p.ActivePerHour, 20, 1e-9)
-	// the unused Pro is paced by the work, in its own percent: ten times the Ultra's
-	near(t, "small over big", p.Accounts["small"]/p.Accounts["big"], 10, 1e-9)
-	// the Ultra's own: 4 points in 2 h worked, 2 h a day: 2%/h while working, 1/12 of the day
-	near(t, "big per hour", p.Accounts["big"], 2.0/12, 1e-9)
 }
 
 func TestFollowsResetsThroughToTheNextOne(t *testing.T) {
@@ -279,8 +275,12 @@ func TestOneAccountStillHasItsMeasuredPace(t *testing.T) {
 	s := rising("a", 6, 1)
 	h := history.Series{Step: s.Step, T: s.T, Accounts: map[string]*history.AccountSeries{"a": {Main: s.Main["a"]}}}
 	o := Build(v, config.Config{}, h, now)
-	// nothing to combine, but the account's own flag still has the measured pace
-	if o.Week != nil || o.Pace == nil || o.Pace.Source != "measured" || o.Pace.Accounts["a"] <= 0 {
+	// nothing to combine, but the pane still has the measured pace
+	if o.Week != nil || o.Pace == nil || o.Pace.Source != "measured" {
 		t.Fatalf("%+v %+v", o.Week, o.Pace)
+	}
+	// each account's flag is its handoff now, so no account has a pace of its own
+	if b, _ := json.Marshal(o.Pace); strings.Contains(string(b), "accounts") {
+		t.Fatalf("%s", b)
 	}
 }
