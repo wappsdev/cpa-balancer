@@ -354,7 +354,7 @@ func TestPeakWinsOnASpikyDay(t *testing.T) {
 	near(t, "peak active", m["peak"].ActivePerHour, 82.0/6, 1e-9)
 	near(t, "peak hours", m["peak"].HoursPerDay, 6, 1e-9)
 	// the last day 6/24, the last 3 days 10/72
-	near(t, "trend", m["trend"].PerHour, 2*6.0/24-10.0/72, 1e-9)
+	near(t, "trend", m["trend"].PerHour, 1.5*6.0/24-0.5*10.0/72, 1e-9)
 	// 2 points in the last 5 h's hour, 11 h worked over 4 days
 	near(t, "now", m["now"].PerHour, 2*(11.0/4)/24, 1e-9)
 	if p.Basis != "peak" {
@@ -373,15 +373,15 @@ func TestTrendWinsWhenTheUseSpeedsUp(t *testing.T) {
 	if len(m) != 3 {
 		t.Fatalf("every method is present: %+v", p.Methods)
 	}
-	// the last day 17/24, the last 3 days 21/72: the day's pace goes on rising by the difference
-	near(t, "trend", m["trend"].PerHour, 2*17.0/24-21.0/72, 1e-9)
+	// the last day 17/24, the last 3 days 21/72: the day's pace goes on rising by half the difference
+	near(t, "trend", m["trend"].PerHour, 1.5*17.0/24-0.5*21.0/72, 1e-9)
 	near(t, "peak", m["peak"].PerHour, 17.0/24, 1e-9)
 	near(t, "now", m["now"].PerHour, 1*(9.0/3)/24, 1e-9)
 	if p.Basis != "trend" {
 		t.Fatalf("basis %s", p.Basis)
 	}
 	// the trend measures no worked time of its own
-	near(t, "pace", p.PerHour, 2*17.0/24-21.0/72, 1e-9)
+	near(t, "pace", p.PerHour, 1.5*17.0/24-0.5*21.0/72, 1e-9)
 	if p.ActivePerHour != 0 || p.HoursPerDay != 0 {
 		t.Fatalf("%+v", p)
 	}
@@ -400,7 +400,7 @@ func TestNowWinsOnAFastSession(t *testing.T) {
 	near(t, "now", m["now"].PerHour, 8*12.0/24, 1e-9)
 	near(t, "now active", m["now"].ActivePerHour, 8, 1e-9)
 	near(t, "now hours", m["now"].HoursPerDay, 12, 1e-9)
-	near(t, "trend", m["trend"].PerHour, 2*36.0/24-84.0/72, 1e-9)
+	near(t, "trend", m["trend"].PerHour, 1.5*36.0/24-0.5*84.0/72, 1e-9)
 	if p.Basis != "now" || m["peak"].PerHour >= m["now"].PerHour {
 		t.Fatalf("basis %s, %+v", p.Basis, p.Methods)
 	}

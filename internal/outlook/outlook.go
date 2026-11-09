@@ -461,7 +461,7 @@ const day = 24 * time.Hour
 // a different way the use goes faster; the pace is the fastest method present (the worst case),
 // on a tie now, then trend, then peak:
 //   - peak: the heaviest 24 h ending on a step of the last 7 days, as if it came every day;
-//   - trend: the last day's pace plus how much it passes the last 3 days' (only when it does);
+//   - trend: the last day's pace plus half of how much it passes the last 3 days' (only when it does);
 //   - now: the last 5 h's pace while working, at the hours a day worked over the 7 days.
 //
 // With no method present it is the 7 days' pace (basis 7d); nil with less than `MinWork` in them.
@@ -494,7 +494,7 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	use1, worked1 := s.in(end-int64(day.Seconds()), end)
 	use3, worked3 := s.in(end-int64(3*day.Seconds()), end)
 	if pace1, pace3 := use1/24, use3/72; worked1 >= minWork && worked3 >= minWork && pace1 > pace3 {
-		methods = append(methods, Method{Name: "trend", PerHour: math.Max(0, 2*pace1-pace3)})
+		methods = append(methods, Method{Name: "trend", PerHour: math.Max(0, pace1+(pace1-pace3)/2)})
 	}
 
 	// now: the session's pace while working, over the hours a day of the week

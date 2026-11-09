@@ -88,7 +88,7 @@ pick; a tie goes to `now`, then `trend`, then `peak`):
 
 - `peak`: spiky days. The heaviest 24 h ending in the last 7 days, as if it came every day
   (needs 2 h of work in those 24 h).
-- `trend`: speeding up. The last day's pace plus how far it passes the last 3 days' (only when it
+- `trend`: speeding up. The last day's pace plus half of how far it passes the last 3 days' (only when it
   does; both need 2 h of work).
 - `now`: the session in progress. The last 5 h's pace while working, at the hours a day worked over
   the 7 days (needs 30 min of work in the 5 h).
