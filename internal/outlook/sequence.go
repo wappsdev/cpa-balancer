@@ -128,6 +128,8 @@ func (s sequence) drain(rate, end float64) (run, error) {
 		// with only 5-hour windows full the work waits; the week is out when no account has room in it
 		weekOut := pick == "" && picked(policy.Choose(quota.Main, s.cfg, snapshots(turns, t, false), t, policy.Active{Account: active, Since: since})) == ""
 		inside := t.Before(stop)
+		// a row shows the account's next event: a run-out marks it only before any handoff
+		_, handedOff := handoff[active]
 		if pick != active {
 			i, ok := index[active]
 			// the balancer moves on from an account at its weekly cap, within its current window
@@ -141,7 +143,7 @@ func (s sequence) drain(rate, end float64) (run, error) {
 		switch {
 		case weekOut && !dry && inside:
 			// the room runs out on the account in use, in whichever of its windows
-			if _, ok := index[active]; ok && len(out.spells) == 0 {
+			if _, ok := index[active]; ok && len(out.spells) == 0 && !handedOff {
 				handoff[active], exhausts = t, active
 			}
 			out.spells = append(out.spells, spell{from: t.Sub(s.now).Seconds(), to: math.Inf(1)})

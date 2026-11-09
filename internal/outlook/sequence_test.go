@@ -171,11 +171,12 @@ func TestThreeAccountsHandOffInTurnCountedFromNow(t *testing.T) {
 	}
 }
 
-func TestReservesAreReleasedAndTheLastAccountExhausts(t *testing.T) {
+func TestAHandoffBeforeARunOutOnTheSameAccountIsWhatTheRowShows(t *testing.T) {
 	// Both hold 10 points back (90 to the reset) and reach the final cap, 100, once released. At
 	// 2 points an hour: A 80 -> 90 at 5 h, B 80 -> 90 at 10 h; with every account at its cap the
-	// reserves are released and A (the earliest reset) goes to 100 at 15 h, then B at 20 h. No
-	// account has room left then: B is where work stops, and its flag is that moment.
+	// reserves are released and A (the earliest reset) goes to 100 at 15 h, then B at 20 h, where
+	// no account has room left. B's next event is its handoff at 10 h: that is its flag, with no
+	// run-out mark; the run-out at 20 h is Σ's.
 	reserve := []config.ReserveStep{{Cap: 90, Hours: 0}}
 	v, cfg := world(100, "a",
 		seat{key: "a", util: 80, resets: 100, weight: 1, steps: reserve},
@@ -183,14 +184,11 @@ func TestReservesAreReleasedAndTheLastAccountExhausts(t *testing.T) {
 	o := week(t, 2, v, cfg)
 	got, exhausts := handoffs(t, o)
 	near(t, "a", got["a"], 5, 1e-6)
-	near(t, "b", got["b"], 20, 1e-6)
-	if exhausts != "b" {
+	near(t, "b", got["b"], 10, 1e-6)
+	if exhausts != "" {
 		t.Fatalf("exhausts %q", exhausts)
 	}
-	// the combined run-out is the same moment, from the same simulation
-	if o.RunsOut == nil || !o.RunsOut.Equal(*o.Accounts[1].At) {
-		t.Fatalf("runs out %v, b's handoff %v", o.RunsOut, o.Accounts[1].At)
-	}
+	near(t, "runs out", o.RunsOut.Sub(now).Hours(), 20, 1e-6)
 	// dry until A's reset brings room back
 	if o.Verdict != "out" || o.Dry == nil || o.Dry.Refill != "A" {
 		t.Fatalf("%+v %+v", o, o.Dry)
@@ -309,14 +307,16 @@ func TestACapReachedAtAnotherEventStillHandsOff(t *testing.T) {
 func TestAResetAlreadyPastStartsTheNextWindow(t *testing.T) {
 	// A's last reading says 99% and a reset 2 h ago: it is at 0% now, resetting in 166 h, so B
 	// (resets in 60 h) goes first, to 100 at 50 h, and A after it, to 100 at 100 h, inside A's
-	// window. B, refilled at 60 h, then runs out at 150 h: its flag is that run-out.
+	// window. B, refilled at 60 h, runs out at 150 h, but its next event is the 50 h handoff.
 	v, cfg := world(100, "a", seat{key: "a", util: 99, resets: -2, weight: 1}, seat{key: "b", util: 0, resets: 60, weight: 1})
-	got, exhausts := handoffs(t, week(t, 2, v, cfg))
+	o := week(t, 2, v, cfg)
+	got, exhausts := handoffs(t, o)
 	near(t, "a", got["a"], 100, 1e-6)
-	near(t, "b", got["b"], 150, 1e-6)
-	if exhausts != "b" {
+	near(t, "b", got["b"], 50, 1e-6)
+	if exhausts != "" {
 		t.Fatalf("exhausts %q", exhausts)
 	}
+	near(t, "runs out", o.RunsOut.Sub(now).Hours(), 150, 1e-6)
 }
 
 func TestTheSimulationStopsWithAnErrorRatherThanRunOn(t *testing.T) {

@@ -80,9 +80,9 @@ type Outlook struct {
 }
 
 // Handoff is when the balancer leaves an account at its cap, counted from now through the turns
-// of the accounts before it: the first time in its current window, or the moment the room runs
-// out when that is on this account (Exhausts). At is nil when the account resets first or the
-// two windows end.
+// of the accounts before it: its next event. That is the first time in its current window, or,
+// when the room runs out on this account before it ever hands off (in whichever window), that
+// moment (Exhausts). At is nil when the account resets first or the two windows end.
 type Handoff struct {
 	Key      string     `json:"key"`
 	At       *time.Time `json:"handoff,omitempty"`
