@@ -93,7 +93,7 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 |---|---|---|
 | GET | `/status` | accounts, readings, caps, the decision per bucket and recent changes |
 | GET | `/history?range=24h\|7d\|30d\|90d` | utilization, active account and tokens over time |
-| GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, and the measured work pace |
+| GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), and the measured work pace |
 | POST | `/run` | one balancer tick now |
 | POST | `/recheck?auth_file=…` | probe one account (or every account) now |
 | GET | `/credentials` | the Claude credentials CPA lists |

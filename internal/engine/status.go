@@ -49,6 +49,9 @@ type View struct {
 	Changes     []state.Change  `json:"changes"`
 }
 
+// Config is the configuration the engine runs on; it never changes for one engine.
+func (e *Engine) Config() config.Config { return e.cfg }
+
 // Status is what the status page shows; it never contains credentials.
 func (e *Engine) Status() View {
 	now := e.now()

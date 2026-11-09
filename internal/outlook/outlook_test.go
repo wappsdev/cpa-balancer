@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wappsdev/cpa-balancer/internal/config"
 	"github.com/wappsdev/cpa-balancer/internal/engine"
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/quota"
@@ -120,7 +121,7 @@ func TestBuildReadsStatusAndHistory(t *testing.T) {
 		{AuthFile: "a", Name: "A", Weight: 10, FiveHour: true, Caps: caps, Readings: r(20)},
 		{AuthFile: "b", Name: "B", Weight: 1, FiveHour: true, Caps: caps, Readings: r(0)},
 	}}
-	o := Build(v, history.Series{Step: 1800}, now)
+	o := Build(v, config.Config{}, history.Series{Step: 1800}, now)
 	// no history: each window's own average; weekly against the final cap, not the account's
 	if o.Week == nil || o.Week.Pace == nil || o.Week.Pace.Source != "average" {
 		t.Fatalf("%+v", o.Week)
@@ -137,7 +138,7 @@ func TestBuildReadsStatusAndHistory(t *testing.T) {
 	}
 	// an account without a 5-hour limit has no 5-hour room: one left, nothing to combine
 	v.Accounts[1].FiveHour = false
-	if o := Build(v, history.Series{Step: 1800}, now); o.FiveHour != nil || o.Week == nil {
+	if o := Build(v, config.Config{}, history.Series{Step: 1800}, now); o.FiveHour != nil || o.Week == nil {
 		t.Fatalf("%+v", o)
 	}
 }
@@ -148,7 +149,7 @@ func TestFiveHourClosedWindowIsFullRoomAndDefaultCap(t *testing.T) {
 		{AuthFile: "a", Weight: 1, FiveHour: true, Readings: quota.Readings{quota.Session: {Util: 49, ResetsAt: &session}}},
 		{AuthFile: "b", Weight: 1, FiveHour: true, Readings: quota.Readings{quota.Session: {Util: 30}}},
 	}}
-	o := Build(v, history.Series{Step: 1800}, now).FiveHour
+	o := Build(v, config.Config{}, history.Series{Step: 1800}, now).FiveHour
 	// 98 a window when the balancer reports no cap; b's window is not running: 0 used of 98
 	if o == nil {
 		t.Fatal("five-hour outlook expected")
@@ -277,7 +278,7 @@ func TestOneAccountStillHasItsMeasuredPace(t *testing.T) {
 	}}
 	s := rising("a", 6, 1)
 	h := history.Series{Step: s.Step, T: s.T, Accounts: map[string]*history.AccountSeries{"a": {Main: s.Main["a"]}}}
-	o := Build(v, h, now)
+	o := Build(v, config.Config{}, h, now)
 	// nothing to combine, but the account's own flag still has the measured pace
 	if o.Week != nil || o.Pace == nil || o.Pace.Source != "measured" || o.Pace.Accounts["a"] <= 0 {
 		t.Fatalf("%+v %+v", o.Week, o.Pace)

@@ -76,6 +76,19 @@ type Outlook struct {
 	// The end of the stretch RunsOut looks at: two windows from now.
 	Horizon *time.Time `json:"horizon,omitempty"`
 	Dry     *Dry       `json:"dry,omitempty"`
+	// Each account's turn in the balancer's order at the pace (the weekly window only), from the
+	// same run as RunsOut.
+	Accounts []Handoff `json:"accounts,omitempty"`
+}
+
+// Handoff is when the balancer leaves an account at its cap, counted from now through the turns
+// of the accounts before it: the first time in its current window, or the moment the room runs
+// out when that is on this account (Exhausts). At is nil when the account resets first or the
+// two windows end.
+type Handoff struct {
+	Key      string     `json:"key"`
+	At       *time.Time `json:"handoff,omitempty"`
+	Exhausts bool       `json:"exhausts,omitempty"`
 }
 
 type pool struct {
@@ -93,10 +106,33 @@ type Both struct {
 	Pace     *Pace    `json:"pace,omitempty"`
 }
 
-// Compute combines the accounts over a window of length `window`, each against its own cap.
-// `measured` is the work pace from the history (nil: each open window's own average). False with
-// fewer than two accounts: there is nothing to combine.
+// Compute combines the accounts over a window of length `window`, each against its own cap; use
+// drains the account that resets first. `measured` is the work pace from the history (nil: each
+// open window's own average). False with fewer than two accounts: there is nothing to combine.
 func Compute(accounts []Account, window time.Duration, measured *Pace, now time.Time) (Outlook, bool) {
+	return look(accounts, window, measured, now, nil)
+}
+
+// spell is a stretch with no room, in seconds from now: from the stop to the refill (+Inf: none
+// comes), and the account whose reset brings room back.
+type spell struct {
+	from, to float64
+	refill   string
+}
+
+// run is how the room goes at one pace: its dry spells, and each account's handoff when the run
+// follows the balancer's order.
+type run struct {
+	spells   []spell
+	accounts []Handoff
+}
+
+// drain runs the use at `rate` points a second through the accounts, up to `end` seconds from
+// now: every dry spell that starts before it.
+type drain func(rate, end float64) run
+
+// look is Compute with the use moved by `d` (nil: the account that resets first takes it).
+func look(accounts []Account, window time.Duration, measured *Pace, now time.Time, d drain) (Outlook, bool) {
 	w := weightsOf(accounts)
 	var used, total, average float64
 	soonest := math.Inf(1)
@@ -147,32 +183,43 @@ func Compute(accounts []Account, window time.Duration, measured *Pace, now time.
 	// the last reset of the first window counts
 	horizon := now.Add(secs(2 * span))
 	o.Horizon = &horizon
-	if long := runOut(pools, speed, 0, 2*span, span); long != nil {
-		at := now.Add(secs(long.seconds))
+	if d == nil {
+		d = poolsDrain(pools, span)
+	}
+	ahead := d(speed, 2*span)
+	o.Accounts = ahead.accounts
+	if len(ahead.spells) > 0 {
+		at := now.Add(secs(ahead.spells[0].from))
 		o.RunsOut = &at
 	}
-	stop := runOut(pools, speed, 0, span, span)
+	// out within the window looked at for the verdict
+	out := func(r run) bool { return len(r.spells) > 0 && r.spells[0].from < span }
 	switch {
-	case stop != nil:
+	case out(ahead):
 		o.Verdict = "out"
-		if !math.IsInf(stop.at, 1) {
-			d := &Dry{Seconds: math.Max(0, stop.at-stop.seconds), Refill: stop.refill, At: now.Add(secs(stop.at))}
-			d.Next = afterRefill(stop, speed, span)
-			o.Dry = d
+		if stop := ahead.spells[0]; !math.IsInf(stop.to, 1) {
+			o.Dry = &Dry{Seconds: math.Max(0, stop.to-stop.from), Refill: stop.refill, At: now.Add(secs(stop.to))}
+			// the stretch after that refill at the same pace, up to two windows from now
+			switch {
+			case len(ahead.spells) == 1:
+				o.Dry.Next = &Next{Lasts: true}
+			case !math.IsInf(ahead.spells[1].to, 1):
+				o.Dry.Next = &Next{Seconds: math.Max(0, ahead.spells[1].to-ahead.spells[1].from)}
+			}
 		}
-	case runOut(pools, speed*1.2, 0, span, span) != nil:
+	case out(d(speed*1.2, span)):
 		o.Verdict = "tight"
 	default:
 		o.Verdict = "lasts"
 	}
 	// the largest multiple of the pace that lasts the window (bisection)
 	lo, hi := 0.0, maxMultiple
-	if runOut(pools, speed*hi, 0, span, span) == nil {
+	if !out(d(speed*hi, span)) {
 		lo = hi
 	}
 	for i := 0; i < 30 && lo != hi && hi-lo > 1e-4; i++ {
 		mid := (lo + hi) / 2
-		if runOut(pools, speed*mid, 0, span, span) == nil {
+		if !out(d(speed*mid, span)) {
 			lo = mid
 		} else {
 			hi = mid
@@ -200,84 +247,69 @@ func weightsOf(accounts []Account) []float64 {
 	return out
 }
 
-type stop struct {
-	seconds, at float64 // seconds from now it runs out; seconds from now of the refill (+Inf: none)
-	refill      string
-	pools       []pool
-}
-
-// runOut: when every account is out of room at `rate` points a second, from `from` to `end`
-// (seconds from now), and the reset that brings room back; nil when the room lasts. Use drains the
-// account that resets first (the balancer's order); a reset refills that account to its cap and
-// starts its next window, `span` seconds long.
-func runOut(start []pool, rate, from, end, span float64) *stop {
-	pools := append([]pool(nil), start...)
-	t := from
-	for {
-		next := end
-		for _, p := range pools {
-			next = math.Min(next, p.over)
-		}
-		need := rate * (next - t)
-		var room float64
-		for _, p := range pools {
-			room += p.room
-		}
-		if room < need {
-			back := pools[0]
-			for _, p := range pools {
-				if p.over < back.over {
-					back = p
-				}
-			}
-			empty := append([]pool(nil), pools...)
-			for i := range empty {
-				empty[i].room = 0
-			}
-			return &stop{seconds: t + room/rate, at: back.over, refill: back.name, pools: empty}
-		}
-		order := append([]pool(nil), pools...)
-		sort.SliceStable(order, func(i, j int) bool { return order[i].over < order[j].over })
-		left := need
-		for _, o := range order {
-			take := math.Min(o.room, left)
+// poolsDrain: use drains the account that resets first; a reset refills that account to its cap
+// and starts its next window, `span` seconds long. With every account out of room, the next reset
+// brings room back.
+func poolsDrain(start []pool, span float64) drain {
+	return func(rate, end float64) run {
+		pools := append([]pool(nil), start...)
+		refill := func(at float64) {
 			for i := range pools {
-				if pools[i].key == o.key {
-					pools[i].room -= take
+				if pools[i].over == at {
+					pools[i].room = pools[i].cap
+					pools[i].over += span
 				}
 			}
-			left -= take
 		}
-		if next >= end {
-			return nil
-		}
-		t = next
-		for i := range pools {
-			if pools[i].over == next {
-				pools[i].room = pools[i].cap
-				pools[i].over += span
+		var out run
+		t := 0.0
+		for {
+			next := end
+			for _, p := range pools {
+				next = math.Min(next, p.over)
 			}
+			need := rate * (next - t)
+			var room float64
+			for _, p := range pools {
+				room += p.room
+			}
+			if room < need {
+				back := pools[0]
+				for _, p := range pools {
+					if p.over < back.over {
+						back = p
+					}
+				}
+				out.spells = append(out.spells, spell{from: t + room/rate, to: back.over, refill: back.name})
+				if back.over >= end {
+					return out
+				}
+				for i := range pools {
+					pools[i].room = 0
+				}
+				t = back.over
+				refill(t)
+				continue
+			}
+			order := append([]pool(nil), pools...)
+			sort.SliceStable(order, func(i, j int) bool { return order[i].over < order[j].over })
+			left := need
+			for _, o := range order {
+				take := math.Min(o.room, left)
+				for i := range pools {
+					if pools[i].key == o.key {
+						pools[i].room -= take
+					}
+				}
+				left -= take
+			}
+			if next >= end {
+				return out
+			}
+			t = next
+			refill(next)
 		}
 	}
-}
-
-// afterRefill: the stretch after the refill at the same pace, up to two windows from now.
-func afterRefill(s *stop, rate, span float64) *Next {
-	pools := append([]pool(nil), s.pools...)
-	for i := range pools {
-		if pools[i].over == s.at {
-			pools[i].room = pools[i].cap
-			pools[i].over += span
-		}
-	}
-	again := runOut(pools, rate, s.at, 2*span, span)
-	switch {
-	case again == nil:
-		return &Next{Lasts: true}
-	case math.IsInf(again.at, 1):
-		return nil
-	}
-	return &Next{Seconds: math.Max(0, again.at-again.seconds)}
 }
 
 // workPace reads the pace from the history: each rise of an account's weekly utilization is use (a
