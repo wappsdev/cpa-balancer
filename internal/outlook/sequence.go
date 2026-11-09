@@ -44,7 +44,6 @@ type turn struct {
 	session   float64   // the 5-hour window's use
 	closes    time.Time // the 5-hour window's reset (zero: closed, it starts with the next use)
 	pace      float64   // the 5-hour window's percent a second while used (0: it never fills)
-	listed    bool
 	off       time.Time // CPA holds the credential back until then (zero: it does not)
 }
 
@@ -62,7 +61,7 @@ func sequenceOf(v engine.View, cfg config.Config, weights []float64, paces map[s
 		}
 	}
 	for i, a := range v.Accounts {
-		t := turn{account: configured[a.AuthFile], key: a.AuthFile, name: a.Name, weight: weights[i], listed: a.Listed,
+		t := turn{account: configured[a.AuthFile], key: a.AuthFile, name: a.Name, weight: weights[i],
 			fiveHour: a.FiveHour, pace: paces[a.AuthFile]}
 		if r, ok := a.Readings[quota.Main]; ok && r.ResetsAt != nil {
 			t.util, t.resets = r.Util, *r.ResetsAt
@@ -251,14 +250,12 @@ func reached(at, next time.Time) bool {
 	return !at.IsZero() && at.Sub(next) <= time.Microsecond
 }
 
-// snapshots is what the policy reads at `t`: each listed account's windows, just observed; the
-// 5-hour ones only with `session`.
+// snapshots is what the policy reads at `t`: every account's windows, just observed; the 5-hour
+// ones only with `session`. Like the engine, it gives the policy every account whether or not
+// CPA's credential list names it (the status's `listed`); CPA's holds come in through `off`.
 func snapshots(turns []turn, t time.Time, session bool) map[string]policy.Snapshot {
 	out := map[string]policy.Snapshot{}
 	for _, x := range turns {
-		if !x.listed {
-			continue
-		}
 		s := policy.Snapshot{Readings: quota.Readings{}, Unavailable: t.Before(x.off), Weight: x.weight, NoFiveHour: !x.fiveHour}
 		if !x.resets.IsZero() {
 			r := x.resets

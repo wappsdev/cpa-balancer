@@ -297,6 +297,28 @@ func TestARoomAlreadyOutIsMarkedOnTheLiveAccount(t *testing.T) {
 	}
 }
 
+func TestAccountsTheViewDoesNotListStillTakeTurnsAsInThePolicy(t *testing.T) {
+	// The status can report every account as not listed by CPA (its credential list), while the
+	// engine still gives the policy every configured account, so live work goes on. Two weight-10
+	// accounts held to 90 until 24 h before their reset, no 5-hour window; a Pro held to 45 until
+	// 48 h before, with a closed 5-hour window. The second is in use at 61%, resetting in 44.75 h;
+	// at 5.35 Pro points an hour (0.535% an hour of it) it resets first, and nothing runs out.
+	v, cfg := world(100, "second",
+		seat{key: "first", util: 0, resets: 86.75, weight: 10},
+		seat{key: "second", util: 61, resets: 44.75, weight: 10},
+		seat{key: "pro", util: 0, resets: 60.75, weight: 1, steps: []config.ReserveStep{{Cap: 45, Hours: 48}}, five: &five{}})
+	cfg.Thresholds.Reserve = []config.ReserveStep{{Cap: 90, Hours: 24}}
+	cfg.Accounts[0].Reserve, cfg.Accounts[1].Reserve = config.ReserveDefault, config.ReserveDefault
+	for i := range v.Accounts {
+		v.Accounts[i].Listed = false
+	}
+	o := week(t, 5.35, v, cfg)
+	got, exhausts := handoffs(t, o)
+	if o.Verdict == "out" || o.RunsOut != nil || exhausts != "" || got["second"] != -1 {
+		t.Fatalf("verdict %s, runs out %v, handoffs %v, exhausts %q", o.Verdict, o.RunsOut, got, exhausts)
+	}
+}
+
 func TestACapReachedAtAnotherEventStillHandsOff(t *testing.T) {
 	// A reaches 100 at 10 h, the very moment B resets
 	v, cfg := world(100, "a", seat{key: "a", util: 80, resets: 100, weight: 1}, seat{key: "b", util: 100, resets: 10, weight: 1})
