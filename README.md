@@ -79,6 +79,29 @@ State: `~/.cli-proxy-api/cpa-balancer/state.json`. History (90 days of 5-minute 
 `~/.cli-proxy-api/cpa-balancer/history/`. Log lines go to CPA's log with the prefix
 `cpa-balancer:`.
 
+## Look-ahead
+
+The weekly look-ahead runs the use through the accounts at the work pace, in Pro-plan points an
+hour, idle time included. The pace is the fastest of these methods, each built to catch a
+different way the use can speed up (`pace.methods` lists the ones present, `pace.basis` names the
+pick; a tie goes to `now`, then `trend`, then `peak`):
+
+- `peak`: spiky days. The heaviest 24 h ending in the last 7 days, as if it came every day
+  (needs 2 h of work in those 24 h).
+- `trend`: speeding up. The last day's pace plus how far it passes the last 3 days' (only when it
+  does; both need 2 h of work).
+- `now`: the session in progress. The last 5 h's pace while working, at the hours a day worked over
+  the 7 days (needs 30 min of work in the 5 h).
+
+With no method present the pace is the 7 days' (basis `7d`, needs 2 h of work); with less, each
+open window's own average (`source: average`).
+
+Each account in `week.accounts` has its next event at that pace: `handoff` (when the balancer
+leaves it at its cap) and `exhausts` (the room runs out on it). `margin` is the smallest of 1, 1.2
+and 1.4 times the pace at which the account reaches its cap within its current window (absent: not
+even at 1.4). `lasts` is the same scale for all accounts together: the largest multiple of the pace
+at which the room lasts.
+
 ## Roll back
 
 Pause it on the page (or set `paused: true`) to hand every pick back to CPA's fill-first

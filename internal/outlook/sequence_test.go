@@ -374,7 +374,7 @@ func TestHandoffsInTheJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `"accounts":[{"key":"a","handoff":"2026-11-04T22:00:00Z"},{"key":"b","handoff":"2026-11-05T03:00:00Z","exhausts":true}]`
+	want := `"accounts":[{"key":"a","handoff":"2026-11-04T22:00:00Z","margin":1},{"key":"b","handoff":"2026-11-05T03:00:00Z","exhausts":true,"margin":1}]`
 	if !strings.Contains(string(b), want) {
 		t.Fatalf("%s", b)
 	}
@@ -392,5 +392,65 @@ func TestBuildLooksAheadWithTheConfiguration(t *testing.T) {
 	o, err := Build(v, cfg, h, now)
 	if err != nil || o.Week == nil || o.Pace == nil || len(o.Week.Accounts) != 2 || o.Week.Accounts[0].Key != "a" {
 		t.Fatalf("%+v %+v", o.Week, o.Pace)
+	}
+}
+
+// marginsOf is each account's margin (0: none).
+func marginsOf(o Outlook) map[string]float64 {
+	out := map[string]float64{}
+	for _, a := range o.Accounts {
+		out[a.Key] = a.Margin
+	}
+	return out
+}
+
+func TestAMarginIsTheSmallestMultipleThatReachesTheCapInTheWindow(t *testing.T) {
+	// A is active at 80% and resets in 100 h; B is at 0% and resets in 150 h. A's 20 points last
+	// 20/rate hours: it hands off inside its window above 0.2 an hour.
+	v, cfg := world(100, "a", seat{key: "a", util: 80, resets: 100, weight: 1}, seat{key: "b", util: 0, resets: 150, weight: 1})
+	for _, c := range []struct {
+		perHour, margin float64
+		handoff         bool
+	}{
+		{0.25, 1, true},    // 80 h at the pace
+		{0.18, 1.2, false}, // 111 h at the pace; at 1.2 times it, 0.216, 92.6 h
+		{0.15, 1.4, false}, // 1.2 times: 0.18, 111 h; 1.4 times: 0.21, 95.2 h
+		{0.1, 0, false},    // 1.4 times: 0.14, 143 h
+	} {
+		o := week(t, c.perHour, v, cfg)
+		got, exhausts := handoffs(t, o)
+		m := marginsOf(o)
+		if m["a"] != c.margin || (got["a"] != -1) != c.handoff || exhausts != "" || m["b"] != 0 {
+			t.Fatalf("%v an hour: margins %v, handoffs %v, exhausts %q", c.perHour, m, got, exhausts)
+		}
+	}
+}
+
+func TestARunOutCountsForTheMarginOnlyInTheAccountsCurrentWindow(t *testing.T) {
+	// as in TestTheRunOutIsMarkedInAnyWindow: the room runs out on W in its next window, so W has
+	// no margin, while G hands off at the pace
+	v, cfg := world(100, "g", seat{key: "w", util: 100, resets: 14, weight: 1}, seat{key: "g", util: 6, resets: 137, weight: 1})
+	o := week(t, 1.91, v, cfg)
+	if _, exhausts := handoffs(t, o); exhausts != "w" {
+		t.Fatalf("exhausts %q", exhausts)
+	}
+	if m := marginsOf(o); m["w"] != 0 || m["g"] != 1 {
+		t.Fatalf("margins %v", m)
+	}
+	// the room out on the live account now: a run-out in its current window
+	v, cfg = world(100, "a", seat{key: "a", util: 100, resets: 50, weight: 1}, seat{key: "b", util: 100, resets: 60, weight: 1})
+	if m := marginsOf(week(t, 1, v, cfg)); m["a"] != 1 {
+		t.Fatalf("margins %v", m)
+	}
+}
+
+func TestTheMarginIsInTheJSON(t *testing.T) {
+	v, cfg := world(100, "a", seat{key: "a", util: 80, resets: 100, weight: 1}, seat{key: "b", util: 0, resets: 150, weight: 1})
+	b, err := json.Marshal(week(t, 0.18, v, cfg).Accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `{"key":"a","margin":1.2}`) || strings.Count(string(b), "margin") != 1 {
+		t.Fatalf("%s", b)
 	}
 }

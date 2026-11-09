@@ -100,6 +100,9 @@ type Handoff struct {
 	Key      string     `json:"key"`
 	At       *time.Time `json:"handoff,omitempty"`
 	Exhausts bool       `json:"exhausts,omitempty"`
+	// The smallest of 1, 1.2 and 1.4 times the pace at which the account reaches its cap within
+	// its current window (a handoff or the room running out on it); 0: not even at 1.4.
+	Margin float64 `json:"margin,omitempty"`
 }
 
 type pool struct {
@@ -217,6 +220,14 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 	o.Horizon = &horizon
 	ahead := try(speed, 2*span)
 	o.Accounts = ahead.accounts
+	if len(o.Accounts) > 0 {
+		margins(o.Accounts, accounts, window, now, func(multiple float64) run {
+			if multiple == 1 {
+				return ahead
+			}
+			return try(speed*multiple, 2*span)
+		})
+	}
 	if len(ahead.spells) > 0 {
 		at := now.Add(secs(ahead.spells[0].from))
 		o.RunsOut = &at
@@ -260,6 +271,28 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 	}
 
 	return o, true, nil
+}
+
+// margins sets each account's margin: the smallest of 1, 1.2 and 1.4 times the pace whose run
+// (`at`) has it reach its cap before its current window ends. A run gives its accounts in the
+// order of `handoffs`.
+func margins(handoffs []Handoff, accounts []Account, window time.Duration, now time.Time, at func(multiple float64) run) {
+	ends := map[string]time.Time{}
+	for _, a := range accounts {
+		end := a.ResetsAt
+		for !end.IsZero() && !end.After(now) {
+			end = end.Add(window) // a reset already past started the next window
+		}
+		ends[a.Key] = end
+	}
+	for _, multiple := range []float64{1, 1.2, 1.4} {
+		for i, h := range at(multiple).accounts {
+			end := ends[h.Key]
+			if handoffs[i].Margin == 0 && h.At != nil && (end.IsZero() || h.At.Before(end)) {
+				handoffs[i].Margin = multiple
+			}
+		}
+	}
 }
 
 func secs(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
