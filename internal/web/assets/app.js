@@ -210,7 +210,7 @@ function outlookView(o) {
   if (o.pace) {
     const p = o.pace;
     lines.push(p.source === "measured"
-      ? `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour over the week (${p.active_per_hour.toFixed(1)} while working, about ${p.hours_per_day.toFixed(0)} h a day).`
+      ? `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour, by ${p.basis || "7d"}, the fastest method${p.active_per_hour > 0 ? ` (${p.active_per_hour.toFixed(1)} while working, about ${p.hours_per_day.toFixed(0)} h a day)` : ""}.`
       : `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour, each window's own average (too little recent work to measure).`);
   }
   return { chip, lines, used: Math.round(o.percent) };
