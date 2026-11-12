@@ -66,15 +66,15 @@ check('the run-out Σ shows red is red on its account', cell(2, 0).flag === '⚑
 check('a run-out past the week stays yellow', cell(2, 2).stops && cell(2, 2).tone === 'warn')
 check('a margin is a bare flag', cell(1, 3).flag === '⚑' && cell(1, 3).tone === 'ok')
 check('no flag at all', cell(2, 3).flag === '—' && cell(2, 3).tone === '')
-// listed with no handoff and no margin: it resets before its cap; the account in use says where its
-// week ends at that pace, a next one a check (an account without a reading stays a dash)
+// listed with no handoff and no margin: it resets before its cap; it still says, green, when it would
+// reach its cap at that pace (an account without a reading stays a dash)
 const read = { ...status, accounts: [
   { auth_file: 'b', weight: 1, caps: { main: 85 }, readings: { main: { util: 0, resets_at: at(30) } } },
   { auth_file: 'a', weight: 1, caps: { main: 85 }, readings: { main: { util: 10, resets_at: at(10) } } }] }
 const resets = methodsTable({ ...week, by_method: [{ name: 'now', per_hour: 0.5, verdict: 'lasts', lasts: 3, accounts: [{ key: 'a' }, { key: 'b' }] }] }, read, NOW, f => f)
-// 0.5%/h of a Pro account for 10 hours on top of 10%: 15% at the reset
-check('the account in use resets first: where its week ends', resets.rows[1].cells[0].flag === '→15%' && resets.rows[1].cells[0].tone === 'ok' && resets.rows[1].cells[0].title.includes('Resets before its cap'))
-check('a next account resets first: a check', resets.rows[2].cells[0].flag === '✓' && resets.rows[2].cells[0].tone === 'ok')
+// 0.5%/h of a Pro account from 10% to its cap of 85: 150 hours
+check('the account in use resets first: the time to its cap, green', resets.rows[1].cells[0].flag === '⚑6d 6h' && resets.rows[1].cells[0].tone === 'ok' && resets.rows[1].cells[0].title.includes('it resets first'))
+check('a next account resets first: the time to its cap, green', resets.rows[2].cells[0].flag === '⚑7d 2h' && resets.rows[2].cells[0].tone === 'ok')
 check('the notes say what the marks mean', resets.notes.some(n => n.startsWith('In an account')))
 // a method the balancer did not measure keeps its column: a dash, and why in its title
 const why = 'the last 24 h are not faster than the last 3 days'
