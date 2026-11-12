@@ -102,6 +102,11 @@ and 1.4 times the pace at which the account reaches its cap within its current w
 even at 1.4). `lasts` is the same scale for all accounts together: the largest multiple of the pace
 at which the room lasts.
 
+`week.by_method` runs the same week at each method's pace, one entry per method present (a method
+not present is left out): its `per_hour`, `verdict`, `lasts`, `runs_out`, `dry` and `accounts`, with
+the same meaning as the fields above. The method the pace comes from is marked `used: true`, and
+its entry is the same as those fields. The page shows them in a table under the outlook.
+
 ## Roll back
 
 Pause it on the page (or set `paused: true`) to hand every pick back to CPA's fill-first
@@ -116,7 +121,7 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 |---|---|---|
 | GET | `/status` | accounts, readings, caps, the decision per bucket and recent changes |
 | GET | `/history?range=24h\|7d\|30d\|90d` | utilization, active account and tokens over time |
-| GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), and the measured work pace |
+| GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), the same at each method's pace (`week.by_method`), and the measured work pace |
 | POST | `/run` | one balancer tick now |
 | POST | `/recheck?auth_file=…` | probe one account (or every account) now |
 | GET | `/credentials` | the Claude credentials CPA lists |

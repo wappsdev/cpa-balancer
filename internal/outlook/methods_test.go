@@ -1,0 +1,114 @@
+package outlook
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+// threeWays is a pace measured three ways, peak the fastest and so the one used.
+func threeWays() *Pace {
+	return &Pace{PerHour: 2, Basis: "peak", Methods: []Method{{Name: "peak", PerHour: 2}, {Name: "trend", PerHour: 1}, {Name: "now", PerHour: 0.5}}}
+}
+
+// byMethod is the weekly outlook of two accounts with `measured` as the pace: A is active at 80%
+// and resets in 100 h, B is at 90% and resets in 120 h.
+func byMethod(t *testing.T, measured *Pace) Outlook {
+	t.Helper()
+	v, cfg := world(100, "a", seat{key: "a", util: 80, resets: 100, weight: 1}, seat{key: "b", util: 90, resets: 120, weight: 1})
+	o, ok, err := weekly(v, cfg, measured, nil, now)
+	if err != nil || !ok {
+		t.Fatalf("two accounts or more combine: %v", err)
+	}
+	return o
+}
+
+func sameTime(a, b *time.Time) bool {
+	return (a == nil) == (b == nil) && (a == nil || a.Equal(*b))
+}
+
+func TestEachMethodRunsTheWeekAtItsOwnPace(t *testing.T) {
+	o := byMethod(t, threeWays())
+	if len(o.ByMethod) != 3 {
+		t.Fatalf("three methods, three weeks: %+v", o.ByMethod)
+	}
+	for i, want := range []string{"peak", "trend", "now"} {
+		w := o.ByMethod[i]
+		if w.Name != want || w.Used != (want == "peak") {
+			t.Fatalf("%d: %+v", i, w)
+		}
+		// each is the week at that method's pace alone
+		alone := byMethod(t, &Pace{PerHour: w.PerHour})
+		if w.Verdict != alone.Verdict || w.Lasts != alone.Lasts || !sameTime(w.RunsOut, alone.RunsOut) {
+			t.Fatalf("%s: %+v, alone %+v", w.Name, w, alone)
+		}
+		got, exhausts := handoffs(t, Outlook{Accounts: w.Accounts})
+		want, wantExhausts := handoffs(t, alone)
+		if exhausts != wantExhausts || got["a"] != want["a"] || got["b"] != want["b"] {
+			t.Fatalf("%s: handoffs %v %q, alone %v %q", w.Name, got, exhausts, want, wantExhausts)
+		}
+	}
+	// A's 20 points, then B's 10: at 2, 1 and 0.5 an hour A hands off at 10, 20 and 40 h, and the
+	// room runs out on B 5, 10 and 20 h after that, each before a reset brings more
+	for i, h := range []float64{15, 30, 60} {
+		w := o.ByMethod[i]
+		near(t, w.Name, w.RunsOut.Sub(now).Hours(), h, 1e-6)
+		if w.Verdict != "out" || w.Dry == nil {
+			t.Fatalf("%+v", w)
+		}
+	}
+}
+
+func TestTheUsedMethodIsTheOutlooksOwnNumbers(t *testing.T) {
+	o := byMethod(t, threeWays())
+	if len(o.ByMethod) == 0 {
+		t.Fatal("no methods")
+	}
+	used := o.ByMethod[0]
+	if !used.Used || used.PerHour != o.Pace.PerHour || used.Verdict != o.Verdict || used.Lasts != o.Lasts ||
+		!sameTime(used.RunsOut, o.RunsOut) || used.Dry != o.Dry || len(used.Accounts) != len(o.Accounts) {
+		t.Fatalf("used %+v, outlook %+v", used, o)
+	}
+	for i := range o.Accounts {
+		if !sameTime(used.Accounts[i].At, o.Accounts[i].At) || used.Accounts[i].Exhausts != o.Accounts[i].Exhausts || used.Accounts[i].Margin != o.Accounts[i].Margin {
+			t.Fatalf("%d: %+v, outlook %+v", i, used.Accounts[i], o.Accounts[i])
+		}
+	}
+}
+
+func TestAMissingMethodIsAbsentNotZero(t *testing.T) {
+	two := threeWays()
+	two.Methods = two.Methods[:2]
+	if o := byMethod(t, two); len(o.ByMethod) != 2 || o.ByMethod[1].Name != "trend" {
+		t.Fatalf("%+v", o.ByMethod)
+	}
+	// the week's own pace (7d) and each window's average have no methods
+	if o := byMethod(t, &Pace{PerHour: 2, Basis: "7d"}); o.ByMethod != nil {
+		t.Fatalf("%+v", o.ByMethod)
+	}
+	if o := byMethod(t, nil); o.ByMethod != nil {
+		t.Fatalf("%+v", o.ByMethod)
+	}
+}
+
+func TestEachMethodsWeekIsInTheJSON(t *testing.T) {
+	b, err := json.Marshal(byMethod(t, threeWays()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"by_method":[{"name":"peak","per_hour":2,"used":true,"verdict":"out",`,
+		`{"name":"trend","per_hour":1,"verdict":"out",`,
+		`"runs_out":"2026-11-05T18:00:00Z"`,
+		`"accounts":[{"key":"a","handoff":"2026-11-05T08:00:00Z","margin":1},{"key":"b","handoff":"2026-11-05T18:00:00Z","exhausts":true,"margin":1}]`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("%s not in %s", want, b)
+		}
+	}
+	// the methods' weeks carry no pace of their own
+	if strings.Count(string(b), `"pace"`) != 1 {
+		t.Fatalf("%s", b)
+	}
+}

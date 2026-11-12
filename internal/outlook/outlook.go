@@ -93,6 +93,21 @@ type Outlook struct {
 	// Each account's turn in the balancer's order at the pace (the weekly window only), from the
 	// same run as RunsOut.
 	Accounts []Handoff `json:"accounts,omitempty"`
+	// The same look ahead at each method's pace, in the pace's order of methods; the one the
+	// numbers above come from is marked used. Absent without methods (7d, or each window's average).
+	ByMethod []Way `json:"by_method,omitempty"`
+}
+
+// Way is the outlook at one method's pace: the same run as the outlook's own, at that pace.
+type Way struct {
+	Name     string     `json:"name"`
+	PerHour  float64    `json:"per_hour"`
+	Used     bool       `json:"used,omitempty"`
+	Verdict  string     `json:"verdict"`
+	Lasts    float64    `json:"lasts,omitempty"`
+	RunsOut  *time.Time `json:"runs_out,omitempty"`
+	Dry      *Dry       `json:"dry,omitempty"`
+	Accounts []Handoff  `json:"accounts,omitempty"`
 }
 
 // Handoff is when the balancer leaves an account at its cap, counted from now through the turns
@@ -284,8 +299,34 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 	if err != nil {
 		return Outlook{}, false, err
 	}
+	// the same look ahead at each method's pace; the used one is this one
+	for _, m := range methodsOf(measured) {
+		if m.Name == measured.Basis {
+			w := wayOf(m, o)
+			w.Used = true
+			o.ByMethod = append(o.ByMethod, w)
+			continue
+		}
+		other, _, err := look(accounts, window, &Pace{PerHour: m.PerHour}, now, d)
+		if err != nil {
+			return Outlook{}, false, err
+		}
+		o.ByMethod = append(o.ByMethod, wayOf(m, other))
+	}
 
 	return o, true, nil
+}
+
+func methodsOf(p *Pace) []Method {
+	if p == nil {
+		return nil
+	}
+	return p.Methods
+}
+
+// wayOf is an outlook as the way of method `m`.
+func wayOf(m Method, o Outlook) Way {
+	return Way{Name: m.Name, PerHour: m.PerHour, Verdict: o.Verdict, Lasts: o.Lasts, RunsOut: o.RunsOut, Dry: o.Dry, Accounts: o.Accounts}
 }
 
 // margins sets each account's margin: the smallest of 1, 1.2 and 1.4 times the pace whose run
