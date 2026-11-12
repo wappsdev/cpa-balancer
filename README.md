@@ -83,8 +83,8 @@ State: `~/.cli-proxy-api/cpa-balancer/state.json`. History (90 days of 5-minute 
 
 The weekly look-ahead runs the use through the accounts at the work pace, in Pro-plan points an
 hour, idle time included. The pace is the fastest of these methods, each built to catch a
-different way the use can speed up (`pace.methods` lists the ones present, `pace.basis` names the
-pick; a tie goes to `now`, then `trend`, then `peak`):
+different way the use can speed up (`pace.methods` lists the ones present, `pace.absent` the others
+with a short `reason`, `pace.basis` names the pick; a tie goes to `now`, then `trend`, then `peak`):
 
 - `peak`: spiky days. The heaviest 24 h ending in the last 7 days, as if it came every day
   (needs 2 h of work in those 24 h).
@@ -102,10 +102,12 @@ and 1.4 times the pace at which the account reaches its cap within its current w
 even at 1.4). `lasts` is the same scale for all accounts together: the largest multiple of the pace
 at which the room lasts.
 
-`week.by_method` runs the same week at each method's pace, one entry per method present (a method
-not present is left out): its `per_hour`, `verdict`, `lasts`, `runs_out`, `dry` and `accounts`, with
-the same meaning as the fields above. The method the pace comes from is marked `used: true`, and
-its entry is the same as those fields. The page shows them in a table under the outlook.
+`week.by_method` runs the same week at each method's pace, always `peak`, `trend` and `now` in that
+order: its `per_hour`, `verdict`, `lasts`, `runs_out`, `dry` and `accounts`, with the same meaning
+as the fields above. The method the pace comes from is marked `used: true`, and its entry is the
+same as those fields. A method not present has only its `name` and `reason` (`less than 30 min of
+work in the last 5 h`). With no measured pace (each window's average) `by_method` is absent. The
+page shows them in a table under the outlook, a method not present as `—` with its reason.
 
 ## Roll back
 

@@ -424,6 +424,41 @@ func TestTrendIsAbsentWhenTheUseSlowsOrTheDayHasTooLittleWork(t *testing.T) {
 	}
 }
 
+// absent is the pace's absent methods' reasons by name.
+func absent(p *Pace) map[string]string {
+	out := map[string]string{}
+	for _, a := range p.Absent {
+		out[a.Name] = a.Reason
+	}
+	return out
+}
+
+func TestAnAbsentMethodSaysWhy(t *testing.T) {
+	slow := MeasurePace(weekOf(work{20, 23, 1}, work{68, 71, 1}, work{116, 119, 1}), one, now)
+	if got := absent(slow); len(got) != 2 || got["trend"] != "the last 24 h are not faster than the last 3 days" ||
+		got["now"] != "less than 30 min of work in the last 5 h" {
+		t.Fatalf("%+v", slow.Absent)
+	}
+	short := MeasurePace(weekOf(work{20, 21, 9}, work{68, 71, 0.5}), one, now)
+	if got := absent(short)["trend"]; got != "less than 2 h of work in the last 24 h" {
+		t.Fatalf("%+v", short.Absent)
+	}
+	// every method present: none absent
+	if p := MeasurePace(weekOf(work{1, 2, 1}, work{20, 23, 1}, work{68, 71, 0.5}, work{116, 119, 0.5}, work{154, 161, 10}), one, now); len(p.Absent) != 0 {
+		t.Fatalf("%+v", p.Absent)
+	}
+	// the week's own pace (7d): all three absent, in the methods' order
+	var spans []work
+	for d := 0; d < 7; d++ {
+		spans = append(spans, work{48*d + 20, 48*d + 21, 1})
+	}
+	p := MeasurePace(weekOf(spans...), one, now)
+	if len(p.Absent) != 3 || p.Absent[0].Name != "peak" || p.Absent[1].Name != "trend" || p.Absent[2].Name != "now" ||
+		p.Absent[0].Reason != "no 24 h with 2 h of work in the last 7 days" {
+		t.Fatalf("%+v", p.Absent)
+	}
+}
+
 func TestNowIsAbsentWithLessThanHalfAnHourInTheLast5Hours(t *testing.T) {
 	// the work starts 5 h ago (step 10 ends then): nothing in the last 5 h
 	p := MeasurePace(weekOf(work{10, 13, 1}), one, now)

@@ -47,6 +47,14 @@ type Pace struct {
 	// every method present; measured only.
 	Basis   string   `json:"basis,omitempty"`
 	Methods []Method `json:"methods,omitempty"`
+	// Every method not present, in the methods' order, with why; measured only.
+	Absent []Absent `json:"absent,omitempty"`
+}
+
+// Absent is a method the history did not measure, and why (too little work, or no rise).
+type Absent struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // Method is the work pace by one way of measuring it (see MeasurePace). A method that measures no
@@ -93,17 +101,20 @@ type Outlook struct {
 	// Each account's turn in the balancer's order at the pace (the weekly window only), from the
 	// same run as RunsOut.
 	Accounts []Handoff `json:"accounts,omitempty"`
-	// The same look ahead at each method's pace, in the pace's order of methods; the one the
-	// numbers above come from is marked used. Absent without methods (7d, or each window's average).
+	// The same look ahead at each method's pace: peak, trend and now, always all three; the one
+	// the numbers above come from is marked used, one not measured has its reason. Absent without
+	// a measured pace (each window's average).
 	ByMethod []Way `json:"by_method,omitempty"`
 }
 
-// Way is the outlook at one method's pace: the same run as the outlook's own, at that pace.
+// Way is the outlook at one method's pace: the same run as the outlook's own, at that pace. A
+// method the history did not measure has only its name and why (Reason).
 type Way struct {
 	Name     string     `json:"name"`
-	PerHour  float64    `json:"per_hour"`
+	PerHour  float64    `json:"per_hour,omitempty"`
 	Used     bool       `json:"used,omitempty"`
-	Verdict  string     `json:"verdict"`
+	Reason   string     `json:"reason,omitempty"`
+	Verdict  string     `json:"verdict,omitempty"`
 	Lasts    float64    `json:"lasts,omitempty"`
 	RunsOut  *time.Time `json:"runs_out,omitempty"`
 	Dry      *Dry       `json:"dry,omitempty"`
@@ -299,30 +310,39 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 	if err != nil {
 		return Outlook{}, false, err
 	}
-	// the same look ahead at each method's pace; the used one is this one
-	for _, m := range methodsOf(measured) {
-		if m.Name == measured.Basis {
-			w := wayOf(m, o)
-			w.Used = true
-			o.ByMethod = append(o.ByMethod, w)
-			continue
+	// the same look ahead at each method's pace, every method in its place; the used one is this
+	// one, an absent one says why
+	if measured == nil {
+		return o, true, nil
+	}
+	for _, name := range methodNames {
+		for _, a := range measured.Absent {
+			if a.Name == name {
+				o.ByMethod = append(o.ByMethod, Way{Name: name, Reason: a.Reason})
+			}
 		}
-		other, _, err := look(accounts, window, &Pace{PerHour: m.PerHour}, now, d)
-		if err != nil {
-			return Outlook{}, false, err
+		for _, m := range measured.Methods {
+			switch {
+			case m.Name != name:
+			case m.Name == measured.Basis:
+				w := wayOf(m, o)
+				w.Used = true
+				o.ByMethod = append(o.ByMethod, w)
+			default:
+				other, _, err := look(accounts, window, &Pace{PerHour: m.PerHour}, now, d)
+				if err != nil {
+					return Outlook{}, false, err
+				}
+				o.ByMethod = append(o.ByMethod, wayOf(m, other))
+			}
 		}
-		o.ByMethod = append(o.ByMethod, wayOf(m, other))
 	}
 
 	return o, true, nil
 }
 
-func methodsOf(p *Pace) []Method {
-	if p == nil {
-		return nil
-	}
-	return p.Methods
-}
+// methodNames is the pace methods in their order (see MeasurePace).
+var methodNames = []string{"peak", "trend", "now"}
 
 // wayOf is an outlook as the way of method `m`.
 func wayOf(m Method, o Outlook) Way {
@@ -531,6 +551,7 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	end := now.Unix()
 	minWork := MinWork.Seconds()
 	var methods []Method
+	var absent []Absent
 
 	// peak: every 24 h with enough work in it
 	peak := Method{Name: "peak"}
@@ -544,28 +565,37 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	}
 	if peak.PerHour > 0 {
 		methods = append(methods, peak)
+	} else {
+		absent = append(absent, Absent{Name: "peak", Reason: "no 24 h with 2 h of work in the last 7 days"})
 	}
 
-	// trend: the day's calendar pace rising past the 3 days'
+	// trend: the day's calendar pace rising past the 3 days' (the 3 days hold the day's work)
 	use1, worked1 := s.in(end-int64(day.Seconds()), end)
-	use3, worked3 := s.in(end-int64(3*day.Seconds()), end)
-	if pace1, pace3 := use1/24, use3/72; worked1 >= minWork && worked3 >= minWork && pace1 > pace3 {
+	use3, _ := s.in(end-int64(3*day.Seconds()), end)
+	switch pace1, pace3 := use1/24, use3/72; {
+	case worked1 < minWork:
+		absent = append(absent, Absent{Name: "trend", Reason: "less than 2 h of work in the last 24 h"})
+	case pace1 <= pace3:
+		absent = append(absent, Absent{Name: "trend", Reason: "the last 24 h are not faster than the last 3 days"})
+	default:
 		methods = append(methods, Method{Name: "trend", PerHour: math.Max(0, pace1+(pace1-pace3)/2)})
 	}
 
-	// now: the session's pace while working, over the hours a day of the week
+	// now: the session's pace while working, over the hours a day of the week (work in the last
+	// 5 h is work in the week, so the week has its hours)
 	if use, worked := s.in(end-int64(Five.Seconds()), end); worked >= (30 * time.Minute).Seconds() {
-		if week := workPace(h, byKey, 0); week != nil {
-			active := use / worked * 3600
-			methods = append(methods, Method{Name: "now", PerHour: active * week.HoursPerDay / 24,
-				ActivePerHour: active, HoursPerDay: week.HoursPerDay})
-		}
+		week := workPace(h, byKey, 0)
+		active := use / worked * 3600
+		methods = append(methods, Method{Name: "now", PerHour: active * week.HoursPerDay / 24,
+			ActivePerHour: active, HoursPerDay: week.HoursPerDay})
+	} else {
+		absent = append(absent, Absent{Name: "now", Reason: "less than 30 min of work in the last 5 h"})
 	}
 
 	if len(methods) == 0 {
 		p := workPace(h, byKey, minWork)
 		if p != nil {
-			p.Basis = "7d"
+			p.Basis, p.Absent = "7d", absent
 		}
 		return p
 	}
@@ -578,5 +608,5 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	}
 
 	return &Pace{PerHour: worst.PerHour, ActivePerHour: worst.ActivePerHour, HoursPerDay: worst.HoursPerDay,
-		Basis: worst.Name, Methods: methods}
+		Basis: worst.Name, Methods: methods, Absent: absent}
 }

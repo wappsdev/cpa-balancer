@@ -60,9 +60,18 @@ check('the run-out Σ shows red is red on its account', cell(2, 0).flag === '⚑
 check('a run-out past the week stays yellow', cell(2, 1).stops && cell(2, 1).tone === 'warn')
 check('a margin is a bare flag', cell(1, 2).flag === '⚑' && cell(1, 2).tone === 'ok')
 check('no flag at all', cell(2, 2).flag === '—' && cell(2, 2).tone === '')
-const two = methodsTable({ ...week, by_method: week.by_method.slice(0, 2) }, status, NOW, f => f)
-check('a missing method has no column', two.columns.length === 2 && two.rows.every(r => r.cells.length === 2))
+// a method the balancer did not measure keeps its column: a dash, and why in its title
+const why = 'the last 24 h are not faster than the last 3 days'
+const absent = methodsTable({ ...week, by_method: [week.by_method[0], { name: 'trend', reason: why }, week.by_method[2]] }, status, NOW, f => f)
+check('an absent method keeps its column', JSON.stringify(absent.columns.map(c => c.name)) === '["peak","trend","now"]' && absent.rows.every(r => r.cells.length === 3))
+check('an absent method says why', absent.columns[1].reason === why && absent.rows.every(r => r.cells[1].flag === '—' && r.cells[1].pace === '' && r.cells[1].tone === '' && r.cells[1].title === why))
 check('no methods, no table', methodsTable({ verdict: 'out' }, status, NOW, f => f) === null)
+// under the table, how each method is worked out, and why an absent one is not there
+check('notes say each method', t.notes?.length === 4 && t.notes[0] === 'peak: the heaviest 24 hours of the last 7 days, as if every day were like it'
+  && t.notes[1] === "trend: the last day's pace plus half of how far it exceeds the last 3 days' pace"
+  && t.notes[2] === 'now: the pace while working in the last 5 hours × the hours worked per day'
+  && t.notes[3] === 'Σ and the outlook above use the fastest method: the worst case.')
+check('a note says why a method is absent', absent.notes?.[1] === `trend: the last day's pace plus half of how far it exceeds the last 3 days' pace — not measured: ${why}`)
 
 if (fails.length) { console.log('FAIL: ' + fails.join(', ')); process.exit(1) }
 console.log('PASS')

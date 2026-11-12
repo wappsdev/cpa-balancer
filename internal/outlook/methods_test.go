@@ -77,16 +77,31 @@ func TestTheUsedMethodIsTheOutlooksOwnNumbers(t *testing.T) {
 	}
 }
 
-func TestAMissingMethodIsAbsentNotZero(t *testing.T) {
+func TestAnAbsentMethodIsListedWithItsReason(t *testing.T) {
 	two := threeWays()
-	two.Methods = two.Methods[:2]
-	if o := byMethod(t, two); len(o.ByMethod) != 2 || o.ByMethod[1].Name != "trend" {
+	two.Methods = []Method{two.Methods[0], two.Methods[2]}
+	two.Absent = []Absent{{Name: "trend", Reason: "the last 24 h are not faster than the last 3 days"}}
+	o := byMethod(t, two)
+	if len(o.ByMethod) != 3 {
+		t.Fatalf("every method has its place: %+v", o.ByMethod)
+	}
+	for i, want := range []string{"peak", "trend", "now"} {
+		if o.ByMethod[i].Name != want {
+			t.Fatalf("%d: %+v", i, o.ByMethod[i])
+		}
+	}
+	if w := o.ByMethod[1]; w.Reason != "the last 24 h are not faster than the last 3 days" || w.Verdict != "" || w.PerHour != 0 || w.RunsOut != nil || w.Accounts != nil {
+		t.Fatalf("an absent method has a reason and no week: %+v", w)
+	}
+	if o.ByMethod[2].Verdict == "" || o.ByMethod[2].Reason != "" {
+		t.Fatalf("%+v", o.ByMethod[2])
+	}
+	// the week's own pace (7d): every method absent, each with its reason
+	seven := &Pace{PerHour: 2, Basis: "7d", Absent: []Absent{{Name: "peak", Reason: "p"}, {Name: "trend", Reason: "t"}, {Name: "now", Reason: "n"}}}
+	if o := byMethod(t, seven); len(o.ByMethod) != 3 || o.ByMethod[0].Reason != "p" || o.ByMethod[2].Reason != "n" {
 		t.Fatalf("%+v", o.ByMethod)
 	}
-	// the week's own pace (7d) and each window's average have no methods
-	if o := byMethod(t, &Pace{PerHour: 2, Basis: "7d"}); o.ByMethod != nil {
-		t.Fatalf("%+v", o.ByMethod)
-	}
+	// each window's average has no methods at all
 	if o := byMethod(t, nil); o.ByMethod != nil {
 		t.Fatalf("%+v", o.ByMethod)
 	}
@@ -106,6 +121,18 @@ func TestEachMethodsWeekIsInTheJSON(t *testing.T) {
 		if !strings.Contains(string(b), want) {
 			t.Fatalf("%s not in %s", want, b)
 		}
+	}
+	// an absent method is its name and its reason
+	two := threeWays()
+	two.Methods = two.Methods[:2]
+	two.Absent = []Absent{{Name: "now", Reason: "less than 30 min of work in the last 5 h"}}
+	b2, err := json.Marshal(byMethod(t, two))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ways, _ := strings.Cut(string(b2), `"by_method":`)
+	if want := `{"name":"now","reason":"less than 30 min of work in the last 5 h"}]`; !strings.Contains(ways, want) {
+		t.Fatalf("%s not in %s", want, b2)
 	}
 	// the methods' weeks carry no pace of their own
 	if strings.Count(string(b), `"pace"`) != 1 {

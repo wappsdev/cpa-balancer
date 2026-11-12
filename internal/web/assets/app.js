@@ -218,11 +218,18 @@ function outlookView(o) {
 
 // The week at each method's pace (`o.by_method`), for Σ, the account in use (`v`, the status) and
 // the next ones in the balancer's order: each cell the pace in that row's own percent an hour and
-// its ⚑ time, coloured as the outlook is (red only for a run-out within the week looked at).
+// its ⚑ time, coloured as the outlook is (red only for a run-out within the week looked at). Every
+// method has its column; one not measured is a dash with why. Notes say how each is worked out.
 // Null without methods. Pure, so it is tested.
 function methodsTable(o, v, now, name) {
-  const ways = o.by_method || [];
-  if (!ways.length) return null;
+  if (!o.by_method?.length) return null;
+  const HOW = {
+    peak: "the heaviest 24 hours of the last 7 days, as if every day were like it",
+    trend: "the last day's pace plus half of how far it exceeds the last 3 days' pace",
+    now: "the pace while working in the last 5 hours × the hours worked per day",
+  };
+  const ways = o.by_method; // peak, trend, now: the balancer gives all three
+  const dash = w => ({ pace: "", flag: "—", stops: false, tone: "", title: w.reason });
   const accounts = v?.accounts || [];
   const known = accounts.length > 0 && accounts.every(a => a.weight > 0);
   const weight = f => (known ? accounts.find(a => a.auth_file === f)?.weight : 1) || 1;
@@ -252,10 +259,14 @@ function methodsTable(o, v, now, name) {
   const active = v?.decision?.main?.account;
   const order = [...new Set([active, ...(v?.decision?.main_order || [])].filter(Boolean))];
   return {
-    columns: ways.map(w => ({ name: w.name, used: !!w.used })),
+    columns: ways.map(w => ({ name: w.name, used: !!w.used, ...(w.reason ? { reason: w.reason } : {}) })),
     rows: [
-      { kind: "sum", label: "Σ", cells: ways.map(sum) },
-      ...order.map(f => ({ kind: f === active ? "active" : "next", label: name(f), cells: ways.map(w => one(w, f)) })),
+      { kind: "sum", label: "Σ", cells: ways.map(w => (w.reason ? dash(w) : sum(w))) },
+      ...order.map(f => ({ kind: f === active ? "active" : "next", label: name(f), cells: ways.map(w => (w.reason ? dash(w) : one(w, f))) })),
+    ],
+    notes: [
+      ...ways.map(w => `${w.name}: ${HOW[w.name]}${w.reason ? ` — not measured: ${w.reason}` : ""}`),
+      "Σ and the outlook above use the fastest method: the worst case.",
     ],
   };
 }
@@ -268,9 +279,10 @@ function renderOutlook(o) {
   const cell = (c, used) => `<td class="${used ? "used" : ""}" title="${esc(c.title)}"><span class="pace">${esc(c.pace)}</span>`
     + `<span class="flag ${c.tone}">${esc(c.flag)}${c.stops ? `<span class="${c.tone === "bad" ? "" : "faint"}"> ∅</span>` : ""}</span></td>`;
   const table = !t ? "" : `<table class="methods">
-      <thead><tr><th></th>${t.columns.map(c => `<th class="${c.used ? "used" : ""}">${esc(c.name)}${c.used ? ' <span class="used-mark">used</span>' : ""}</th>`).join("")}</tr></thead>
+      <thead><tr><th></th>${t.columns.map(c => `<th class="${c.used ? "used" : ""}"${c.reason ? ` title="not measured: ${esc(c.reason)}"` : ""}>${esc(c.name)}${c.used ? ' <span class="used-mark">used</span>' : ""}</th>`).join("")}</tr></thead>
       <tbody>${t.rows.map(r => `<tr class="${r.kind}"><th scope="row">${r.kind === "active" ? "● " : r.kind === "next" ? "○ " : ""}${esc(r.label)}</th>${r.cells.map((c, i) => cell(c, t.columns[i].used)).join("")}</tr>`).join("")}</tbody>
-    </table>`;
+    </table>
+    <ul class="method-notes">${t.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>`;
   card.hidden = false;
   card.innerHTML = `<div class="eyebrow">All accounts · the week ahead</div>
     <div class="outlook-head"><span class="chip ${v.chip.tone}">${esc(v.chip.text)}</span><span class="reason">${v.used}% of all the weekly room used</span></div>
