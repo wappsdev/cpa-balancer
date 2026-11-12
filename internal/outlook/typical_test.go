@@ -7,8 +7,8 @@ import (
 )
 
 // daily is a week of history in steps of one day ending now for one account "a" of weight 1:
-// rises[k] points in the day that ends k days before now. Each 24 h window peak looks at is then
-// one step, so its pace is rises[k]/24, and a day with any rise has 24 h of work in it.
+// rises[k] points in the day that ends k days before now. Each day is then one step, so its pace
+// is rises[k]/24, and a day with any rise has 24 h of work in it.
 func daily(rises ...float64) Series {
 	s := Series{Step: 86400, Main: map[string][]*float64{}}
 	var v float64
@@ -23,8 +23,8 @@ func daily(rises ...float64) Series {
 	return s
 }
 
-func TestTypicalIsTheP75OfThe24hWindows(t *testing.T) {
-	// the 7 windows' paces 3, 1, 4, 1, 5, 9, 2: sorted 1 1 2 3 4 5 9, rank 0.75 × 6 = 4.5, so
+func TestTypicalIsTheP75OfTheDays(t *testing.T) {
+	// the 7 days' paces 3, 1, 4, 1, 5, 9, 2: sorted 1 1 2 3 4 5 9, rank 0.75 × 6 = 4.5, so
 	// halfway from 4 to 5
 	p := MeasurePace(daily(72, 24, 96, 24, 120, 216, 48), one, now)
 	m := methods(p)
@@ -33,7 +33,7 @@ func TestTypicalIsTheP75OfThe24hWindows(t *testing.T) {
 	}
 	near(t, "typical", m["typical"].PerHour, 4.5, 1e-9)
 	near(t, "peak", m["peak"].PerHour, 9, 1e-9)
-	// a window without 2 h of work does not count: 3 1 4 5 9 2 without the idle day, sorted
+	// a day without 2 h of work does not count: 3 1 4 5 9 2 without the idle day, sorted
 	// 1 2 3 4 5 9, rank 0.75 × 5 = 3.75
 	p = MeasurePace(daily(72, 24, 96, 0, 120, 216, 48), one, now)
 	near(t, "typical without the idle day", methods(p)["typical"].PerHour, 4.75, 1e-9)
@@ -43,24 +43,41 @@ func TestTypicalIsTheP75OfThe24hWindows(t *testing.T) {
 	}
 }
 
-func TestTypicalIsAbsentWithFewerThanTwoWindows(t *testing.T) {
-	// 2 h of work ending now: only the 24 h ending now holds 2 h of it
-	p := MeasurePace(weekOf(work{0, 3, 1}), one, now)
+func TestTypicalIsAbsentWithFewerThanTwoWorkingDays(t *testing.T) {
+	// one heavy day: 80 points in 4 h three days ago, nothing else. Many 24 h windows hold it, but
+	// it is one day, so typical is not peak again
+	p := MeasurePace(weekOf(work{154, 161, 10}), one, now)
 	if _, ok := methods(p)["typical"]; ok {
 		t.Fatalf("%+v", p.Methods)
 	}
-	if got := absent(p)["typical"]; got != "fewer than 2 windows of 24 h with 2 h of work in the last 7 days" {
+	if got := absent(p)["typical"]; got != "fewer than 2 days with 2 h of work in the last 7 days" {
 		t.Fatalf("%+v", p.Absent)
 	}
 	if _, ok := methods(p)["peak"]; !ok {
-		t.Fatalf("one window is enough for peak: %+v", p.Methods)
+		t.Fatalf("one day is enough for peak: %+v", p.Methods)
 	}
+	// a day with less than 2 h does not count: 4 h on the last day, 1.5 h the day before
+	if _, ok := methods(MeasurePace(weekOf(work{20, 27, 1}, work{68, 70, 1}), one, now))["typical"]; ok {
+		t.Fatal("one working day")
+	}
+}
+
+func TestTypicalOfTwoDaysIsTheirP75(t *testing.T) {
+	// the last day 4 points in 2 h, the day before 8 in 2 h: rank 0.75 × 1 between 4/24 and 8/24
+	p := MeasurePace(weekOf(work{20, 23, 1}, work{68, 71, 2}), one, now)
+	near(t, "typical", methods(p)["typical"].PerHour, (4+0.75*4)/24.0, 1e-9)
+	// the days are the 24 h windows ending now, a day earlier and so on: work across the boundary
+	// a day ago splits into the two days, 2 h in each
+	p = MeasurePace(weekOf(work{44, 51, 1}), one, now)
+	near(t, "typical across a day's boundary", methods(p)["typical"].PerHour, 4.0/24, 1e-9)
 }
 
 func TestTheSumUsesTypical(t *testing.T) {
 	// the spiky day of TestPeakIsTheFastestOnASpikyDay: peak is the fastest, but the pace is typical's
 	p := MeasurePace(weekOf(work{1, 2, 1}, work{20, 23, 1}, work{68, 71, 0.5}, work{116, 119, 0.5}, work{154, 161, 10}), one, now)
 	m := methods(p)
+	// the days with 2 h of work: 6, 2, 2 and 80 points; sorted 2 2 6 80, rank 0.75 × 3 = 2.25
+	near(t, "typical", m["typical"].PerHour, (6+0.25*74)/24.0, 1e-9)
 	if p.Basis != "typical" || p.PerHour != m["typical"].PerHour || m["typical"].PerHour >= m["peak"].PerHour {
 		t.Fatalf("basis %s, %+v", p.Basis, p.Methods)
 	}

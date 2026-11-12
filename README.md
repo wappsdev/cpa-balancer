@@ -90,9 +90,9 @@ the use goes (`pace.methods` lists the ones present, `pace.absent` the others wi
 
 - `peak`: spiky days. The heaviest 24 h ending in the last 7 days, as if it came every day
   (needs 2 h of work in those 24 h).
-- `typical`: a heavy but normal day. The 75th percentile of the paces of the same 24 h windows
-  `peak` looks at (one ending on each step of the last 7 days, each with 2 h of work), by linear
-  interpolation between the closest ranks; it needs 2 such windows or more.
+- `typical`: a heavy but normal day. The 75th percentile of the last 7 days' working days: the 7
+  non-overlapping 24 h windows ending now, a day ago and so on, each kept when it has 2 h of work,
+  at its pace, by linear interpolation between the closest ranks (needs 2 such days).
 - `trend`: speeding up. The last day's pace plus half of how far it passes the last 3 days' (only when it
   does; both need 2 h of work).
 - `now`: the session in progress. The last 5 h's pace while working, at the hours a day worked over

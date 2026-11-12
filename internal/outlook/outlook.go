@@ -537,7 +537,9 @@ const day = 24 * time.Hour
 // a different way the use goes; the pace is typical's, a heavy but normal day. Without typical it
 // is the fastest method present (the worst case), on a tie now, then trend, then peak:
 //   - peak: the heaviest 24 h ending on a step of the last 7 days, as if it came every day;
-//   - typical: the 75th percentile of the paces of those same 24 h windows (see percentile75);
+//   - typical: the 75th percentile (see percentile75) of the paces of the last 7 days' working
+//     days: the 7 non-overlapping 24 h windows ending now, a day ago and so on, each with 2 h of
+//     work, at least 2 of them;
 //   - trend: the last day's pace plus half of how much it passes the last 3 days' (only when it does);
 //   - now: the last 5 h's pace while working, at the hours a day worked over the 7 days.
 //
@@ -554,19 +556,13 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	var methods []Method
 	var absent []Absent
 
-	// peak: every 24 h with enough work in it; typical: the same windows' paces
+	// peak: every 24 h with enough work in it
 	peak := Method{Name: "peak"}
-	var windows []float64
 	for _, t := range h.T {
 		if t <= end-int64(Week.Seconds()) || t > end {
 			continue
 		}
-		use, worked := s.in(t-int64(day.Seconds()), t)
-		if worked < minWork {
-			continue
-		}
-		windows = append(windows, use/24)
-		if use/24 > peak.PerHour {
+		if use, worked := s.in(t-int64(day.Seconds()), t); worked >= minWork && use/24 > peak.PerHour {
 			peak = Method{Name: "peak", PerHour: use / 24, ActivePerHour: use / worked * 3600, HoursPerDay: worked / 3600}
 		}
 	}
@@ -575,10 +571,19 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	} else {
 		absent = append(absent, Absent{Name: "peak", Reason: "no 24 h with 2 h of work in the last 7 days"})
 	}
-	if len(windows) >= 2 {
-		methods = append(methods, Method{Name: "typical", PerHour: percentile75(windows)})
+
+	// typical: the 7 days that end now, a day ago and so on, each with enough work in it
+	var days []float64
+	for k := int64(0); k < 7; k++ {
+		to := end - k*int64(day.Seconds())
+		if use, worked := s.in(to-int64(day.Seconds()), to); worked >= minWork {
+			days = append(days, use/24)
+		}
+	}
+	if len(days) >= 2 {
+		methods = append(methods, Method{Name: "typical", PerHour: percentile75(days)})
 	} else {
-		absent = append(absent, Absent{Name: "typical", Reason: "fewer than 2 windows of 24 h with 2 h of work in the last 7 days"})
+		absent = append(absent, Absent{Name: "typical", Reason: "fewer than 2 days with 2 h of work in the last 7 days"})
 	}
 
 	// trend: the day's calendar pace rising past the 3 days' (the 3 days hold the day's work)

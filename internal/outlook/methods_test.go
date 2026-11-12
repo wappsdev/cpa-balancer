@@ -171,7 +171,7 @@ func TestTypicalSitsNextToPeakAndIsTheSumsOwnNumbers(t *testing.T) {
 		t.Fatalf("peak %+v, alone %+v", peak, alone)
 	}
 	// an absent typical keeps its place with its reason
-	why := "fewer than 2 windows of 24 h with 2 h of work in the last 7 days"
+	why := "fewer than 2 days with 2 h of work in the last 7 days"
 	o = byMethod(t, &Pace{PerHour: 2, Basis: "peak", Methods: []Method{{Name: "peak", PerHour: 2}, {Name: "now", PerHour: 0.5}},
 		Absent: []Absent{{Name: "typical", Reason: why}, {Name: "trend", Reason: "t"}}})
 	if len(o.ByMethod) != 4 || o.ByMethod[1].Name != "typical" || o.ByMethod[1].Reason != why || !o.ByMethod[0].Used {
