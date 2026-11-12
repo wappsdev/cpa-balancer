@@ -259,15 +259,15 @@ function methodsTable(o, v, now, name) {
         title: `${stops ? "Work stops" : "Hands off"} ${new Date(h.handoff).toLocaleString()}` };
     }
     if (h.margin === 1.2 || h.margin === 1.4) return { pace, flag: "⚑", stops: false, tone: h.margin === 1.2 ? "warn" : "ok", title: `Hands off at ${h.margin}× the pace` };
-    // listed with neither: it resets before its cap even at 1.4 times the pace. The time to its
-    // reset; the account in use also says where its week ends at this pace (the next ones start
-    // only when their turn comes)
+    // listed with neither: it resets before its cap even at 1.4 times the pace. The account in use
+    // says where its week ends at this pace; the next ones a check (they start only when their turn
+    // comes)
     const r = accounts.find(a => a.auth_file === f)?.readings?.main;
     const reset = Date.parse(r?.resets_at);
     if (h.key && r && reset > now) {
       const hours = (reset - now) / 3600000;
-      const end = f === active ? ` ${Math.min(100, Math.round(r.util + w.per_hour * 100 * hours / (weight(f) * 100)))}%` : "";
-      return { pace, flag: `↻${until(r.resets_at)}${end}`, stops: false, tone: "ok", title: `Resets before its cap, ${new Date(reset).toLocaleString()}` };
+      const flag = f === active ? `→${Math.min(100, Math.round(r.util + w.per_hour * 100 * hours / (weight(f) * 100)))}%` : "✓";
+      return { pace, flag, stops: false, tone: "ok", title: `Resets before its cap, ${new Date(reset).toLocaleString()}` };
     }
     return { pace, flag: "—", stops: false, tone: "", title: "Resets before its cap" };
   };
@@ -280,7 +280,7 @@ function methodsTable(o, v, now, name) {
     ],
     notes: [
       ...ways.map(w => `${w.name}: ${HOW[w.name]}${w.reason ? ` — not measured: ${w.reason}` : ""}`),
-      "In an account's row: ⚑ when it hands off at that pace (a bare ⚑ only at 1.2 or 1.4 times it), ↻ the time to its reset when it resets before its cap even at 1.4 times it (in use: and its week then), — when not measured.",
+      "In an account's row: ⚑ when it hands off at that pace (a bare ⚑ only at 1.2 or 1.4 times it), →N% where the account in use ends its week at that pace, ✓ when another resets before its cap even at 1.4 times it, — when not measured.",
       "Σ and the outlook above use typical (falling back to the fastest method when typical cannot be measured).",
     ],
   };
