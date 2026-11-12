@@ -216,14 +216,65 @@ function outlookView(o) {
   return { chip, lines, used: Math.round(o.percent) };
 }
 
+// The week at each method's pace (`o.by_method`), for Σ, the account in use (`v`, the status) and
+// the next ones in the balancer's order: each cell the pace in that row's own percent an hour and
+// its ⚑ time, coloured as the outlook is (red only for a run-out within the week looked at).
+// Null without methods. Pure, so it is tested.
+function methodsTable(o, v, now, name) {
+  const ways = o.by_method || [];
+  if (!ways.length) return null;
+  const accounts = v?.accounts || [];
+  const known = accounts.length > 0 && accounts.every(a => a.weight > 0);
+  const weight = f => (known ? accounts.find(a => a.auth_file === f)?.weight : 1) || 1;
+  // all the room in Pro-plan points: each account's weight times its cap once reserves are released
+  const room = accounts.reduce((sum, a) => sum + weight(a.auth_file) * (v.final_cap || a.caps?.main || 100), 0) || 1;
+  const until = t => span((Date.parse(t) - now) / 1000);
+  const rate = (perHour, per) => `${(perHour * 100 / per).toFixed(1)}%/h`;
+  const sum = w => {
+    const tone = w.verdict === "out" ? "bad" : w.verdict === "tight" ? "warn" : w.verdict === "lasts" && w.lasts < 1.4 ? "ok" : "";
+    const stops = w.verdict === "out";
+    const dry = stops && w.dry ? `, out ${span(w.dry.seconds)} until ${name(w.dry.refill)} resets; about ${Math.max(1, Math.round((1 - w.dry.lasts) * 100))}% slower lasts` : "";
+    return w.runs_out
+      ? { pace: rate(w.per_hour, room), flag: `⚑${until(w.runs_out)}`, stops, tone, title: `The room runs out ${new Date(w.runs_out).toLocaleString()}${dry}` }
+      : { pace: rate(w.per_hour, room), flag: `⚑>${until(o.horizon)}`, stops: false, tone, title: "The room lasts the two weeks looked at" };
+  };
+  const one = (w, f) => {
+    const h = (w.accounts || []).find(a => a.key === f) || {};
+    const pace = rate(w.per_hour, weight(f) * 100);
+    if (h.handoff) {
+      const stops = !!h.exhausts;
+      return { pace, flag: `⚑${until(h.handoff)}`, stops, tone: stops && w.verdict === "out" ? "bad" : "warn",
+        title: `${stops ? "Work stops" : "Hands off"} ${new Date(h.handoff).toLocaleString()}` };
+    }
+    if (h.margin === 1.2 || h.margin === 1.4) return { pace, flag: "⚑", stops: false, tone: h.margin === 1.2 ? "warn" : "ok", title: `Hands off at ${h.margin}× the pace` };
+    return { pace, flag: "—", stops: false, tone: "", title: "Resets before its cap" };
+  };
+  const active = v?.decision?.main?.account;
+  const order = [...new Set([active, ...(v?.decision?.main_order || [])].filter(Boolean))];
+  return {
+    columns: ways.map(w => ({ name: w.name, used: !!w.used })),
+    rows: [
+      { kind: "sum", label: "Σ", cells: ways.map(sum) },
+      ...order.map(f => ({ kind: f === active ? "active" : "next", label: name(f), cells: ways.map(w => one(w, f)) })),
+    ],
+  };
+}
+
 function renderOutlook(o) {
   const card = $("outlook");
   if (!o || o.verdict === undefined) { card.hidden = true; return; }
   const v = outlookView(o);
+  const t = methodsTable(o, view, Date.now(), short);
+  const cell = (c, used) => `<td class="${used ? "used" : ""}" title="${esc(c.title)}"><span class="pace">${esc(c.pace)}</span>`
+    + `<span class="flag ${c.tone}">${esc(c.flag)}${c.stops ? `<span class="${c.tone === "bad" ? "" : "faint"}"> ∅</span>` : ""}</span></td>`;
+  const table = !t ? "" : `<table class="methods">
+      <thead><tr><th></th>${t.columns.map(c => `<th class="${c.used ? "used" : ""}">${esc(c.name)}${c.used ? ' <span class="used-mark">used</span>' : ""}</th>`).join("")}</tr></thead>
+      <tbody>${t.rows.map(r => `<tr class="${r.kind}"><th scope="row">${r.kind === "active" ? "● " : r.kind === "next" ? "○ " : ""}${esc(r.label)}</th>${r.cells.map((c, i) => cell(c, t.columns[i].used)).join("")}</tr>`).join("")}</tbody>
+    </table>`;
   card.hidden = false;
   card.innerHTML = `<div class="eyebrow">All accounts · the week ahead</div>
     <div class="outlook-head"><span class="chip ${v.chip.tone}">${esc(v.chip.text)}</span><span class="reason">${v.used}% of all the weekly room used</span></div>
-    ${v.lines.map(l => `<p class="reason">${esc(l)}</p>`).join("")}`;
+    ${v.lines.map(l => `<p class="reason">${esc(l)}</p>`).join("")}${table}`;
 }
 
 // A config write makes CPA rebuild the plugin; read the status back once it has settled.

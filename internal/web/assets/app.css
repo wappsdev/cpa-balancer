@@ -111,6 +111,23 @@ button, select, input { font: inherit; color: inherit; }
 .outlook { margin-top: 12px; padding: 16px 18px; }
 .outlook-head { display: flex; align-items: center; gap: 10px; margin: 8px 0 6px; }
 .outlook p { margin: 4px 0 0; }
+/* the week at each method's pace: numbers right-aligned, colour only where the outlook gives one */
+.methods { margin-top: 14px; border-collapse: collapse; font-size: 13px; }
+.methods th, .methods td { padding: 6px 12px; text-align: right; white-space: nowrap; }
+.methods thead th { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
+.methods thead th.used { color: var(--accent); }
+.methods tbody th { text-align: left; font-weight: 500; padding-left: 0; }
+.methods tbody tr + tr { border-top: 1px solid var(--line); }
+.methods tr.sum th { font-weight: 650; }
+.methods tr.next th { color: var(--muted); font-weight: 400; }
+.methods .used { background: var(--accent-soft); }
+.methods .used-mark { margin-left: 4px; font-size: 10px; letter-spacing: 0.04em; text-transform: none; }
+.methods .pace { color: var(--muted); margin-right: 10px; }
+.methods .flag { display: inline-block; min-width: 7ch; text-align: left; color: var(--muted); }
+.methods .flag.bad { color: var(--bad); font-weight: 600; }
+.methods .flag.warn { color: var(--warn); }
+.methods .flag.ok { color: var(--ok); }
+.methods .faint { color: var(--faint); }
 .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .choice .account { font-size: 18px; font-weight: 650; letter-spacing: -0.01em; margin: 6px 0 8px; word-break: break-all; }
 .chip {
