@@ -260,14 +260,15 @@ function methodsTable(o, v, now, name) {
     }
     // no handoff within its window at this pace: still say when it would reach its cap at this pace
     // (its reset comes first), toned by the margin: warn at 1.2 times, else ok
-    const acct = accounts.find(a => a.auth_file === f);
+    // only for the account in use: a next one starts when its turn comes, which this does not know
+    const acct = f === active ? accounts.find(a => a.auth_file === f) : undefined;
     const r = acct?.readings?.main;
     const cap = acct?.caps?.main ?? v?.final_cap ?? 100;
     const hours = r && cap > r.util && w.per_hour > 0 ? (cap - r.util) / (w.per_hour * 100 / (weight(f) * 100)) : null;
     const time = hours === null ? "⚑" : `⚑${span(hours * 3600)}`;
     const would = hours === null ? "" : `Would reach its cap in ${span(hours * 3600)} at this pace; it resets first. `;
     if (h.margin === 1.2 || h.margin === 1.4) return { pace, flag: time, stops: false, tone: h.margin === 1.2 ? "warn" : "ok", title: `${would}Hands off at ${h.margin}× the pace` };
-    if (h.key && hours !== null) return { pace, flag: time, stops: false, tone: "ok", title: would.trim() };
+    if (h.key) return { pace, flag: hours === null ? "✓" : time, stops: false, tone: "ok", title: hours === null ? "Resets before its cap" : would.trim() };
     return { pace, flag: "—", stops: false, tone: "", title: "Resets before its cap" };
   };
   const order = [...new Set([active, ...(v?.decision?.main_order || [])].filter(Boolean))];
@@ -279,7 +280,7 @@ function methodsTable(o, v, now, name) {
     ],
     notes: [
       ...ways.map(w => `${w.name}: ${HOW[w.name]}${w.reason ? ` — not measured: ${w.reason}` : ""}`),
-      "In an account's row: yellow ⚑ when it hands off at that pace; when its reset comes first, the time it would take to reach its cap at that pace (dim yellow: it would hand off at 1.2 times the pace, green: only at 1.4 times or not at all); — when not measured.",
+      "In an account's row: yellow ⚑ when it hands off at that pace. When its reset comes first: for the account in use, the time it would take to reach its cap at that pace; for the others a bare ⚑ or ✓ (dim yellow: it would hand off at 1.2 times the pace, green: only at 1.4 times or not at all). — when not measured.",
       "Σ and the outlook above use typical (falling back to the fastest method when typical cannot be measured).",
     ],
   };

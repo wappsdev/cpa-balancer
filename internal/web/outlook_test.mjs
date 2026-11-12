@@ -65,7 +65,7 @@ check('a handoff is yellow', cell(1, 0).flag === '⚑10h 0m' && cell(1, 0).tone 
 check('the run-out Σ shows red is red on its account', cell(2, 0).flag === '⚑15h 0m' && cell(2, 0).stops && cell(2, 0).tone === 'bad')
 check('a run-out past the week stays yellow', cell(2, 2).stops && cell(2, 2).tone === 'warn')
 check('a margin is a bare flag', cell(1, 3).flag === '⚑' && cell(1, 3).tone === 'ok')
-check('no flag at all', cell(2, 3).flag === '—' && cell(2, 3).tone === '')
+check('resets before its cap: a check', cell(2, 3).flag === '✓' && cell(2, 3).tone === 'ok')
 // listed with no handoff and no margin: it resets before its cap; it still says, green, when it would
 // reach its cap at that pace (an account without a reading stays a dash)
 const read = { ...status, accounts: [
@@ -74,7 +74,7 @@ const read = { ...status, accounts: [
 const resets = methodsTable({ ...week, by_method: [{ name: 'now', per_hour: 0.5, verdict: 'lasts', lasts: 3, accounts: [{ key: 'a' }, { key: 'b' }] }] }, read, NOW, f => f)
 // 0.5%/h of a Pro account from 10% to its cap of 85: 150 hours
 check('the account in use resets first: the time to its cap, green', resets.rows[1].cells[0].flag === '⚑6d 6h' && resets.rows[1].cells[0].tone === 'ok' && resets.rows[1].cells[0].title.includes('it resets first'))
-check('a next account resets first: the time to its cap, green', resets.rows[2].cells[0].flag === '⚑7d 2h' && resets.rows[2].cells[0].tone === 'ok')
+check('a next account resets first: a check', resets.rows[2].cells[0].flag === '✓' && resets.rows[2].cells[0].tone === 'ok')
 check('the notes say what the marks mean', resets.notes.some(n => n.startsWith('In an account')))
 // a method the balancer did not measure keeps its column: a dash, and why in its title
 const why = 'the last 24 h are not faster than the last 3 days'
