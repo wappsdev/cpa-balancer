@@ -374,7 +374,7 @@ func TestHandoffsInTheJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `"accounts":[{"key":"a","handoff":"2026-11-04T22:00:00Z","margin":1},{"key":"b","handoff":"2026-11-05T03:00:00Z","exhausts":true,"margin":1}]`
+	want := `"accounts":[{"key":"a","handoff":"2026-11-04T22:00:00Z","capped":"2026-11-04T22:00:00Z","margin":1},{"key":"b","handoff":"2026-11-05T03:00:00Z","capped":"2026-11-05T03:00:00Z","exhausts":true,"margin":1}]`
 	if !strings.Contains(string(b), want) {
 		t.Fatalf("%s", b)
 	}
@@ -451,6 +451,86 @@ func TestTheMarginIsInTheJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(b), `{"key":"a","margin":1.2}`) || strings.Count(string(b), "margin") != 1 {
+		t.Fatalf("%s", b)
+	}
+}
+
+// cappedOf is each account's capped time in hours from now (-1: none).
+func cappedOf(o Outlook) map[string]float64 {
+	out := map[string]float64{}
+	for _, a := range o.Accounts {
+		out[a.Key] = -1
+		if a.Capped != nil {
+			out[a.Key] = a.Capped.Sub(now).Hours()
+		}
+	}
+	return out
+}
+
+func TestWhenAnAccountCapsAtThePaceInAnyWindowOfTheLookAhead(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		final    float64
+		active   string
+		seats    []seat
+		perHour  float64
+		handoff  map[string]float64 // hours from now, -1: none
+		capped   map[string]float64 // hours from now, -1: none
+		exhausts string
+	}{
+		{
+			// A is active at 80% of 100 and resets in 100 h; B is at 0% and resets in 150 h. At 0.25 an
+			// hour A caps at 80 h, inside its window: capped is its handoff. B takes over at 100 h, is
+			// refilled at 150 h, and the refilled A (next reset 268 h) needs 400 h from 150 h: no cap.
+			name: "an account that hands off in its current window caps at that handoff", final: 100, active: "a",
+			seats:   []seat{{key: "a", util: 80, resets: 100, weight: 1}, {key: "b", util: 0, resets: 150, weight: 1}},
+			perHour: 0.25, handoff: map[string]float64{"a": 80, "b": -1}, capped: map[string]float64{"a": 80, "b": -1},
+		},
+		{
+			// A resets first at 88.7%, as in the first test of this file; B takes over, and the
+			// refilled A takes 95/(38/54) = 135 h from 61 h: A caps at 196 h in its next window, with
+			// no handoff of its current one.
+			name: "an account that resets first in its window caps in its next one", final: 95, active: "a",
+			seats:   []seat{{key: "a", util: 57, resets: 45, weight: 1}, {key: "b", util: 0, resets: 61, weight: 1}},
+			perHour: 38.0 / 54, handoff: map[string]float64{"a": -1, "b": -1}, capped: map[string]float64{"a": 61 + 95/(38.0/54), "b": -1},
+		},
+		{
+			// At 0.1 an hour A's 20 points last 200 h, past its reset at 100 h; B takes over, and the
+			// refilled A needs 1000 h from 150 h: neither caps in the two windows.
+			name: "an account that never caps in the look ahead has no capped", final: 100, active: "a",
+			seats:   []seat{{key: "a", util: 80, resets: 100, weight: 1}, {key: "b", util: 0, resets: 150, weight: 1}},
+			perHour: 0.1, handoff: map[string]float64{"a": -1, "b": -1}, capped: map[string]float64{"a": -1, "b": -1},
+		},
+		{
+			// the room is out now: the account in use is at its cap now
+			name: "the account the room is out on caps now", final: 100, active: "a",
+			seats:   []seat{{key: "a", util: 100, resets: 50, weight: 1}, {key: "b", util: 100, resets: 60, weight: 1}},
+			perHour: 1, handoff: map[string]float64{"a": 0, "b": -1}, capped: map[string]float64{"a": 0, "b": -1}, exhausts: "a",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v, cfg := world(c.final, c.active, c.seats...)
+			o := week(t, c.perHour, v, cfg)
+			got, exhausts := handoffs(t, o)
+			caps := cappedOf(o)
+			for key, want := range c.capped {
+				near(t, key+" capped", caps[key], want, 1e-6)
+				near(t, key+" handoff", got[key], c.handoff[key], 1e-6)
+			}
+			if exhausts != c.exhausts {
+				t.Fatalf("exhausts %q", exhausts)
+			}
+		})
+	}
+}
+
+func TestAnAccountThatCapsOnlyInItsNextWindowIsInTheJSONWithNoHandoff(t *testing.T) {
+	v, cfg := world(95, "a", seat{key: "a", util: 57, resets: 45, weight: 1}, seat{key: "b", util: 0, resets: 61, weight: 1})
+	b, err := json.Marshal(week(t, 38.0/54, v, cfg).Accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `{"key":"a","capped":"`) || strings.Count(string(b), "capped") != 1 || strings.Contains(string(b), "handoff") {
 		t.Fatalf("%s", b)
 	}
 }

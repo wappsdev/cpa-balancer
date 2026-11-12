@@ -92,8 +92,8 @@ func sequenceOf(v engine.View, cfg config.Config, weights []float64, paces map[s
 }
 
 // drain runs the sequence at `rate` Pro-plan points a second for `end` seconds: the dry spells, when
-// the policy leaves each account at its weekly cap within its current window, and the account the
-// room runs out on.
+// the policy leaves each account at its weekly cap within its current window, when each reaches
+// its cap in any window of the run, and the account the room runs out on.
 func (s sequence) drain(rate, end float64) (run, error) {
 	th := s.cfg.Thresholds
 	turns := append([]turn(nil), s.turns...)
@@ -105,6 +105,7 @@ func (s sequence) drain(rate, end float64) (run, error) {
 	// a dry spell open at the end is followed one more window, to the reset that ends it
 	last := stop.Add(Week)
 	handoff := map[string]time.Time{}
+	capped := map[string]time.Time{} // the first moment of the run each account reaches its cap, in any window
 	exhausts := ""
 	var out run
 	t, active, since := s.now, s.active, s.since
@@ -131,9 +132,13 @@ func (s sequence) drain(rate, end float64) (run, error) {
 		_, handedOff := handoff[active]
 		if pick != active {
 			i, ok := index[active]
-			// the balancer moves on from an account at its weekly cap, within its current window
-			if ok && atLimit && inside && t.Before(s.turns[i].resets) {
-				if _, seen := handoff[active]; !seen {
+			// the balancer moves on from an account at its weekly cap: that is its capped, in
+			// whichever window, and its handoff within its current one
+			if ok && atLimit && inside {
+				if _, seen := capped[active]; !seen {
+					capped[active] = t
+				}
+				if _, seen := handoff[active]; !seen && t.Before(s.turns[i].resets) {
 					handoff[active] = t
 				}
 			}
@@ -144,6 +149,9 @@ func (s sequence) drain(rate, end float64) (run, error) {
 			// the room runs out on the account in use, in whichever of its windows
 			if _, ok := index[active]; ok && len(out.spells) == 0 && !handedOff {
 				handoff[active], exhausts = t, active
+				if _, seen := capped[active]; !seen {
+					capped[active] = t // no room is left on it
+				}
 			}
 			out.spells = append(out.spells, spell{from: t.Sub(s.now).Seconds(), to: math.Inf(1)})
 			dry = true
@@ -223,6 +231,9 @@ func (s sequence) drain(rate, end float64) (run, error) {
 		h := Handoff{Key: x.key, Exhausts: x.key == exhausts}
 		if at, ok := handoff[x.key]; ok {
 			h.At = &at
+		}
+		if at, ok := capped[x.key]; ok {
+			h.Capped = &at
 		}
 		out.accounts = append(out.accounts, h)
 	}

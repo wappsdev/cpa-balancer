@@ -102,7 +102,10 @@ With no method present the pace is the 7 days' (basis `7d`, needs 2 h of work); 
 open window's own average (`source: average`).
 
 Each account in `week.accounts` has its next event at that pace: `handoff` (when the balancer
-leaves it at its cap) and `exhausts` (the room runs out on it). `margin` is the smallest of 1, 1.2
+leaves it at its cap) and `exhausts` (the room runs out on it). `capped` is the first moment in
+the whole look ahead (two windows), in any window, at which the account reaches its cap at that
+pace; where `handoff` is set it is the same moment, and it is absent when the account never caps in
+the look ahead. `margin` is the smallest of 1, 1.2
 and 1.4 times the pace at which the account reaches its cap within its current window (absent: not
 even at 1.4). `lasts` is the same scale for all accounts together: the largest multiple of the pace
 at which the room lasts.

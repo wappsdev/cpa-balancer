@@ -126,8 +126,12 @@ type Way struct {
 // when the room runs out on this account before it ever hands off (in whichever window), that
 // moment (Exhausts). At is nil when the account resets first or the two windows end.
 type Handoff struct {
-	Key      string     `json:"key"`
-	At       *time.Time `json:"handoff,omitempty"`
+	Key string     `json:"key"`
+	At  *time.Time `json:"handoff,omitempty"`
+	// The first moment in the whole look ahead, in any window, at which the account reaches its cap
+	// at this pace, counted through the accounts before it as the run does. Nil: it never caps
+	// within the horizon. Where At is set, it is the same moment.
+	Capped   *time.Time `json:"capped,omitempty"`
 	Exhausts bool       `json:"exhausts,omitempty"`
 	// The smallest of 1, 1.2 and 1.4 times the pace at which the account reaches its cap within
 	// its current window (a handoff or the room running out on it); 0: not even at 1.4.

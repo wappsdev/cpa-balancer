@@ -48,7 +48,7 @@ const week = { verdict: 'out', horizon: at(336), by_method: [
     accounts: [{ key: 'a', handoff: at(12), margin: 1 }, { key: 'b', handoff: at(20), exhausts: true, margin: 1 }] },
   { name: 'trend', per_hour: 1, verdict: 'lasts', lasts: 1.3, runs_out: at(30),
     accounts: [{ key: 'a', handoff: at(20), margin: 1 }, { key: 'b', handoff: at(30), exhausts: true, margin: 1 }] },
-  { name: 'now', per_hour: 0.5, verdict: 'lasts', lasts: 3, accounts: [{ key: 'a', margin: 1.4 }, { key: 'b' }] },
+  { name: 'now', per_hour: 0.5, verdict: 'lasts', lasts: 3, accounts: [{ key: 'a', capped: at(40), margin: 1.4 }, { key: 'b' }] },
 ] }
 const t = methodsTable(week, status, NOW, f => f.toUpperCase())
 check('columns in the methods\' order, the used one marked', JSON.stringify(t.columns) === JSON.stringify([{ name: 'peak', used: false }, { name: 'typical', used: true }, { name: 'trend', used: false }, { name: 'now', used: false }]))
@@ -64,18 +64,17 @@ check('Σ past the look-ahead', cell(0, 3).flag === '⚑>14d 0h' && cell(0, 3).t
 check('a handoff is yellow', cell(1, 0).flag === '⚑10h 0m' && cell(1, 0).tone === 'warn' && !cell(1, 0).stops)
 check('the run-out Σ shows red is red on its account', cell(2, 0).flag === '⚑15h 0m' && cell(2, 0).stops && cell(2, 0).tone === 'bad')
 check('a run-out past the week stays yellow', cell(2, 2).stops && cell(2, 2).tone === 'warn')
-check('a margin is a bare flag', cell(1, 3).flag === '⚑' && cell(1, 3).tone === 'ok')
-check('resets before its cap: a check', cell(2, 3).flag === '✓' && cell(2, 3).tone === 'ok')
-// listed with no handoff and no margin: it resets before its cap; it still says, green, when it would
-// reach its cap at that pace (an account without a reading stays a dash)
-const read = { ...status, accounts: [
-  { auth_file: 'b', weight: 1, caps: { main: 85 }, readings: { main: { util: 0, resets_at: at(30) } } },
-  { auth_file: 'a', weight: 1, caps: { main: 85 }, readings: { main: { util: 10, resets_at: at(10) } } }] }
-const resets = methodsTable({ ...week, by_method: [{ name: 'now', per_hour: 0.5, verdict: 'lasts', lasts: 3, accounts: [{ key: 'a' }, { key: 'b' }] }] }, read, NOW, f => f)
-// 0.5%/h of a Pro account from 10% to its cap of 85: 150 hours
-check('the account in use resets first: the time to its cap, green', resets.rows[1].cells[0].flag === '⚑6d 6h' && resets.rows[1].cells[0].tone === 'ok' && resets.rows[1].cells[0].title.includes('it resets first'))
-check('a next account resets first: a check', resets.rows[2].cells[0].flag === '✓' && resets.rows[2].cells[0].tone === 'ok')
-check('the notes say what the marks mean', resets.notes.some(n => n.startsWith('In an account')))
+check('resets first and caps later (margin 1.4): the time to the cap, green', cell(1, 3).flag === '⚑1d 16h' && cell(1, 3).tone === 'ok' && !cell(1, 3).stops
+  && cell(1, 3).title.includes('It resets first') && cell(1, 3).title.includes('would reach its cap') && cell(1, 3).title.includes('1.4×'))
+check('resets first and never caps: a check', cell(2, 3).flag === '✓' && cell(2, 3).tone === 'ok' && cell(2, 3).title.includes('does not reach its cap'))
+// resets first, with a capped time from the balancer, for the account in use and a next one alike
+const resets = methodsTable({ ...week, by_method: [{ name: 'now', per_hour: 0.5, verdict: 'lasts', lasts: 3,
+  accounts: [{ key: 'a', capped: at(150), margin: 1.2 }, { key: 'b', capped: at(200) }, { key: 'c' }] }] }, { ...status, decision: { main: { account: 'a' }, main_order: ['a', 'b', 'c', 'd'] } }, NOW, f => f)
+check('the account in use resets first: the time to its cap, warn at 1.2', resets.rows[1].cells[0].flag === '⚑6d 6h' && resets.rows[1].cells[0].tone === 'warn' && resets.rows[1].cells[0].title.includes('1.2×'))
+check('a next account resets first: the time to its cap too, green', resets.rows[2].cells[0].flag === '⚑8d 8h' && resets.rows[2].cells[0].tone === 'ok')
+check('listed with no capped: a check', resets.rows[3].cells[0].flag === '✓' && resets.rows[3].cells[0].tone === 'ok')
+check('an account the run does not list stays a dash', resets.rows[4].cells[0].flag === '—' && resets.rows[4].cells[0].tone === '')
+check('the notes say what the marks mean', resets.notes.some(n => n.startsWith("In an account's row:") && n.includes('from the balancer') && n.includes('✓ when it does not reach its cap')))
 // a method the balancer did not measure keeps its column: a dash, and why in its title
 const why = 'the last 24 h are not faster than the last 3 days'
 const absent = methodsTable({ ...week, by_method: [week.by_method[0], week.by_method[1], { name: 'trend', reason: why }, week.by_method[3]] }, status, NOW, f => f)

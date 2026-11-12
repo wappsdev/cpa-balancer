@@ -71,7 +71,7 @@ func TestTheUsedMethodIsTheOutlooksOwnNumbers(t *testing.T) {
 		t.Fatalf("used %+v, outlook %+v", used, o)
 	}
 	for i := range o.Accounts {
-		if !sameTime(used.Accounts[i].At, o.Accounts[i].At) || used.Accounts[i].Exhausts != o.Accounts[i].Exhausts || used.Accounts[i].Margin != o.Accounts[i].Margin {
+		if !sameTime(used.Accounts[i].At, o.Accounts[i].At) || !sameTime(used.Accounts[i].Capped, o.Accounts[i].Capped) || used.Accounts[i].Exhausts != o.Accounts[i].Exhausts || used.Accounts[i].Margin != o.Accounts[i].Margin {
 			t.Fatalf("%d: %+v, outlook %+v", i, used.Accounts[i], o.Accounts[i])
 		}
 	}
@@ -116,7 +116,7 @@ func TestEachMethodsWeekIsInTheJSON(t *testing.T) {
 		`"by_method":[{"name":"peak","per_hour":2,"used":true,"verdict":"out",`,
 		`{"name":"trend","per_hour":1,"verdict":"out",`,
 		`"runs_out":"2026-11-05T18:00:00Z"`,
-		`"accounts":[{"key":"a","handoff":"2026-11-05T08:00:00Z","margin":1},{"key":"b","handoff":"2026-11-05T18:00:00Z","exhausts":true,"margin":1}]`,
+		`"accounts":[{"key":"a","handoff":"2026-11-05T08:00:00Z","capped":"2026-11-05T08:00:00Z","margin":1},{"key":"b","handoff":"2026-11-05T18:00:00Z","capped":"2026-11-05T18:00:00Z","exhausts":true,"margin":1}]`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Fatalf("%s not in %s", want, b)
@@ -177,4 +177,19 @@ func TestTypicalSitsNextToPeakAndIsTheSumsOwnNumbers(t *testing.T) {
 	if len(o.ByMethod) != 4 || o.ByMethod[1].Name != "typical" || o.ByMethod[1].Reason != why || !o.ByMethod[0].Used {
 		t.Fatalf("%+v", o.ByMethod)
 	}
+}
+
+func TestEachMethodsAccountsHaveTheirCappedAtThatPace(t *testing.T) {
+	o := byMethod(t, fourWays())
+	for _, w := range o.ByMethod {
+		alone := byMethod(t, &Pace{PerHour: w.PerHour})
+		for i, a := range w.Accounts {
+			if a.Capped == nil || !sameTime(a.Capped, alone.Accounts[i].Capped) {
+				t.Fatalf("%s %s: capped %v, alone %v", w.Name, a.Key, a.Capped, alone.Accounts[i].Capped)
+			}
+		}
+	}
+	// A's 20 points go in 13.3 h at 1.5 an hour (typical) and in 40 h at 0.5 (now)
+	near(t, "typical a", cappedOf(Outlook{Accounts: o.ByMethod[1].Accounts})["a"], 20/1.5, 1e-6)
+	near(t, "now a", cappedOf(Outlook{Accounts: o.ByMethod[3].Accounts})["a"], 40, 1e-6)
 }
