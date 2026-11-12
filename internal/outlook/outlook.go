@@ -43,8 +43,8 @@ type Pace struct {
 	ActivePerHour float64 `json:"active_per_hour"` // while working
 	HoursPerDay   float64 `json:"hours_per_day"`   // worked on a day with any work
 	Source        string  `json:"source"`          // measured (history) or average (each window's own)
-	// The method the numbers above come from (peak, trend, now, or 7d when none is present), and
-	// every method present; measured only.
+	// The method the numbers above come from (typical; else the fastest of peak, trend and now; or
+	// 7d when none is present), and every method present; measured only.
 	Basis   string   `json:"basis,omitempty"`
 	Methods []Method `json:"methods,omitempty"`
 	// Every method not present, in the methods' order, with why; measured only.
@@ -58,7 +58,7 @@ type Absent struct {
 }
 
 // Method is the work pace by one way of measuring it (see MeasurePace). A method that measures no
-// worked time of its own (trend) has 0 active pace and hours a day.
+// worked time of its own (typical, trend) has 0 active pace and hours a day.
 type Method struct {
 	Name          string  `json:"name"`
 	PerHour       float64 `json:"per_hour"`
@@ -101,9 +101,9 @@ type Outlook struct {
 	// Each account's turn in the balancer's order at the pace (the weekly window only), from the
 	// same run as RunsOut.
 	Accounts []Handoff `json:"accounts,omitempty"`
-	// The same look ahead at each method's pace: peak, trend and now, always all three; the one
-	// the numbers above come from is marked used, one not measured has its reason. Absent without
-	// a measured pace (each window's average).
+	// The same look ahead at each method's pace: peak, typical, trend and now, always all four;
+	// the one the numbers above come from is marked used, one not measured has its reason. Absent
+	// without a measured pace (each window's average).
 	ByMethod []Way `json:"by_method,omitempty"`
 }
 
@@ -342,7 +342,7 @@ func look(accounts []Account, window time.Duration, measured *Pace, now time.Tim
 }
 
 // methodNames is the pace methods in their order (see MeasurePace).
-var methodNames = []string{"peak", "trend", "now"}
+var methodNames = []string{"peak", "typical", "trend", "now"}
 
 // wayOf is an outlook as the way of method `m`.
 func wayOf(m Method, o Outlook) Way {
@@ -534,9 +534,10 @@ func (s sums) in(from, to int64) (use, seconds float64) {
 const day = 24 * time.Hour
 
 // MeasurePace reads the work pace from a history with the accounts' weights. Each method catches
-// a different way the use goes faster; the pace is the fastest method present (the worst case),
-// on a tie now, then trend, then peak:
+// a different way the use goes; the pace is typical's, a heavy but normal day. Without typical it
+// is the fastest method present (the worst case), on a tie now, then trend, then peak:
 //   - peak: the heaviest 24 h ending on a step of the last 7 days, as if it came every day;
+//   - typical: the 75th percentile of the paces of those same 24 h windows (see percentile75);
 //   - trend: the last day's pace plus half of how much it passes the last 3 days' (only when it does);
 //   - now: the last 5 h's pace while working, at the hours a day worked over the 7 days.
 //
@@ -553,13 +554,19 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 	var methods []Method
 	var absent []Absent
 
-	// peak: every 24 h with enough work in it
+	// peak: every 24 h with enough work in it; typical: the same windows' paces
 	peak := Method{Name: "peak"}
+	var windows []float64
 	for _, t := range h.T {
 		if t <= end-int64(Week.Seconds()) || t > end {
 			continue
 		}
-		if use, worked := s.in(t-int64(day.Seconds()), t); worked >= minWork && use/24 > peak.PerHour {
+		use, worked := s.in(t-int64(day.Seconds()), t)
+		if worked < minWork {
+			continue
+		}
+		windows = append(windows, use/24)
+		if use/24 > peak.PerHour {
 			peak = Method{Name: "peak", PerHour: use / 24, ActivePerHour: use / worked * 3600, HoursPerDay: worked / 3600}
 		}
 	}
@@ -567,6 +574,11 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 		methods = append(methods, peak)
 	} else {
 		absent = append(absent, Absent{Name: "peak", Reason: "no 24 h with 2 h of work in the last 7 days"})
+	}
+	if len(windows) >= 2 {
+		methods = append(methods, Method{Name: "typical", PerHour: percentile75(windows)})
+	} else {
+		absent = append(absent, Absent{Name: "typical", Reason: "fewer than 2 windows of 24 h with 2 h of work in the last 7 days"})
 	}
 
 	// trend: the day's calendar pace rising past the 3 days' (the 3 days hold the day's work)
@@ -599,14 +611,40 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 		}
 		return p
 	}
-	// the fastest; a tie (to rounding) goes to the later method: now, then trend, then peak
+	// typical; without it the fastest of the others
+	basis := fastest(methods)
+	for _, m := range methods {
+		if m.Name == "typical" {
+			basis = m
+		}
+	}
+
+	return &Pace{PerHour: basis.PerHour, ActivePerHour: basis.ActivePerHour, HoursPerDay: basis.HoursPerDay,
+		Basis: basis.Name, Methods: methods, Absent: absent}
+}
+
+// fastest is the method with the highest pace (the worst case); a tie (to rounding) goes to the
+// later method: now, then trend, then peak.
+func fastest(methods []Method) Method {
 	worst := methods[0]
 	for _, m := range methods[1:] {
 		if m.PerHour >= worst.PerHour*(1-1e-9) {
 			worst = m
 		}
 	}
+	return worst
+}
 
-	return &Pace{PerHour: worst.PerHour, ActivePerHour: worst.ActivePerHour, HoursPerDay: worst.HoursPerDay,
-		Basis: worst.Name, Methods: methods, Absent: absent}
+// percentile75 is the 75th percentile of two values or more by linear interpolation between the
+// closest ranks: with x sorted ascending, x[0] … x[n-1], the rank r = 0.75 × (n-1) lies between
+// i = ⌊r⌋ and i+1, and the percentile is x[i] + (r-i) × (x[i+1] - x[i]) (numpy's default, Excel's
+// PERCENTILE.INC). It sorts x.
+func percentile75(x []float64) float64 {
+	sort.Float64s(x)
+	r := 0.75 * float64(len(x)-1)
+	i := int(r)
+	if i+1 >= len(x) {
+		return x[i]
+	}
+	return x[i] + (r-float64(i))*(x[i+1]-x[i])
 }

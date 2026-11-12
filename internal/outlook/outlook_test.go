@@ -339,7 +339,7 @@ func methods(p *Pace) map[string]Method {
 	return out
 }
 
-func TestPeakWinsOnASpikyDay(t *testing.T) {
+func TestPeakIsTheFastestOnASpikyDay(t *testing.T) {
 	// 80 points in 4 h three days ago; light days around it, and an hour of work in the last 5 h
 	p := MeasurePace(weekOf(
 		work{1, 2, 1}, work{20, 23, 1}, // the last day: 6 points in 3 h, 1 h of it in the last 5 h
@@ -350,7 +350,7 @@ func TestPeakWinsOnASpikyDay(t *testing.T) {
 		t.Fatal("pace expected")
 	}
 	m := methods(p)
-	if len(m) != 3 {
+	if len(m) != 4 {
 		t.Fatalf("every method is present: %+v", p.Methods)
 	}
 	// the 24 h from k 163 to 116 hold the spike and the 2 points after it: 82 in 6 h
@@ -361,43 +361,41 @@ func TestPeakWinsOnASpikyDay(t *testing.T) {
 	near(t, "trend", m["trend"].PerHour, 1.5*6.0/24-0.5*10.0/72, 1e-9)
 	// 2 points in the last 5 h's hour, 11 h worked over 4 days
 	near(t, "now", m["now"].PerHour, 2*(11.0/4)/24, 1e-9)
-	if p.Basis != "peak" {
-		t.Fatalf("basis %s", p.Basis)
+	// the fastest, were typical not measured
+	if fastest(withoutTypical(p.Methods)).Name != "peak" {
+		t.Fatalf("%+v", p.Methods)
 	}
-	near(t, "pace", p.PerHour, 82.0/24, 1e-9)
-	near(t, "active", p.ActivePerHour, 82.0/6, 1e-9)
 }
 
-func TestTrendWinsWhenTheUseSpeedsUp(t *testing.T) {
+func TestTrendIsTheFastestWhenTheUseSpeedsUp(t *testing.T) {
 	p := MeasurePace(weekOf(
 		work{0, 1, 0.5}, work{11, 18, 2}, // the last day: 17 points in 5 h, 1 h of it in the last 5 h
 		work{68, 71, 0.5}, work{116, 119, 0.5}, // the two days before: 2 points in 2 h each
 	), one, now)
 	m := methods(p)
-	if len(m) != 3 {
+	if len(m) != 4 {
 		t.Fatalf("every method is present: %+v", p.Methods)
 	}
 	// the last day 17/24, the last 3 days 21/72: the day's pace goes on rising by half the difference
 	near(t, "trend", m["trend"].PerHour, 1.5*17.0/24-0.5*21.0/72, 1e-9)
 	near(t, "peak", m["peak"].PerHour, 17.0/24, 1e-9)
 	near(t, "now", m["now"].PerHour, 1*(9.0/3)/24, 1e-9)
-	if p.Basis != "trend" {
-		t.Fatalf("basis %s", p.Basis)
+	if fastest(withoutTypical(p.Methods)).Name != "trend" {
+		t.Fatalf("%+v", p.Methods)
 	}
 	// the trend measures no worked time of its own
-	near(t, "pace", p.PerHour, 1.5*17.0/24-0.5*21.0/72, 1e-9)
-	if p.ActivePerHour != 0 || p.HoursPerDay != 0 {
-		t.Fatalf("%+v", p)
+	if m["trend"].ActivePerHour != 0 || m["trend"].HoursPerDay != 0 {
+		t.Fatalf("%+v", m["trend"])
 	}
 }
 
-func TestNowWinsOnAFastSession(t *testing.T) {
+func TestNowIsTheFastestOnAFastSession(t *testing.T) {
 	p := MeasurePace(weekOf(
 		work{0, 3, 4}, work{20, 39, 1}, // the last day: 16 points in the last 2 h, 20 in 10 h before
 		work{48, 71, 1}, work{96, 119, 1}, // the two days before: 24 points in 12 h each
 	), one, now)
 	m := methods(p)
-	if len(m) != 3 {
+	if len(m) != 4 {
 		t.Fatalf("every method is present: %+v", p.Methods)
 	}
 	// 8 points an hour while working, 36 h worked over 3 days
@@ -405,16 +403,15 @@ func TestNowWinsOnAFastSession(t *testing.T) {
 	near(t, "now active", m["now"].ActivePerHour, 8, 1e-9)
 	near(t, "now hours", m["now"].HoursPerDay, 12, 1e-9)
 	near(t, "trend", m["trend"].PerHour, 1.5*36.0/24-0.5*84.0/72, 1e-9)
-	if p.Basis != "now" || m["peak"].PerHour >= m["now"].PerHour {
-		t.Fatalf("basis %s, %+v", p.Basis, p.Methods)
+	if fastest(withoutTypical(p.Methods)).Name != "now" || m["peak"].PerHour >= m["now"].PerHour {
+		t.Fatalf("%+v", p.Methods)
 	}
-	near(t, "pace", p.PerHour, 8*12.0/24, 1e-9)
 }
 
 func TestTrendIsAbsentWhenTheUseSlowsOrTheDayHasTooLittleWork(t *testing.T) {
 	// slower: the last day 4 points, the 3 days 12
 	slow := MeasurePace(weekOf(work{20, 23, 1}, work{68, 71, 1}, work{116, 119, 1}), one, now)
-	if _, ok := methods(slow)["trend"]; ok || slow.Basis != "peak" {
+	if _, ok := methods(slow)["trend"]; ok || slow.Basis != "typical" {
 		t.Fatalf("%+v", slow)
 	}
 	// the last day has 1 h of work
@@ -422,6 +419,17 @@ func TestTrendIsAbsentWhenTheUseSlowsOrTheDayHasTooLittleWork(t *testing.T) {
 	if _, ok := methods(short)["trend"]; ok {
 		t.Fatalf("%+v", short.Methods)
 	}
+}
+
+// withoutTypical is the methods the pace falls back on when typical is not measured.
+func withoutTypical(ms []Method) []Method {
+	var out []Method
+	for _, m := range ms {
+		if m.Name != "typical" {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // absent is the pace's absent methods' reasons by name.
@@ -447,13 +455,13 @@ func TestAnAbsentMethodSaysWhy(t *testing.T) {
 	if p := MeasurePace(weekOf(work{1, 2, 1}, work{20, 23, 1}, work{68, 71, 0.5}, work{116, 119, 0.5}, work{154, 161, 10}), one, now); len(p.Absent) != 0 {
 		t.Fatalf("%+v", p.Absent)
 	}
-	// the week's own pace (7d): all three absent, in the methods' order
+	// the week's own pace (7d): all four absent, in the methods' order
 	var spans []work
 	for d := 0; d < 7; d++ {
 		spans = append(spans, work{48*d + 20, 48*d + 21, 1})
 	}
 	p := MeasurePace(weekOf(spans...), one, now)
-	if len(p.Absent) != 3 || p.Absent[0].Name != "peak" || p.Absent[1].Name != "trend" || p.Absent[2].Name != "now" ||
+	if len(p.Absent) != 4 || p.Absent[0].Name != "peak" || p.Absent[1].Name != "typical" || p.Absent[2].Name != "trend" || p.Absent[3].Name != "now" ||
 		p.Absent[0].Reason != "no 24 h with 2 h of work in the last 7 days" {
 		t.Fatalf("%+v", p.Absent)
 	}
@@ -471,12 +479,12 @@ func TestNowIsAbsentWithLessThanHalfAnHourInTheLast5Hours(t *testing.T) {
 	}
 }
 
-func TestEqualMethodsPreferNow(t *testing.T) {
+func TestTheFallbackPrefersNowOnATie(t *testing.T) {
 	// 2 h a day at 2 an hour, on 4 days: now and peak are 4/24, no trend
 	p := MeasurePace(weekOf(work{0, 3, 1}, work{48, 51, 1}, work{96, 99, 1}, work{144, 147, 1}), one, now)
 	m := methods(p)
 	near(t, "now", m["now"].PerHour, m["peak"].PerHour, 1e-12)
-	if p.Basis != "now" {
+	if fastest(withoutTypical(p.Methods)).Name != "now" {
 		t.Fatalf("%+v", p)
 	}
 }
@@ -504,7 +512,7 @@ func TestPaceJSONNamesItsBasisAndMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"basis":"trend"`, `"methods":[{"name":"peak","per_hour":`, `{"name":"trend","per_hour":`, `"active_per_hour":0,"hours_per_day":0}`, `{"name":"now"`} {
+	for _, want := range []string{`"basis":"typical"`, `"methods":[{"name":"peak","per_hour":`, `{"name":"typical","per_hour":`, `{"name":"trend","per_hour":`, `"active_per_hour":0,"hours_per_day":0}`, `{"name":"now"`} {
 		if !strings.Contains(string(b), want) {
 			t.Fatalf("%s not in %s", want, b)
 		}

@@ -139,3 +139,42 @@ func TestEachMethodsWeekIsInTheJSON(t *testing.T) {
 		t.Fatalf("%s", b)
 	}
 }
+
+// fourWays is a pace measured four ways: typical is used, peak is the fastest.
+func fourWays() *Pace {
+	return &Pace{PerHour: 1.5, Basis: "typical", Methods: []Method{{Name: "peak", PerHour: 2}, {Name: "typical", PerHour: 1.5},
+		{Name: "trend", PerHour: 1}, {Name: "now", PerHour: 0.5}}}
+}
+
+func TestTypicalSitsNextToPeakAndIsTheSumsOwnNumbers(t *testing.T) {
+	o := byMethod(t, fourWays())
+	var names []string
+	for _, w := range o.ByMethod {
+		names = append(names, w.Name)
+	}
+	if got := strings.Join(names, " "); got != "peak typical trend now" {
+		t.Fatalf("%s", got)
+	}
+	typical := o.ByMethod[1]
+	if !typical.Used || o.ByMethod[0].Used || typical.PerHour != o.Pace.PerHour || typical.Verdict != o.Verdict ||
+		typical.Lasts != o.Lasts || !sameTime(typical.RunsOut, o.RunsOut) || typical.Dry != o.Dry {
+		t.Fatalf("typical %+v, outlook %+v", typical, o)
+	}
+	for i := range o.Accounts {
+		if !sameTime(typical.Accounts[i].At, o.Accounts[i].At) || typical.Accounts[i].Exhausts != o.Accounts[i].Exhausts {
+			t.Fatalf("%d: %+v, outlook %+v", i, typical.Accounts[i], o.Accounts[i])
+		}
+	}
+	// peak is the week at its own, faster pace
+	alone := byMethod(t, &Pace{PerHour: 2})
+	if peak := o.ByMethod[0]; peak.Verdict != alone.Verdict || !sameTime(peak.RunsOut, alone.RunsOut) {
+		t.Fatalf("peak %+v, alone %+v", peak, alone)
+	}
+	// an absent typical keeps its place with its reason
+	why := "fewer than 2 windows of 24 h with 2 h of work in the last 7 days"
+	o = byMethod(t, &Pace{PerHour: 2, Basis: "peak", Methods: []Method{{Name: "peak", PerHour: 2}, {Name: "now", PerHour: 0.5}},
+		Absent: []Absent{{Name: "typical", Reason: why}, {Name: "trend", Reason: "t"}}})
+	if len(o.ByMethod) != 4 || o.ByMethod[1].Name != "typical" || o.ByMethod[1].Reason != why || !o.ByMethod[0].Used {
+		t.Fatalf("%+v", o.ByMethod)
+	}
+}

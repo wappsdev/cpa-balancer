@@ -186,6 +186,9 @@ async function refreshStatus() {
 function outlookView(o) {
   const clock = t => new Date(t).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
   const pct = x => x >= 10 ? "1000%+" : `${Math.round(x * 100)}%`;
+  // the pace's method: typical, else the fastest of the others, else the week's own
+  const fastest = m => `${m}, the fastest method (typical not measured)`;
+  const BASIS = { typical: "typical, a heavy but normal day", peak: fastest("peak"), trend: fastest("trend"), now: fastest("now"), "7d": "the last 7 days, no method measured" };
   const lines = [];
   let chip = { tone: "", text: "No pace yet" };
   if (o.verdict === "lasts") {
@@ -210,7 +213,7 @@ function outlookView(o) {
   if (o.pace) {
     const p = o.pace;
     lines.push(p.source === "measured"
-      ? `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour, by ${p.basis || "7d"}, the fastest method${p.active_per_hour > 0 ? ` (${p.active_per_hour.toFixed(1)} while working, about ${p.hours_per_day.toFixed(0)} h a day)` : ""}.`
+      ? `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour, by ${BASIS[p.basis] || BASIS["7d"]}${p.active_per_hour > 0 ? ` (${p.active_per_hour.toFixed(1)} while working, about ${p.hours_per_day.toFixed(0)} h a day)` : ""}.`
       : `Pace: ${p.per_hour.toFixed(1)} Pro-plan points an hour, each window's own average (too little recent work to measure).`);
   }
   return { chip, lines, used: Math.round(o.percent) };
@@ -225,10 +228,11 @@ function methodsTable(o, v, now, name) {
   if (!o.by_method?.length) return null;
   const HOW = {
     peak: "the heaviest 24 hours of the last 7 days, as if every day were like it",
+    typical: "a heavy but normal day — the 75th percentile of the last 7 days' 24-hour windows",
     trend: "the last day's pace plus half of how far it exceeds the last 3 days' pace",
     now: "the pace while working in the last 5 hours × the hours worked per day",
   };
-  const ways = o.by_method; // peak, trend, now: the balancer gives all three
+  const ways = o.by_method; // peak, typical, trend, now: the balancer gives all four
   const dash = w => ({ pace: "", flag: "—", stops: false, tone: "", title: w.reason });
   const accounts = v?.accounts || [];
   const known = accounts.length > 0 && accounts.every(a => a.weight > 0);
@@ -266,7 +270,7 @@ function methodsTable(o, v, now, name) {
     ],
     notes: [
       ...ways.map(w => `${w.name}: ${HOW[w.name]}${w.reason ? ` — not measured: ${w.reason}` : ""}`),
-      "Σ and the outlook above use the fastest method: the worst case.",
+      "Σ and the outlook above use typical (falling back to the fastest method when typical cannot be measured).",
     ],
   };
 }

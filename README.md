@@ -82,12 +82,17 @@ State: `~/.cli-proxy-api/cpa-balancer/state.json`. History (90 days of 5-minute 
 ## Look-ahead
 
 The weekly look-ahead runs the use through the accounts at the work pace, in Pro-plan points an
-hour, idle time included. The pace is the fastest of these methods, each built to catch a
-different way the use can speed up (`pace.methods` lists the ones present, `pace.absent` the others
-with a short `reason`, `pace.basis` names the pick; a tie goes to `now`, then `trend`, then `peak`):
+hour, idle time included. The balancer measures it four ways, each built to catch a different way
+the use goes (`pace.methods` lists the ones present, `pace.absent` the others with a short
+`reason`, `pace.basis` names the pick). The pace is `typical`'s, a heavy but normal day. When
+`typical` cannot be measured, it is the fastest of the other three (the worst case; a tie goes to
+`now`, then `trend`, then `peak`):
 
 - `peak`: spiky days. The heaviest 24 h ending in the last 7 days, as if it came every day
   (needs 2 h of work in those 24 h).
+- `typical`: a heavy but normal day. The 75th percentile of the paces of the same 24 h windows
+  `peak` looks at (one ending on each step of the last 7 days, each with 2 h of work), by linear
+  interpolation between the closest ranks; it needs 2 such windows or more.
 - `trend`: speeding up. The last day's pace plus half of how far it passes the last 3 days' (only when it
   does; both need 2 h of work).
 - `now`: the session in progress. The last 5 h's pace while working, at the hours a day worked over
@@ -102,8 +107,8 @@ and 1.4 times the pace at which the account reaches its cap within its current w
 even at 1.4). `lasts` is the same scale for all accounts together: the largest multiple of the pace
 at which the room lasts.
 
-`week.by_method` runs the same week at each method's pace, always `peak`, `trend` and `now` in that
-order: its `per_hour`, `verdict`, `lasts`, `runs_out`, `dry` and `accounts`, with the same meaning
+`week.by_method` runs the same week at each method's pace, always `peak`, `typical`, `trend` and
+`now` in that order: its `per_hour`, `verdict`, `lasts`, `runs_out`, `dry` and `accounts`, with the same meaning
 as the fields above. The method the pace comes from is marked `used: true`, and its entry is the
 same as those fields. A method not present has only its `name` and `reason` (`less than 30 min of
 work in the last 5 h`). With no measured pace (each window's average) `by_method` is absent. The
