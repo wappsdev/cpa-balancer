@@ -93,8 +93,8 @@ the use goes (`pace.methods` lists the ones present, `pace.absent` the others wi
 - `typical`: a heavy but normal day. The 75th percentile of the last 7 days' working days: the 7
   non-overlapping 24 h windows ending now, a day ago and so on, each kept when it has 2 h of work,
   at its pace, by linear interpolation between the closest ranks (needs 2 such days).
-- `trend`: speeding up. The last day's pace plus half of how far it passes the last 3 days' (only when it
-  does; both need 2 h of work).
+- `trend`: where the use is heading. The last day's pace plus half of the change from the last 3 days'
+  pace (lower when use slows down, never below 0; needs 2 h of work in the last 24 h).
 - `now`: the session in progress. The last 5 h's pace while working, at the hours a day worked over
   the 7 days (needs 30 min of work in the 5 h).
 

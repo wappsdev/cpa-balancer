@@ -540,7 +540,8 @@ const day = 24 * time.Hour
 //   - typical: the 75th percentile (see percentile75) of the paces of the last 7 days' working
 //     days: the 7 non-overlapping 24 h windows ending now, a day ago and so on, each with 2 h of
 //     work, at least 2 of them;
-//   - trend: the last day's pace plus half of how much it passes the last 3 days' (only when it does);
+//   - trend: the last day's pace plus half of its change from the last 3 days' pace (lower when the
+//     use slows down, never below 0; needs 2 h of work in the last 24 h);
 //   - now: the last 5 h's pace while working, at the hours a day worked over the 7 days.
 //
 // With no method present it is the 7 days' pace (basis 7d); nil with less than `MinWork` in them.
@@ -586,15 +587,13 @@ func MeasurePace(h Series, accounts []Account, now time.Time) *Pace {
 		absent = append(absent, Absent{Name: "typical", Reason: "fewer than 2 days with 2 h of work in the last 7 days"})
 	}
 
-	// trend: the day's calendar pace rising past the 3 days' (the 3 days hold the day's work)
+	// trend: the day's calendar pace, moved by half of its change from the 3 days' pace (the 3
+	// days hold the day's work); below the day's pace when the use slows down
 	use1, worked1 := s.in(end-int64(day.Seconds()), end)
 	use3, _ := s.in(end-int64(3*day.Seconds()), end)
-	switch pace1, pace3 := use1/24, use3/72; {
-	case worked1 < minWork:
+	if pace1, pace3 := use1/24, use3/72; worked1 < minWork {
 		absent = append(absent, Absent{Name: "trend", Reason: "less than 2 h of work in the last 24 h"})
-	case pace1 <= pace3:
-		absent = append(absent, Absent{Name: "trend", Reason: "the last 24 h are not faster than the last 3 days"})
-	default:
+	} else {
 		methods = append(methods, Method{Name: "trend", PerHour: math.Max(0, pace1+(pace1-pace3)/2)})
 	}
 

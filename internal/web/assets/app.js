@@ -229,7 +229,7 @@ function methodsTable(o, v, now, name) {
   const HOW = {
     peak: "the heaviest 24 hours of the last 7 days, as if every day were like it",
     typical: "a heavy but normal day — the 75th percentile of the last 7 days' working days",
-    trend: "the last day's pace plus half of how far it exceeds the last 3 days' pace",
+    trend: "the last day's pace plus half of the change from the last 3 days' pace (lower when use slows down)",
     now: "the pace while working in the last 5 hours × the hours worked per day",
   };
   const ways = o.by_method; // peak, typical, trend, now: the balancer gives all four

@@ -408,12 +408,33 @@ func TestNowIsTheFastestOnAFastSession(t *testing.T) {
 	}
 }
 
-func TestTrendIsAbsentWhenTheUseSlowsOrTheDayHasTooLittleWork(t *testing.T) {
-	// slower: the last day 4 points, the 3 days 12
-	slow := MeasurePace(weekOf(work{20, 23, 1}, work{68, 71, 1}, work{116, 119, 1}), one, now)
-	if _, ok := methods(slow)["trend"]; ok || slow.Basis != "typical" {
+func TestTrendFallsBelowTheDaysPaceWhenTheUseSlows(t *testing.T) {
+	// slower: the last day 4 points, the 3 days 20
+	slow := MeasurePace(weekOf(work{20, 23, 1}, work{68, 71, 2}, work{116, 119, 2}), one, now)
+	m := methods(slow)
+	tr, ok := m["trend"]
+	if !ok || slow.Basis != "typical" {
 		t.Fatalf("%+v", slow)
 	}
+	near(t, "trend", tr.PerHour, 4.0/24+(4.0/24-20.0/72)/2, 1e-9)
+	if tr.PerHour >= 4.0/24 {
+		t.Fatalf("trend must be below the last day's pace: %+v", tr)
+	}
+	// it stays a candidate when typical is not measured
+	if fastest([]Method{tr, {Name: "now", PerHour: 0}}).Name != "trend" {
+		t.Fatalf("%+v", tr)
+	}
+}
+
+func TestTrendIsZeroWhenTheUseDropsSteeply(t *testing.T) {
+	// the last day 4 points, the 3 days 404: 4/24 + (4/24 − 404/72)/2 is below 0
+	p := MeasurePace(weekOf(work{20, 23, 1}, work{68, 71, 50}, work{116, 119, 50}), one, now)
+	if tr, ok := methods(p)["trend"]; !ok || tr.PerHour != 0 {
+		t.Fatalf("%+v", p.Methods)
+	}
+}
+
+func TestTrendIsAbsentWhenTheDayHasTooLittleWork(t *testing.T) {
 	// the last day has 1 h of work
 	short := MeasurePace(weekOf(work{20, 21, 9}, work{68, 71, 0.5}), one, now)
 	if _, ok := methods(short)["trend"]; ok {
@@ -443,8 +464,7 @@ func absent(p *Pace) map[string]string {
 
 func TestAnAbsentMethodSaysWhy(t *testing.T) {
 	slow := MeasurePace(weekOf(work{20, 23, 1}, work{68, 71, 1}, work{116, 119, 1}), one, now)
-	if got := absent(slow); len(got) != 2 || got["trend"] != "the last 24 h are not faster than the last 3 days" ||
-		got["now"] != "less than 30 min of work in the last 5 h" {
+	if got := absent(slow); len(got) != 1 || got["now"] != "less than 30 min of work in the last 5 h" {
 		t.Fatalf("%+v", slow.Absent)
 	}
 	short := MeasurePace(weekOf(work{20, 21, 9}, work{68, 71, 0.5}), one, now)

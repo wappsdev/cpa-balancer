@@ -75,10 +75,10 @@ check('no methods, no table', methodsTable({ verdict: 'out' }, status, NOW, f =>
 // under the table, how each method is worked out, and why an absent one is not there
 check('notes say each method', t.notes?.length === 5 && t.notes[0] === 'peak: the heaviest 24 hours of the last 7 days, as if every day were like it'
   && t.notes[1] === "typical: a heavy but normal day — the 75th percentile of the last 7 days' working days"
-  && t.notes[2] === "trend: the last day's pace plus half of how far it exceeds the last 3 days' pace"
+  && t.notes[2] === "trend: the last day's pace plus half of the change from the last 3 days' pace (lower when use slows down)"
   && t.notes[3] === 'now: the pace while working in the last 5 hours × the hours worked per day'
   && t.notes[4] === 'Σ and the outlook above use typical (falling back to the fastest method when typical cannot be measured).')
-check('a note says why a method is absent', absent.notes?.[2] === `trend: the last day's pace plus half of how far it exceeds the last 3 days' pace — not measured: ${why}`)
+check('a note says why a method is absent', absent.notes?.[2] === `trend: the last day's pace plus half of the change from the last 3 days' pace (lower when use slows down) — not measured: ${why}`)
 
 if (fails.length) { console.log('FAIL: ' + fails.join(', ')); process.exit(1) }
 console.log('PASS')
