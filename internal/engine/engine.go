@@ -142,7 +142,7 @@ func (e *Engine) OnUsage(rec pluginapi.UsageRecord) {
 	if rec.Failed {
 		traffic.Failed = 1
 	}
-	e.rec.AddTraffic(now, rec.AuthID, rec.Model, traffic)
+	e.rec.AddTraffic(now, history.Source{Account: rec.AuthID, Model: rec.Model, Session: rec.SessionID, Parent: rec.ParentSessionID}, traffic)
 	readings := quota.FromHeaders(rec.ResponseHeaders, rec.Model, e.cfg.Buckets.Main, e.cfg.Buckets.Fable, now)
 	if len(readings) == 0 {
 		return

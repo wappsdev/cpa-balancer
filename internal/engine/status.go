@@ -4,6 +4,7 @@ import (
 	"github.com/wappsdev/cpa-balancer/internal/config"
 	"time"
 
+	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/policy"
 	"github.com/wappsdev/cpa-balancer/internal/probe"
 	"github.com/wappsdev/cpa-balancer/internal/quota"
@@ -48,6 +49,9 @@ type View struct {
 	Decision    policy.Decision `json:"decision"`
 	Accounts    []AccountView   `json:"accounts"`
 	Changes     []state.Change  `json:"changes"`
+	// Sessions is read from the history files, so the plugin adds it after Status returns: the
+	// engine's lock is not held for a disk read.
+	Sessions *history.Sessions `json:"sessions,omitempty"`
 }
 
 // Config is the configuration the engine runs on; it never changes for one engine.

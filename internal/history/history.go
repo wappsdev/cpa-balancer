@@ -70,6 +70,10 @@ type Slot struct {
 	Active   map[string]string       `json:"active,omitempty"`
 	Accounts map[string]*AccountSlot `json:"accounts,omitempty"`
 	Events   []Event                 `json:"events,omitempty"`
+	// Sessions holds the slot's traffic per client session; a slot written before sessions were
+	// recorded has none. Backfill marks a slot rebuilt from transcripts instead of recorded live.
+	Sessions map[string]*SessionSlot `json:"sessions,omitempty"`
+	Backfill bool                    `json:"backfill,omitempty"`
 }
 
 func newSlot(t time.Time) *Slot {
@@ -114,16 +118,40 @@ func (r *Recorder) current(now time.Time) *Slot {
 	return r.open
 }
 
-func (r *Recorder) AddTraffic(now time.Time, account, model string, t Traffic) {
+// Source says where traffic came from: the account and model that served it and the client
+// session (with its parent, for a subagent) that sent it. An empty Session is a request without one.
+type Source struct {
+	Account, Model, Session, Parent string
+}
+
+// AddTraffic counts requests for the account and for the session in one step, so the two views
+// of a slot always agree.
+func (r *Recorder) AddTraffic(now time.Time, src Source, t Traffic) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	a := r.current(now).account(account)
-	m := a.Models[model]
+	s := r.current(now)
+	a := s.account(src.Account)
+	m := a.Models[src.Model]
 	m.add(t)
-	a.Models[model] = m
+	a.Models[src.Model] = m
+	ss := s.session(now, src.Session, src.Parent)
+	ss.addTo(&ss.Accounts, src.Account, t)
+	ss.addTo(&ss.Models, src.Model, t)
+}
+
+// AddAdvisor counts requests an advisor model answered for a session. They use quota too but are
+// not in the executor's own usage report, so they are kept apart from the account totals.
+func (r *Recorder) AddAdvisor(now time.Time, session, parent, model string, t Traffic) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ss := r.current(now).session(now, session, parent)
+	ss.addTo(&ss.Advisor, model, t)
 }
 
 func (r *Recorder) AddEvent(e Event) {

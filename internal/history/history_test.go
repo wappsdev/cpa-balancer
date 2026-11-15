@@ -15,8 +15,8 @@ func f(v float64) *float64 { return &v }
 func TestSlotsAreWrittenWhenTheyClose(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRecorder(dir)
-	r.AddTraffic(t0.Add(time.Minute), "w", "claude-opus-5-5", Traffic{Requests: 1, InputTokens: 100, OutputTokens: 10})
-	r.AddTraffic(t0.Add(2*time.Minute), "w", "claude-opus-5-5", Traffic{Requests: 1, InputTokens: 50, OutputTokens: 5, Failed: 1})
+	r.AddTraffic(t0.Add(time.Minute), Source{Account: "w", Model: "claude-opus-5-5"}, Traffic{Requests: 1, InputTokens: 100, OutputTokens: 10})
+	r.AddTraffic(t0.Add(2*time.Minute), Source{Account: "w", Model: "claude-opus-5-5"}, Traffic{Requests: 1, InputTokens: 50, OutputTokens: 5, Failed: 1})
 	r.Snapshot(t0.Add(3*time.Minute), map[string]string{"main": "w"}, map[string]Levels{"w": {Main: f(40), MainCap: f(99), Session: f(10), SessionOpen: true}})
 	r.Snapshot(t0.Add(4*time.Minute), map[string]string{"main": "w"}, map[string]Levels{"w": {Main: f(41), MainCap: f(99), Session: f(12), SessionOpen: true}})
 	r.AddEvent(Event{At: t0.Add(4 * time.Minute), Kind: "switch", Bucket: "main", From: "g", To: "w", Reason: "forced"})
@@ -53,7 +53,7 @@ func TestDayRolloverAndPruning(t *testing.T) {
 	}
 	r := NewRecorder(dir)
 	late := time.Date(2026, 10, 4, 23, 58, 0, 0, time.UTC)
-	r.AddTraffic(late, "w", "m", Traffic{Requests: 1})
+	r.AddTraffic(late, Source{Account: "w", Model: "m"}, Traffic{Requests: 1})
 	if err := r.Flush(late.Add(5 * time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +79,8 @@ func TestQueryDownsamples(t *testing.T) {
 			active = "w"
 		}
 		r.Snapshot(at, map[string]string{"main": active}, map[string]Levels{"w": {Main: f(float64(40 + i)), SessionOpen: i < 3, Session: f(float64(10 * i))}})
-		r.AddTraffic(at, "w", "claude-opus-5-5", Traffic{Requests: 2, InputTokens: 10, OutputTokens: 5})
-		r.AddTraffic(at, "w", "claude-fable-5-1", Traffic{Requests: 1})
+		r.AddTraffic(at, Source{Account: "w", Model: "claude-opus-5-5"}, Traffic{Requests: 2, InputTokens: 10, OutputTokens: 5})
+		r.AddTraffic(at, Source{Account: "w", Model: "claude-fable-5-1"}, Traffic{Requests: 1})
 	}
 	r.AddEvent(Event{At: time.Date(2026, 10, 4, 11, 20, 0, 0, time.UTC), Kind: "anchor", Account: "g"})
 	if err := r.Flush(t0); err != nil {
@@ -115,7 +115,7 @@ func TestQueryDownsamples(t *testing.T) {
 
 func TestQueryIncludesTheOpenSlot(t *testing.T) {
 	r := NewRecorder(t.TempDir())
-	r.AddTraffic(t0.Add(-time.Minute), "w", "m", Traffic{Requests: 3})
+	r.AddTraffic(t0.Add(-time.Minute), Source{Account: "w", Model: "m"}, Traffic{Requests: 3})
 	s, _ := r.Query("24h", t0)
 	if len(s.T) != 288 || s.Accounts["w"].Requests[len(s.T)-2] != 3 {
 		t.Fatalf("open slot missing: %+v", s.Accounts["w"])
@@ -125,7 +125,7 @@ func TestQueryIncludesTheOpenSlot(t *testing.T) {
 func TestASlotInMemoryAndOnDiskCountsOnce(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRecorder(dir)
-	r.AddTraffic(t0.Add(time.Minute), "w", "m", Traffic{Requests: 2})
+	r.AddTraffic(t0.Add(time.Minute), Source{Account: "w", Model: "m"}, Traffic{Requests: 2})
 	r.current(t0.Add(6 * time.Minute)) // closes 12:00 into pending without writing it
 	// A flush racing the query wrote the same slot to disk after the memory copy was taken.
 	if err := r.appendSlot(r.pending[0]); err != nil {
@@ -145,7 +145,7 @@ func TestPendingSlotsAreBoundedWhenWritesFail(t *testing.T) {
 	r := NewRecorder(dir)
 	for i := range maxPending + 50 {
 		at := t0.Add(time.Duration(i) * SlotLength)
-		r.AddTraffic(at, "w", "m", Traffic{Requests: 1})
+		r.AddTraffic(at, Source{Account: "w", Model: "m"}, Traffic{Requests: 1})
 		if err := r.Flush(at); err == nil && i > 0 {
 			t.Fatal("flush must fail")
 		}

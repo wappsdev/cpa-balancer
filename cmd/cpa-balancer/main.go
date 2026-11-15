@@ -221,13 +221,17 @@ type pluginAPI struct{}
 
 func (pluginAPI) Status() any {
 	mu.Lock()
-	e, cfgErr := current, configErr
+	e, cfgErr, rec := current, configErr, recorder
 	mu.Unlock()
 	if e == nil {
 		return map[string]string{"error": "not configured", "config_error": cfgErr}
 	}
 	v := e.Status()
 	v.ConfigError = cfgErr
+	if rec != nil {
+		s := rec.Sessions(time.Now())
+		v.Sessions = &s
+	}
 	return v
 }
 
