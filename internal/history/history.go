@@ -136,17 +136,6 @@ func (r *Recorder) AddTraffic(now time.Time, src Source, t Traffic) {
 	r.current(now).AddTraffic(now, src, t)
 }
 
-// AddAdvisor counts requests an advisor model answered for a session. They use quota too but are
-// not in the executor's own usage report, so they are kept apart from the account totals.
-func (r *Recorder) AddAdvisor(now time.Time, session, parent, model string, t Traffic) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.current(now).AddAdvisor(now, session, parent, model, t)
-}
-
 func (r *Recorder) AddEvent(e Event) {
 	if r == nil {
 		return
@@ -259,7 +248,7 @@ func (r *Recorder) readSlots(from, to time.Time) ([]*Slot, int) {
 	if r.open != nil {
 		memory = append(memory, r.open)
 	}
-	data, _ := json.Marshal(memory) // deep copy outside the lock
+	data, _ := json.Marshal(memory) // deep copy: taken under the lock, decoded after it
 	r.mu.Unlock()
 	// A flush may write a copied slot to disk while the files are read; the copy wins.
 	inMemory := map[time.Time]bool{}

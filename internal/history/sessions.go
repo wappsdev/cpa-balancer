@@ -10,7 +10,9 @@ import (
 )
 
 const (
-	maxIDLength        = 64  // a session id comes from a client header, so only a plain id of this size is stored as given
+	maxIDLength        = 128 // a session id comes from a client header, so only a plain id of this size is stored as given; room for a uuid, a slash and an agent id
+	maxModelLength     = 64
+	maxDepth           = 8   // levels of subagents listed; a deeper session is folded into its ancestor at the last level
 	maxSessionsPerSlot = 200 // distinct sessions kept in one slot; later ones are folded into OtherSession
 	maxKeysPerMap      = 8   // distinct models (or accounts) in one map of a slot; later ones are folded into OtherSession
 	maxLine            = 4 << 20
@@ -54,7 +56,7 @@ func validModel(model string) bool {
 	if model == "" {
 		return true
 	}
-	return len(model) <= maxIDLength && strings.IndexFunc(model, func(c rune) bool {
+	return len(model) <= maxModelLength && strings.IndexFunc(model, func(c rune) bool {
 		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._:-[]@", c))
 	}) < 0
 }
@@ -66,18 +68,44 @@ func cleanModel(model string) string {
 	return OtherSession
 }
 
-// validID reports whether a client-supplied id is a plain one: letters, digits and . _ : - only.
+// validID reports whether a client-supplied id is a plain one: letters, digits and . _ : - / only.
 func validID(id string) bool {
 	if len(id) == 0 || len(id) > maxIDLength {
 		return false
 	}
 	for i := 0; i < len(id); i++ {
 		c := id[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == ':' || c == '-') {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == ':' || c == '-' || c == '/') {
 			return false
 		}
 	}
 	return true
+}
+
+// CanonicalSession turns the ids CPA reports for Claude Code into the keys the history uses, so
+// live traffic and transcripts land on the same row. CPA names a main session `claude:<sid>` and a
+// subagent `claude:<sid>:agent:<agentId>`, with the parent in the same forms (or `claude:<other>`).
+// The main session becomes `<sid>`, the transcript's own file name; a subagent becomes
+// `<sid>/<agentId>` and, when no parent came with it, takes `<sid>` as its parent. An id in any
+// other form is returned as it came.
+func CanonicalSession(id, parent string) (string, string) {
+	one := func(raw string) (key, owner string) {
+		raw = strings.TrimSpace(raw)
+		rest, ok := strings.CutPrefix(raw, "claude:")
+		if !ok {
+			return raw, ""
+		}
+		if sid, agent, ok := strings.Cut(rest, ":agent:"); ok && sid != "" && agent != "" {
+			return sid + "/" + agent, sid
+		}
+		return rest, ""
+	}
+	id, owner := one(id)
+	parent, _ = one(parent)
+	if parent == "" {
+		parent = owner
+	}
+	return id, parent
 }
 
 // NewSlot is an empty slot that starts at the slot boundary t is in.
@@ -92,7 +120,10 @@ func (s *Slot) AddTraffic(now time.Time, src Source, t Traffic) {
 	addCapped(&ss.Models, model, t)
 }
 
-// AddAdvisor counts advisor requests in the slot (see Recorder.AddAdvisor).
+// AddAdvisor counts requests an advisor model answered for a session. They use quota too but are
+// not in the executor's own usage, so they are kept apart from the account totals. Only the
+// importer calls it: CPA reports only the top-level usage of a response, which leaves the advisor
+// iterations out, so live advisor tokens are invisible to the plugin.
 func (s *Slot) AddAdvisor(now time.Time, session, parent, model string, t Traffic) {
 	ss := s.session(now, session, parent)
 	addCapped(&ss.Advisor, cleanModel(model), t)
@@ -200,12 +231,6 @@ func (r *Recorder) Sessions(now time.Time) Sessions {
 		Week:         buildWindow(slots, to.Add(-WeekWindow), to, weekTopSessions),
 		SkippedLines: skipped,
 	}
-}
-
-// SessionWindow is the use of [from, to); limit > 0 lists only that many root sessions, besides
-// the one without an id, and sums the rest in Other.
-func (r *Recorder) SessionWindow(from, to time.Time, limit int) SessionWindow {
-	return buildWindow(r.slots(from, to), from, to, limit)
 }
 
 type node struct {
@@ -320,7 +345,7 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int) SessionWindow {
 	}
 	rows := make([]SessionUsage, len(roots))
 	for i, n := range roots {
-		rows[i] = n.usage()
+		rows[i] = n.usage(1)
 		w.Advisor.add(rows[i].Advisor)
 	}
 	sortRows(rows)
@@ -346,15 +371,46 @@ func sortRows(rows []SessionUsage) {
 	})
 }
 
-// usage turns a node and its descendants into a row.
-func (n *node) usage() SessionUsage {
+// absorb adds another node's own use to this one, as if the requests had come from it.
+func (n *node) absorb(c *node) {
+	n.estimated = n.estimated || c.estimated
+	if !c.first.IsZero() && (n.first.IsZero() || c.first.Before(n.first)) {
+		n.first = c.first
+	}
+	if c.last.After(n.last) {
+		n.last = c.last
+	}
+	n.own.add(c.own)
+	mergeInto(&n.accounts, c.accounts)
+	mergeInto(&n.models, c.models)
+	mergeInto(&n.advisor, c.advisor)
+}
+
+// foldDescendants absorbs every session below n into it and leaves it without children. Cycles
+// are already cut, so the walk ends.
+func (n *node) foldDescendants() {
+	stack := n.children
+	n.children = nil
+	for len(stack) > 0 {
+		c := stack[len(stack)-1]
+		stack = append(stack[:len(stack)-1], c.children...)
+		n.absorb(c)
+	}
+}
+
+// usage turns a node and its descendants into a row; depth is the node's level, 1 for a root.
+// At maxDepth the node takes in everything below it, so the tree and the recursion stay bounded.
+func (n *node) usage(depth int) SessionUsage {
+	if depth >= maxDepth {
+		n.foldDescendants()
+	}
 	u := SessionUsage{ID: n.id, Parent: n.parent, First: n.first, Last: n.last, Estimated: n.estimated, Own: n.own, Total: n.own,
 		Accounts: map[string]Traffic{}, Models: map[string]Traffic{}, Advisor: sum(n.advisor)}
 	mergeInto(&u.Accounts, n.accounts)
 	mergeInto(&u.Models, n.models)
 	mergeInto(&u.AdvisorModels, n.advisor)
 	for _, c := range n.children {
-		cu := c.usage()
+		cu := c.usage(depth + 1)
 		u.Subagents = append(u.Subagents, cu)
 		u.Total.add(cu.Total)
 		u.Advisor.add(cu.Advisor)
@@ -420,11 +476,9 @@ func (r *Recorder) Untaken(slots []*Slot) []*Slot {
 	return out
 }
 
-// WriteBackfill appends slots rebuilt from transcripts, marked as such. A slot time the history
-// already covers is left alone (see Untaken), so running it again adds nothing. It returns how
-// many slots it wrote.
-func (r *Recorder) WriteBackfill(slots []*Slot) (int, error) {
-	todo := r.Untaken(slots)
+// AppendBackfill appends slots rebuilt from transcripts, marked as such, and returns how many it
+// wrote. The caller passes what Untaken returned, so running an import again adds nothing.
+func (r *Recorder) AppendBackfill(todo []*Slot) (int, error) {
 	if len(todo) == 0 {
 		return 0, nil
 	}

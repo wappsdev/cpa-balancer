@@ -95,11 +95,20 @@ under their parent. `/status` carries the same data as `sessions.five_hour` and 
 (with its subagents), and the listed root sessions' `total` plus `other.total` always equal the
 window's `total`. The week lists its 30 largest roots; the 5 hours are not cut.
 
-A session id comes from a client header, so only a plain id (up to 64 of `A-Za-z0-9._:-`) is
+CPA names a Claude Code session `claude:<sid>` and a subagent `claude:<sid>:agent:<agentId>`. The
+balancer stores the main session as `<sid>`, the name of its transcript file, and a subagent as
+`<sid>/<agentId>` under its parent (nested subagents the same way), so live rows and rows
+imported from transcripts land on the same key. An id in another form is kept as it came.
+
+A session id comes from a client header, so only a plain id (up to 128 of `A-Za-z0-9._:-/`) is
 stored as given. Anything else, and every session past 200 in one slot, is counted under
-`(other)`. Model names are checked the same way and each map in a slot keeps at most 8 keys, so a
+`(other)`. Subagents are listed at most 8 levels deep; anything deeper is folded into its ancestor at the
+last level. Model names are checked the same way and each map in a slot keeps at most 8 keys, so a
 client cannot grow the history without bound. Slots written before sessions were recorded count
 as `no session`.
+
+Advisor models' calls are not seen live: CPA reports only the top-level `usage` of a response,
+which leaves the advisor iterations out. Only the import below fills the advisor column.
 
 ### Importing older sessions from transcripts
 
@@ -111,10 +120,12 @@ cpa-balancer-import --projects <transcripts dir> --state <balancer data dir> --d
 cpa-balancer-import --projects <transcripts dir> --state <balancer data dir>
 ```
 
-A message that spans several lines counts once, a subagent's transcript counts under its parent
+A message that spans several lines counts once, and a message id counts once whichever
+transcripts hold it (a resumed session copies earlier messages); a subagent's transcript counts under its parent
 session, and an advisor model's calls (`usage.iterations`) are counted apart from the account's
 own use. Transcripts do not name an account: each request is given the account the balancer had
-active for its bucket (main, or Fable by model name) at that time, from its recorded history, or
+active for its bucket (main, or Fable by a model name containing `--fable`, which defaults to
+`fable`; the bucket lists live in CPA's config file, which the tool does not read) at that time, from its recorded history, or
 `unknown`. Those rows are marked `~` (estimated) on the page. The plugin writes a slot at every
 tick while it runs, so a slot it wrote, busy or idle, is never touched: the import fills only the
 time before the plugin ran and the gaps when it was off. Running it again adds nothing; run it

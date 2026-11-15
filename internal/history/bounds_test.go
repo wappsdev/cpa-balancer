@@ -20,7 +20,7 @@ func TestAModelOutsideTheAllowedFormatIsStoredAsOther(t *testing.T) {
 	for _, model := range bad {
 		r.AddTraffic(t0, src("a", model, "s1", ""), tok(1, 1, 1))
 	}
-	r.AddAdvisor(t0, "s1", "", "<advisor>", tok(1, 1, 1))
+	advisor(r, t0, "s1", "", "<advisor>", tok(1, 1, 1))
 	w := window(r, 0)
 	s := find(w, "s1")
 	if s.Models[OtherSession].Requests != int64(len(bad)) || s.Models["claude-opus-5-5[1m]"].Requests != 1 || s.Models[""].Requests != 1 || len(s.Models) != 5 {
@@ -42,7 +42,7 @@ func TestModelsPerAccountAndSessionAreCappedAndTheOverflowIsFolded(t *testing.T)
 	const extra = 7
 	for i := range maxKeysPerMap + extra {
 		r.AddTraffic(t0, src("a", fmt.Sprintf("model-%02d", i), "s1", ""), tok(1, 1, 1))
-		r.AddAdvisor(t0, "s1", "", fmt.Sprintf("advisor-%02d", i), tok(1, 1, 1))
+		advisor(r, t0, "s1", "", fmt.Sprintf("advisor-%02d", i), tok(1, 1, 1))
 	}
 	r.AddTraffic(t0, src("a", "model-00", "s1", ""), tok(1, 1, 1)) // a model already there still counts under its own name
 	w := window(r, 0)

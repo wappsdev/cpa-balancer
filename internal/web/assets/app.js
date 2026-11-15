@@ -306,6 +306,7 @@ function renderOutlook(o) {
 // What the sessions card shows for one window: rows nested under their parent, each with its
 // tokens and share. A session's tokens are input, output and cache writes (cache reads are
 // shown apart); a parent's count its subagents' too. Pure, so it is tested.
+const MAX_SESSION_DEPTH = 8;
 function sessionsView(w) {
   const tokens = t => (t?.input_tokens || 0) + (t?.output_tokens || 0) + (t?.cache_creation_tokens || 0);
   const total = { requests: w.total?.requests || 0, tokens: tokens(w.total) };
@@ -323,7 +324,8 @@ function sessionsView(w) {
       share: percent(tokens(s.total), total.tokens), accounts: split(s.accounts), estimated: !!s.estimated,
       advisor: { requests: s.advisor?.requests || 0, tokens: tokens(s.advisor), models: Object.keys(s.advisor_models || {}).sort() },
     });
-    for (const c of s.subagents || []) add(c, depth + 1);
+    // The balancer folds anything deeper into its ancestor, so a deeper row is only defence: its use is already in this row's total.
+    if (depth + 1 < MAX_SESSION_DEPTH) for (const c of s.subagents || []) add(c, depth + 1);
   };
   for (const s of w.sessions || []) add(s, 0);
   return { total, rows, other: { sessions: w.other?.sessions || 0, tokens: tokens(w.other?.total) } };
@@ -345,7 +347,11 @@ let sessionSpan = "five_hour";
 let sessionData = null;
 
 function renderSessions(s) {
-  if (s) sessionData = s;
+  sessionData = s || null; // a status without sessions clears the card
+  drawSessions();
+}
+
+function drawSessions() {
   const w = sessionData?.[sessionSpan];
   const card = $("sessions");
   if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; return; }
@@ -362,7 +368,7 @@ for (const b of $("session-span").querySelectorAll("button")) {
   b.addEventListener("click", () => {
     sessionSpan = b.dataset.span;
     for (const o of $("session-span").querySelectorAll("button")) o.setAttribute("aria-pressed", String(o === b));
-    renderSessions();
+    drawSessions();
   });
 }
 

@@ -71,7 +71,7 @@ func run(t *testing.T, projects, hist string, dry bool) Report {
 
 func window(t *testing.T, hist string) history.SessionWindow {
 	t.Helper()
-	return history.NewRecorder(hist).SessionWindow(now.Add(-30*24*time.Hour), now, 0)
+	return history.NewRecorder(hist).Sessions(now).Week
 }
 
 func row(w history.SessionWindow, id string) *history.SessionUsage {

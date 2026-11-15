@@ -57,7 +57,10 @@ func Run(o Options) (Report, error) {
 	earliest, latest := o.Now.Add(-history.Retention), o.Now.Add(-liveMargin)
 
 	// One message can span several lines, one per content block, each with the usage so far: the
-	// one with the largest output is the finished one. A message is counted once per session.
+	// one with the largest output is the finished one. A message id is counted once, whichever
+	// transcripts hold it (a resumed or forked session copies earlier messages); the session of
+	// the copy with the largest output, then the smaller session id, keeps it. A line with no id
+	// is its own message.
 	messages := map[string]message{}
 	err := walk(o.Projects, func(path, session string) error {
 		rep.Files++
@@ -65,11 +68,13 @@ func Run(o Options) (Report, error) {
 			if m.At.Before(earliest) || !m.At.Before(latest) {
 				return
 			}
-			if m.ID == "" {
+			key := m.ID
+			if key == "" {
 				m.ID = fmt.Sprintf("%s:%d", path, lineNo)
+				key = m.Session + "\x00" + m.ID
 			}
-			key := m.Session + "\x00" + m.ID
-			if old, ok := messages[key]; !ok || m.Usage.OutputTokens > old.Usage.OutputTokens {
+			if old, ok := messages[key]; !ok || m.Usage.OutputTokens > old.Usage.OutputTokens ||
+				(m.Usage.OutputTokens == old.Usage.OutputTokens && m.Session < old.Session) {
 				messages[key] = m
 			}
 		}, &rep.SkippedLines)
@@ -124,7 +129,7 @@ func Run(o Options) (Report, error) {
 		rep.SlotsWould = len(todo)
 		return rep, nil
 	}
-	rep.SlotsAdded, err = store.WriteBackfill(todo)
+	rep.SlotsAdded, err = store.AppendBackfill(todo)
 	return rep, err
 }
 

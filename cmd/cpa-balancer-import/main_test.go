@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,6 +15,21 @@ func TestRunNeedsBothDirectoriesAndAnExistingStateDirectory(t *testing.T) {
 		if err := run(args); err == nil {
 			t.Errorf("%v: expected an error", args)
 		}
+	}
+}
+
+func TestAnErrorNeverNamesAPath(t *testing.T) {
+	state := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "private-project-name")
+	err := run([]string{"--projects", missing, "--state", state})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if text := plain(err); strings.Contains(text, "private-project-name") || strings.Contains(text, state) {
+		t.Fatalf("the printed error names a path: %q", text)
+	}
+	if msg := run([]string{"--projects", state, "--state", missing}); msg == nil || strings.Contains(msg.Error(), "private-project-name") {
+		t.Fatalf("%v", msg)
 	}
 }
 

@@ -36,7 +36,7 @@ func walk(rows []SessionUsage, f func(SessionUsage)) {
 }
 
 func window(r *Recorder, limit int) SessionWindow {
-	return r.SessionWindow(t0.Add(-time.Hour), t0.Add(time.Hour), limit)
+	return r.sessionWindow(t0.Add(-time.Hour), t0.Add(time.Hour), limit)
 }
 
 func TestSessionsAreAggregatedPerSessionAccountAndModel(t *testing.T) {
@@ -196,8 +196,8 @@ func TestTheTopSessionsAreKeptAndTheRestIsSummedUp(t *testing.T) {
 
 func TestAdvisorUseIsItsOwnColumnAndRollsUp(t *testing.T) {
 	r := NewRecorder(t.TempDir())
-	r.AddAdvisor(t0, "p", "", "fable", tok(1, 775, 6))
-	r.AddAdvisor(t0, "c", "p", "opus", tok(2, 10, 1))
+	advisor(r, t0, "p", "", "fable", tok(1, 775, 6))
+	advisor(r, t0, "c", "p", "opus", tok(2, 10, 1))
 	r.AddTraffic(t0, src("a", "m", "p", ""), tok(1, 1, 1))
 	w := window(r, 0)
 	p := find(w, "p")
@@ -242,7 +242,7 @@ func TestSessionsSurviveTheDisk(t *testing.T) {
 	if err := r.Flush(t0.Add(10 * time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	w := NewRecorder(dir).SessionWindow(t0.Add(-time.Hour), t0.Add(time.Hour), 0)
+	w := NewRecorder(dir).sessionWindow(t0.Add(-time.Hour), t0.Add(time.Hour), 0)
 	if s1 := find(w, "s1"); s1 == nil || s1.Total.Requests != 2 || len(s1.Subagents) != 1 || w.Total.Requests != 2 {
 		t.Fatalf("%+v", w)
 	}
@@ -251,8 +251,8 @@ func TestSessionsSurviveTheDisk(t *testing.T) {
 func TestAnIdOutsideTheAllowedFormatIsStoredAsOther(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRecorder(dir)
-	valid := strings.Repeat("a", 64)
-	bad := []string{strings.Repeat("x", 65), "has space", "../../etc", "naïve", "tab\there", "<img>", "line\nbreak"}
+	valid := strings.Repeat("a", 128)
+	bad := []string{strings.Repeat("x", 129), "has space", "naïve", "tab\there", "<img>", "line\nbreak"}
 	r.AddTraffic(t0, src("a", "m", valid, ""), tok(1, 1, 1))
 	r.AddTraffic(t0, src("a", "m", "ok.Id_1:2-3", ""), tok(1, 1, 1))
 	for _, id := range bad {
@@ -292,7 +292,7 @@ func TestSessionsPerSlotAreCappedAndTheOverflowIsFolded(t *testing.T) {
 	}
 	// a session already in the slot keeps counting after the cap is reached
 	r.AddTraffic(t0, src("a", "m", "s0001", ""), tok(1, 5, 5))
-	r.AddAdvisor(t0, "never-seen", "", "fable", tok(1, 1, 1))
+	advisor(r, t0, "never-seen", "", "fable", tok(1, 1, 1))
 	if got := len(r.open.Sessions); got != maxSessionsPerSlot+1 {
 		t.Fatalf("%d sessions kept, want the cap and one for the overflow", got)
 	}
@@ -350,7 +350,7 @@ func TestABackfilledSlotMarksItsSessionsEstimated(t *testing.T) {
 	slot := &Slot{T: t0.Add(10 * time.Minute), Backfill: true, Sessions: map[string]*SessionSlot{
 		"old": {First: t0.Add(10 * time.Minute), Last: t0.Add(11 * time.Minute), Accounts: map[string]Traffic{"unknown": tok(1, 1, 1)}, Models: map[string]Traffic{"m": tok(1, 1, 1)}}},
 		Accounts: map[string]*AccountSlot{"unknown": {Models: map[string]Traffic{"m": tok(1, 1, 1)}}}}
-	if _, err := r.WriteBackfill([]*Slot{slot}); err != nil {
+	if _, err := r.AppendBackfill(r.Untaken([]*Slot{slot})); err != nil {
 		t.Fatal(err)
 	}
 	w := window(r, 0)

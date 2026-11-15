@@ -2,11 +2,12 @@
 import { readFileSync } from 'node:fs'
 const src = readFileSync(new URL("assets/app.js", import.meta.url), "utf8")
 const esc = src.match(/const esc = [^\n]+\n/)[0]
+const depthLimit = src.match(/const MAX_SESSION_DEPTH = [^\n]+\n/)[0]
 const fn = src.match(/function sessionsView\(w\) \{[\s\S]*?\n\}\n/)[0]
 const rowHtml = src.match(/function sessionRowHtml\(r, name\) \{[\s\S]*?\n\}\n/)[0]
 const num = src.match(/const num = [^\n]+\n/)[0]
 const when = 'const when = t => `<span class="when">${esc(t)}</span>`;'
-const { sessionsView, sessionRowHtml } = new Function(`${esc}; ${num}; ${when}; ${fn}; ${rowHtml}; return { sessionsView, sessionRowHtml }`)()
+const { sessionsView, sessionRowHtml } = new Function(`${esc}; ${num}; ${when}; ${depthLimit}; ${fn}; ${rowHtml}; return { sessionsView, sessionRowHtml }`)()
 const fails = []
 const check = (name, ok) => { if (!ok) fails.push(name) }
 
@@ -38,6 +39,10 @@ check('estimated rows are marked', v.rows[0].estimated && !v.rows[1].estimated)
 check('the other row sums what was cut off', v.other.sessions === 3 && v.other.tokens === 10)
 check('an empty window has no rows and no division by zero', (() => { const e = sessionsView({ total: t(0, 0, 0), sessions: [], other: { sessions: 0, total: t(0, 0, 0) } }); return e.rows.length === 0 && e.total.tokens === 0 })())
 check('a window without sessions or other is read as empty', sessionsView({}).rows.length === 0)
+
+// A chain deeper than the limit is not walked past it: its use is in the last row's total already.
+const chain = (n) => ({ id: 'd' + n, own: t(1, 1, 0), total: t(10 - n, 10 - n, 0), advisor: t(0, 0, 0), accounts: {}, models: {}, subagents: n < 9 ? [chain(n + 1)] : [] })
+check('depth is bounded', sessionsView({ total: t(10, 10, 0), sessions: [chain(0)] }).rows.length === 8)
 
 // Every string comes from a client header or a model name: none may reach the page unescaped.
 const hostile = '"><img src=x onerror=alert(1)>'
