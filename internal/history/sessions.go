@@ -385,13 +385,14 @@ func hasTraffic(s *Slot) bool {
 	return false
 }
 
-// WriteBackfill appends slots rebuilt from transcripts. A slot time that already holds recorded
-// traffic or sessions, live or from an earlier backfill, is left alone, so running it again adds
-// nothing. It returns how many slots it wrote. A written slot sits beside any levels-only slot of
-// the same time: readers add the traffic of slots with one time and take the highest level.
-func (r *Recorder) WriteBackfill(slots []*Slot) (int, error) {
-	if r == nil || len(slots) == 0 {
-		return 0, nil
+// Slots returns the stored and in-memory slots with T in [from, to).
+func (r *Recorder) Slots(from, to time.Time) []*Slot { return r.slots(from, to) }
+
+// Untaken returns the slots whose time holds no recorded traffic or sessions yet, live or from an
+// earlier backfill. A slot with only levels does not count as taken.
+func (r *Recorder) Untaken(slots []*Slot) []*Slot {
+	if len(slots) == 0 {
+		return nil
 	}
 	from, to := slots[0].T, slots[0].T
 	for _, s := range slots {
@@ -408,21 +409,36 @@ func (r *Recorder) WriteBackfill(slots []*Slot) (int, error) {
 			taken[s.T] = true
 		}
 	}
+	var out []*Slot
+	for _, s := range slots {
+		if !taken[s.T] && hasTraffic(s) {
+			out = append(out, s)
+			taken[s.T] = true
+		}
+	}
+	return out
+}
+
+// WriteBackfill appends slots rebuilt from transcripts, marked as such. A slot time that already
+// holds recorded traffic or sessions is left alone, so running it again adds nothing. It returns
+// how many slots it wrote. A written slot sits beside any levels-only slot of the same time:
+// readers add the traffic of slots with one time and take the highest level.
+func (r *Recorder) WriteBackfill(slots []*Slot) (int, error) {
+	todo := r.Untaken(slots)
+	if len(todo) == 0 {
+		return 0, nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := os.MkdirAll(r.dir, 0o700); err != nil {
 		return 0, err
 	}
 	written := 0
-	for _, s := range slots {
-		if taken[s.T] || !hasTraffic(s) {
-			continue
-		}
+	for _, s := range todo {
 		s.Backfill = true
 		if err := r.appendSlot(s); err != nil {
 			return written, err
 		}
-		taken[s.T] = true
 		written++
 	}
 	return written, nil

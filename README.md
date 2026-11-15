@@ -71,13 +71,53 @@ Management Center → **Account Balancer** (sign in with "Remember password"):
 
 
 - header: balancing On / Paused, mode apply / shadow, Run now
-- Overview: chosen account per bucket with the reason, accounts, recent changes
+- Overview: chosen account per bucket with the reason, accounts, sessions, recent changes
 - History: 24h · 7d · 30d · 90d of weekly and 5-hour utilization, active account and tokens
 - Settings: accounts, thresholds, buckets and anchoring, saved through CPA after a review
 
 State: `~/.cli-proxy-api/cpa-balancer/state.json`. History (90 days of 5-minute slots):
 `~/.cli-proxy-api/cpa-balancer/history/`. Log lines go to CPA's log with the prefix
 `cpa-balancer:`.
+
+## Sessions
+
+Claude Code sends its session id with every request, and CPA hands it to the plugin. The balancer
+counts each session's requests, failures and input, output and cache tokens per account and per
+model, in the same 5-minute slots as the rest of the history, with a subagent's use also rolled up
+into its parent. Requests without a session id are counted as `no session`.
+
+The Overview shows them for the last 5 hours and the last 7 days (rolling windows, not an
+account's own quota window): the session id (first 8 characters; the full id is in the tooltip),
+when it was last seen, requests, tokens (input, output and cache writes; cache reads are in the
+tooltip), its share of the window, the accounts it used and any advisor use. Subagents are nested
+under their parent. `/status` carries the same data as `sessions.five_hour` and `sessions.week`:
+`total` and `accounts` are the window's own counts, each row has `own` (itself alone) and `total`
+(with its subagents), and the listed root sessions' `total` plus `other.total` always equal the
+window's `total`. The week lists its 30 largest roots; the 5 hours are not cut.
+
+A session id comes from a client header, so only a plain id (up to 64 of `A-Za-z0-9._:-`) is
+stored as given. Anything else, and every session past 200 in one slot, is counted under
+`(other)`. Model names are checked the same way and each map in a slot keeps at most 8 keys, so a
+client cannot grow the history without bound. Slots written before sessions were recorded count
+as `no session`.
+
+### Importing older sessions from transcripts
+
+`cpa-balancer-import` rebuilds sessions from Claude Code's transcripts (`go build ./cmd/cpa-balancer-import`).
+It is a one-off. It reads only the usage fields of assistant messages, never their text:
+
+```
+cpa-balancer-import --projects <transcripts dir> --state <balancer data dir> --dry-run
+cpa-balancer-import --projects <transcripts dir> --state <balancer data dir>
+```
+
+A message that spans several lines counts once, a subagent's transcript counts under its parent
+session, and an advisor model's calls (`usage.iterations`) are counted apart from the account's
+own use. Transcripts do not name an account: each request is given the account the balancer had
+active for its bucket (main, or Fable by model name) at that time, from its recorded history, or
+`unknown`. Those rows are marked `~` (estimated) on the page. Only 5-minute slots that hold no
+recorded traffic are written, so running it again adds nothing and live data is never changed;
+run it while CPA is idle.
 
 ## Look-ahead
 
@@ -129,7 +169,7 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 
 | Method | Path | |
 |---|---|---|
-| GET | `/status` | accounts, readings, caps, the decision per bucket and recent changes |
+| GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes and the sessions of the last 5 hours and 7 days |
 | GET | `/history?range=24h\|7d\|30d\|90d` | utilization, active account and tokens over time |
 | GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), the same at each method's pace (`week.by_method`), and the measured work pace |
 | POST | `/run` | one balancer tick now |

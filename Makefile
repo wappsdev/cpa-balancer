@@ -1,6 +1,6 @@
 PLUGIN_DIR := $(HOME)/.cli-proxy-api/plugins/darwin/arm64
 
-.PHONY: test build install
+.PHONY: test build build-import install
 
 test:
 	go vet ./...
@@ -12,6 +12,9 @@ test:
 build:
 	go build -buildmode=c-shared -o dist/cpa-balancer.dylib ./cmd/cpa-balancer
 	rm -f dist/cpa-balancer.h
+
+build-import:
+	go build -o dist/cpa-balancer-import ./cmd/cpa-balancer-import
 
 # CPA loads the library at startup; restart it after installing.
 install: build
