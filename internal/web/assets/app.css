@@ -142,6 +142,15 @@ button, select, input { font: inherit; color: inherit; }
 .sessions-table .sid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .sessions-table .faint { color: var(--faint); }
 .sessions-table .stitle { display: inline-block; max-width: 36ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.sessions-table td.placement { white-space: normal; min-width: 260px; }
+.pin-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.pin-controls .select { height: 28px; }
+.affinity h3 { margin: 16px 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.pins { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; }
+.pins li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pins .stitle { display: inline-block; max-width: 36ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.pins .sid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pins .faint { color: var(--faint); font-size: 12px; }
 .method-notes { margin: 10px 0 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .choice .account { font-size: 18px; font-weight: 650; letter-spacing: -0.01em; margin: 6px 0 8px; word-break: break-all; }

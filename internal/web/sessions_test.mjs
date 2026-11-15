@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs'
 const src = readFileSync(new URL("assets/app.js", import.meta.url), "utf8")
 const esc = src.match(/const esc = [^\n]+\n/)[0]
 const depthLimit = src.match(/const MAX_SESSION_DEPTH = [^\n]+\n/)[0]
-const fn = src.match(/function sessionsView\(w\) \{[\s\S]*?\n\}\n/)[0]
-const rowHtml = src.match(/function sessionRowHtml\(r, name\) \{[\s\S]*?\n\}\n/)[0]
+const fn = src.match(/function sessionsView\(w, picks\) \{[\s\S]*?\n\}\n/)[0]
+const placement = src.match(/function placementHtml\(r, name, accounts\) \{[\s\S]*?\n\}\n/)[0]
+const reasons = src.match(/const REASONS = \{[\s\S]*?\n\};\nconst reasonText = [^\n]+\n/)[0]
+const rowHtml = src.match(/function sessionRowHtml\(r, name, accounts\) \{[\s\S]*?\n\}\n/)[0]
 const num = src.match(/const num = [^\n]+\n/)[0]
 const when = 'const when = t => `<span class="when">${esc(t)}</span>`;'
-const { sessionsView, sessionRowHtml } = new Function(`${esc}; ${num}; ${when}; ${depthLimit}; ${fn}; ${rowHtml}; return { sessionsView, sessionRowHtml }`)()
+const { sessionsView, sessionRowHtml } = new Function(`${esc}; ${num}; ${when}; ${depthLimit}; ${reasons}; ${fn}; ${placement}; ${rowHtml}; return { sessionsView, sessionRowHtml }`)()
 const fails = []
 const check = (name, ok) => { if (!ok) fails.push(name) }
 

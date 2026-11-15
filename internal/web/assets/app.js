@@ -307,7 +307,7 @@ function renderOutlook(o) {
 // tokens and share. A session's tokens are input, output and cache writes (cache reads are
 // shown apart); a parent's count its subagents' too. Pure, so it is tested.
 const MAX_SESSION_DEPTH = 8;
-function sessionsView(w) {
+function sessionsView(w, picks) {
   const tokens = t => (t?.input_tokens || 0) + (t?.output_tokens || 0) + (t?.cache_creation_tokens || 0);
   const total = { requests: w.total?.requests || 0, tokens: tokens(w.total) };
   const percent = (n, of) => of ? Math.round(n * 100 / of) : 0;
@@ -322,6 +322,7 @@ function sessionsView(w) {
       depth, id: s.id, label: s.id ? s.id.slice(0, 8) : "no session", none: s.id === "", last: s.last,
       requests: s.total?.requests || 0, tokens: tokens(s.total), ownTokens: tokens(s.own), cacheRead: s.total?.cache_read_tokens || 0,
       share: percent(tokens(s.total), total.tokens), accounts: split(s.accounts),
+      pick: picks?.[s.id] ?? null, // where its last request went and why; the balancer keeps it in memory only
     });
     // The balancer folds anything deeper into its ancestor, so a deeper row is only defence: its use is already in this row's total.
     if (depth + 1 < MAX_SESSION_DEPTH) for (const c of s.subagents || []) add(c, depth + 1);
@@ -330,13 +331,57 @@ function sessionsView(w) {
   return { total, rows, other: { sessions: w.other?.sessions || 0, tokens: tokens(w.other?.total) } };
 }
 
-function sessionRowHtml(r, name) {
-  const accounts = r.accounts.map(a => esc(name(a.key)) + (r.accounts.length > 1 ? ` <span class="faint">${a.share}%</span>` : "")).join(" · ") || "—";
+// Why a session is on its account, in words.
+const REASONS = {
+  project_home: "project home", folder_pin: "folder pin", session_pin: "session pin", fallback: "fallback after cap",
+  folder_pin_fallback: "folder pin: account full, fallback", session_pin_fallback: "session pin: account full, fallback", no_project: "no project",
+};
+const reasonText = r => REASONS[r] || r;
+
+// Where a session went and the controls to pin it. A subagent follows its parent, so only a main
+// session is pinned; its folder can be pinned when the balancer found one. Every value is escaped:
+// a folder name is user data.
+function placementHtml(r, name, accounts) {
+  if (!r.pick) return "—";
+  const p = r.pick;
+  const project = p.project ? ` <span class="stitle faint" title="${esc(p.project)}">${esc(p.project)}</span>` : "";
+  const text = `<span class="chip${/fallback/.test(p.reason) ? " warn" : ""}">${esc(name(p.account))}</span> <span class="faint">${esc(reasonText(p.reason))}</span>${project}`;
+  if (r.depth || !r.id) return text;
+  const options = (accounts || []).map(a => `<option value="${esc(a.auth_file)}"${a.auth_file === p.account ? " selected" : ""}>${esc(a.name)}</option>`).join("");
+  return `${text}<div class="pin-controls"><select class="select small" data-pin-choice="${esc(r.id)}" aria-label="Account to pin to">${options}</select>
+    ${p.project ? `<button type="button" class="button" data-pin="folder" data-key="${esc(p.project)}" data-for="${esc(r.id)}">Pin folder</button>` : ""}
+    <button type="button" class="button" data-pin="session" data-key="${esc(r.id)}" data-for="${esc(r.id)}">Pin session</button></div>`;
+}
+
+function sessionRowHtml(r, name, accounts) {
+  const used = r.accounts.map(a => esc(name(a.key)) + (r.accounts.length > 1 ? ` <span class="faint">${a.share}%</span>` : "")).join(" · ") || "—";
   const detail = `${r.depth ? "" : `own ${num(r.ownTokens)} · `}cache reads ${num(r.cacheRead)}`;
   return `<tr class="${r.depth ? "sub" : ""}${r.none ? " none" : ""}">
     <th scope="row" title="${esc(r.id)}">${r.depth ? '<span class="faint">↳ </span>' : ""}<span class="sid">${esc(r.label)}</span></th>
     <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td>
-    <td>${r.share}%</td><td class="left">${accounts}</td></tr>`;
+    <td>${r.share}%</td><td class="left">${used}</td><td class="left placement">${placementHtml(r, name, accounts)}</td></tr>`;
+}
+
+// The pins and project homes under the sessions table. A pin set in the config is read only here.
+// A pin or a home whose account is full is said so: the project falls back until it has room again.
+const LISTED = 20;
+function pinsHtml(aff, name) {
+  if (!aff) return "";
+  const pinItem = (kind, p) => {
+    const label = kind === "session" ? p.key.slice(0, 8) : p.key;
+    return `<li><span class="chip">${kind}</span> <span class="${kind === "session" ? "sid" : "stitle"}" title="${esc(p.key)}">${esc(label)}</span> → <strong>${esc(name(p.account))}</strong>
+      ${p.full ? '<span class="chip warn">account full: falling back</span>' : ""}
+      ${p.source === "ui" ? `<button type="button" class="button" data-unpin="${kind}" data-key="${esc(p.key)}">Unpin</button>` : '<span class="faint">set in the config</span>'}</li>`;
+  };
+  const pins = [...(aff.folder_pins || []).map(p => pinItem("folder", p)), ...(aff.session_pins || []).map(p => pinItem("session", p))];
+  const homes = (aff.homes || []).slice(0, LISTED).map(h => `<li><span class="stitle" title="${esc(h.project)}">${esc(h.project)}</span> → <strong>${esc(name(h.account))}</strong>
+      ${h.full ? '<span class="chip warn">full: moves on the next request</span>' : ""}</li>`);
+  const more = (aff.homes || []).length - homes.length;
+  if (!pins.length && !homes.length) return "";
+  return `<div class="affinity">
+    ${pins.length ? `<h3>Pins</h3><ul class="pins">${pins.join("")}</ul>` : ""}
+    ${homes.length ? `<h3>Project homes</h3><ul class="pins">${homes.join("")}</ul>${more > 0 ? `<p class="hint">and ${more} more</p>` : ""}` : ""}
+  </div>`;
 }
 
 let sessionSpan = "five_hour";
@@ -351,14 +396,42 @@ function drawSessions() {
   const w = sessionData?.[sessionSpan];
   const card = $("sessions");
   if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; return; }
-  const v = sessionsView(w);
+  const v = sessionsView(w, view?.affinity?.sessions);
   $("sessions-hint").textContent = `${sessionSpan === "week" ? "last 7 days" : "last 5 hours"} · ${v.total.requests} requests · ${num(v.total.tokens)} tokens (input, output, cache writes)`;
   card.innerHTML = v.rows.length ? `<table class="sessions-table">
-      <thead><tr><th>Session</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Accounts</th></tr></thead>
-      <tbody>${v.rows.map(r => sessionRowHtml(r, short)).join("")}</tbody>
+      <thead><tr><th>Session</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Accounts</th><th class="left">Placement</th></tr></thead>
+      <tbody>${v.rows.map(r => sessionRowHtml(r, short, pinAccounts())).join("")}</tbody>
     </table>${v.other.sessions ? `<p class="hint">${v.other.sessions} smaller sessions not listed: ${num(v.other.tokens)} tokens.</p>` : ""}`
     : '<p class="empty">No requests in this window.</p>';
+  card.innerHTML += pinsHtml(view?.affinity, short);
+  for (const select of card.querySelectorAll("[data-pin-choice]")) { // a refresh keeps the account being chosen
+    if (pinChoice[select.dataset.pinChoice]) select.value = pinChoice[select.dataset.pinChoice];
+  }
 }
+
+const pinAccounts = () => (view?.accounts || []).map(a => ({ auth_file: a.auth_file, name: a.name }));
+const pinChoice = {}; // session id -> the account picked in its row, kept across refreshes
+
+async function setPin(kind, key, account) {
+  try { renderStatus(await api("POST", ROUTES + "/pin", { kind, key, account })); showError(null); }
+  catch (err) { showError(err); }
+}
+
+$("sessions").addEventListener("change", e => {
+  const select = e.target.closest("[data-pin-choice]");
+  if (select) pinChoice[select.dataset.pinChoice] = select.value;
+});
+$("sessions").addEventListener("click", async e => {
+  const pin = e.target.closest("[data-pin]"), unpin = e.target.closest("[data-unpin]");
+  if (pin) {
+    const select = [...$("sessions").querySelectorAll("[data-pin-choice]")].find(s => s.dataset.pinChoice === pin.dataset.for);
+    pin.disabled = true;
+    await setPin(pin.dataset.pin, pin.dataset.key, select?.value || "");
+  } else if (unpin) {
+    unpin.disabled = true;
+    await setPin(unpin.dataset.unpin, unpin.dataset.key, "");
+  }
+});
 
 for (const b of $("session-span").querySelectorAll("button")) {
   b.addEventListener("click", () => {
