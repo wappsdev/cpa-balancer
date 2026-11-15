@@ -72,9 +72,8 @@ type Slot struct {
 	Accounts map[string]*AccountSlot `json:"accounts,omitempty"`
 	Events   []Event                 `json:"events,omitempty"`
 	// Sessions holds the slot's traffic per client session; a slot written before sessions were
-	// recorded has none. Backfill marks a slot rebuilt from transcripts instead of recorded live.
+	// recorded has none.
 	Sessions map[string]*SessionSlot `json:"sessions,omitempty"`
-	Backfill bool                    `json:"backfill,omitempty"`
 }
 
 func newSlot(t time.Time) *Slot {

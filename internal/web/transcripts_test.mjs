@@ -25,12 +25,14 @@ const window = {
     { id: 'bbbbbbbb-1111-4222-8333-444444444444', last: '2026-11-14T08:00:00Z', total: t(3, 290, 40), models: { 'claude-opus-5-5': t(3, 290, 40) }, advisor: t(0, 0, 0) },
   ],
 }
+window.sessions[1].other_subagents = { sessions: 6, total: t(6, 60, 6), advisor: t(1, 10, 0) }
 const v = transcriptsView(window)
 check('window total counts input, output and cache writes', v.total.tokens === 1000 && v.total.requests === 10)
-check('rows: a root, its subagent, the next root', v.rows.map(r => `${r.depth}:${r.id}`).join('|') === `0:${A}|1:${A}/ab12cd34ef56|0:bbbbbbbb-1111-4222-8333-444444444444`)
+check('rows: a root, its subagent, the next root', v.rows.filter(r => !r.more).map(r => `${r.depth}:${r.id}`).join('|') === `0:${A}|1:${A}/ab12cd34ef56|0:bbbbbbbb-1111-4222-8333-444444444444`)
 check('the short id is eight characters, a subagent shows its agent id', v.rows[0].label === 'aaaaaaaa' && v.rows[1].label === 'ab12cd34')
 check('a root counts its family with the cache reads apart', v.rows[0].tokens === 600 && v.rows[0].requests === 7 && v.rows[0].cacheRead === 4000)
 check('a session with a name carries it with its kind, a subagent and an unnamed session none', v.rows[0].title === 'Made-up session name' && v.rows[0].titleKind === 'custom' && !v.rows[1].title && !v.rows[2].title)
+check('subagents past the listed ones are one line under their session', v.rows[3].more && v.rows[3].depth === 1 && v.rows[3].count === 6 && v.rows[3].tokens === 76 && transcriptRowHtml(v.rows[3]).includes('6 smaller subagents not listed') && v.rows.length === 4)
 check('share is of the window total', v.rows[0].share === 60 && v.rows[2].share === 33)
 check('models are listed largest first with their tokens', JSON.stringify(v.rows[0].models) === JSON.stringify([{ key: 'claude-opus-5-5', tokens: 330 }, { key: 'claude-haiku-5-5', tokens: 270 }]))
 check('advisor tokens are their own figure, with the advisor model', v.rows[0].advisor.requests === 2 && v.rows[0].advisor.tokens === 760 && v.rows[0].advisor.models[0].key === 'claude-fable-5-2' && v.rows[2].advisor.requests === 0)

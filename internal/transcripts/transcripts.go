@@ -28,7 +28,10 @@ const (
 	Dir = "transcripts"
 	// TopSessions is how many root sessions a Summary lists; the rest is summed in Other.
 	TopSessions = 30
-	dateLayout  = "2006-01-02"
+	// TopSubagents is how many subagents of one session a Summary lists; the rest is summed in
+	// Session.OtherSubagents. A workflow can run hundreds.
+	TopSubagents = 10
+	dateLayout   = "2006-01-02"
 	// TitlesFile holds the session names, one line per session.
 	TitlesFile = "titles.jsonl"
 	// MaxTitle is the longest session name kept, in characters.
@@ -220,6 +223,8 @@ type Session struct {
 	Advisor       history.Traffic            `json:"advisor"`
 	AdvisorModels map[string]history.Traffic `json:"advisor_models,omitempty"`
 	Subagents     []Session                  `json:"subagents,omitempty"`
+	// OtherSubagents sums the subagents that are not listed; Total already holds their use.
+	OtherSubagents *Remainder `json:"other_subagents,omitempty"`
 }
 
 func (s Session) weight() int64 { return s.Total.Tokens() + s.Advisor.Tokens() }
@@ -430,8 +435,17 @@ func (n *node) session() Session {
 	slices.SortFunc(subs, func(a, b Session) int {
 		return cmp.Or(cmp.Compare(b.weight(), a.weight()), cmp.Compare(a.ID, b.ID))
 	})
-	return Session{ID: n.id, First: all.first, Last: all.last, Total: all.total, Models: topModels(all.models), Advisor: all.advisor,
+	out := Session{ID: n.id, First: all.first, Last: all.last, Total: all.total, Models: topModels(all.models), Advisor: all.advisor,
 		AdvisorModels: topModels(all.advisorKeys), Subagents: subs}
+	if len(subs) > TopSubagents {
+		out.Subagents, out.OtherSubagents = subs[:TopSubagents], &Remainder{}
+		for _, c := range subs[TopSubagents:] {
+			out.OtherSubagents.Sessions++
+			out.OtherSubagents.Total.Add(c.Total)
+			out.OtherSubagents.Advisor.Add(c.Advisor)
+		}
+	}
+	return out
 }
 
 // maxModels is how many models of one session are listed by name; the rest are summed under

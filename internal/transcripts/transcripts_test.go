@@ -284,3 +284,30 @@ func TestATitleFileFromOutsideIsReadWithTheSameBounds(t *testing.T) {
 		t.Fatalf("a long title is cut (the page escapes it): %+v", got)
 	}
 }
+
+func TestOnlyTheLargestSubagentsOfASessionAreListedAndTheRestIsSummed(t *testing.T) {
+	rows := map[Key]history.Traffic{{Hour: hour(1, 9), Session: sid, Model: opus}: tok(1, 1000, 0)}
+	const extra = 7
+	for i := range TopSubagents + extra {
+		rows[Key{Hour: hour(1, 9), Session: sid + "/a" + string(rune('a'+i)), Model: haiku}] = tok(1, int64(i+1), 0)
+	}
+	rows[Key{Hour: hour(1, 9), Session: sid + "/az", Model: fable, Advisor: true}] = tok(1, 5000, 0) // the smallest child, but an advisor makes it count
+	s := Query(store(t, rows), now, 7)
+	root := find(s, sid)
+	if len(root.Subagents) != TopSubagents || root.OtherSubagents == nil || root.OtherSubagents.Sessions != extra+1 {
+		t.Fatalf("%d listed, other %+v", len(root.Subagents), root.OtherSubagents)
+	}
+	var sum history.Traffic
+	for _, c := range root.Subagents {
+		sum.Add(c.Total)
+	}
+	sum.Add(root.OtherSubagents.Total)
+	own := tok(1, 1000, 0)
+	own.Add(sum)
+	if root.Total != own || root.Advisor != tok(1, 5000, 0) {
+		t.Fatalf("the family total already holds every child: %+v vs %+v", root.Total, own)
+	}
+	if root.Subagents[0].ID != sid+"/az" {
+		t.Fatalf("a child is ranked with its advisor use: %q", root.Subagents[0].ID)
+	}
+}

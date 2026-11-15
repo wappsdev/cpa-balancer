@@ -157,7 +157,7 @@ Claude Code's own clean-up of old transcripts also shortens it. The importer nev
 
 The Management Center shows it on the History tab as "Transcript history", with a 7-day and a
 30-day switch: the largest sessions (30 listed, the rest summed), each with its tokens by model
-and the advisor models' tokens apart, subagents nested. A named session shows its name with the
+and the advisor models' tokens apart, its 10 largest subagents nested (the others on one line). A named session shows its name with the
 short id beside it. It is labelled "From Claude Code
 transcripts — not proxy quota; no account". It is served by `GET /transcripts?range=7d|30d` (below).
 The plugin only reads the store, and only the day files of the range, at most 200,000 rows a

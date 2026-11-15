@@ -390,6 +390,8 @@ function transcriptsView(w) {
       advisor: { requests: s.advisor?.requests || 0, tokens: tokens(s.advisor), models: byModel(s.advisor_models) },
     });
     for (const c of s.subagents || []) add(c, depth + 1);
+    // Subagents past the listed ones are one line under their session; its total already counts them.
+    if (s.other_subagents?.sessions) rows.push({ more: true, depth: depth + 1, count: s.other_subagents.sessions, tokens: tokens(s.other_subagents.total) + tokens(s.other_subagents.advisor) });
   };
   for (const s of w.sessions || []) add(s, 0);
   return {
@@ -399,6 +401,7 @@ function transcriptsView(w) {
 }
 
 function transcriptRowHtml(r) {
+  if (r.more) return `<tr class="sub"><th scope="row" colspan="7"><span class="faint">↳ ${r.count} smaller subagents not listed: ${num(r.tokens)} tokens</span></th></tr>`;
   const kinds = { custom: "set with /rename", agent: "agent name", ai: "made up by Claude Code" };
   const name = r.title ? `<span class="stitle" title="${esc(r.title)} — ${esc(kinds[r.titleKind] || r.titleKind)}">${esc(r.title)}</span> ` : "";
   const models = r.models.map(m => `${esc(m.key || "—")} <span class="faint">${num(m.tokens)}</span>`).join(" · ") || "—";
