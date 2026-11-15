@@ -126,11 +126,16 @@ cpa-balancer-import --projects <transcripts dir> --state <balancer data dir> --d
 cpa-balancer-import --projects <transcripts dir> --state <balancer data dir>
 ```
 
-The store is `<state>/transcripts/<YYYY-MM-DD>.jsonl` (UTC days), 90 days back, next to `history/`
-and written whole on every run: the store is a pure function of the transcripts, so running it
-again leaves the same bytes. A day whose transcripts are gone is removed from the store too, so
-Claude Code's own clean-up of old transcripts also shortens it. The importer never opens
-`history/`. Each line is one session, UTC hour and model with `requests`, `input_tokens`,
+The store is `<state>/transcripts/<YYYY-MM-DD>.jsonl` (UTC days), next to `history/`. Claude Code
+deletes old transcripts (after about 30 days), so a run does not rebuild the store from scratch: it
+replaces the day files from the day of the earliest message it found up to today, and leaves every
+older day file untouched. The store therefore keeps history after the transcripts are gone, up to
+90 days, when a day file is removed. Running it again on the same transcripts leaves the same
+bytes. A run that finds no message at all (a wrong or empty `--projects`, with `--dry-run` too)
+fails with a non-zero exit code and writes nothing. Each file is replaced atomically, but the
+store as a whole is not: a crash in the middle leaves every day file self-consistent, some of them
+possibly stale, and the next run puts it right. Error messages never name a path. The importer
+never opens `history/`. Each line is one session, UTC hour and model with `requests`, `input_tokens`,
 `output_tokens`, `cache_read_tokens` and `cache_creation_tokens`:
 
 - A message that spans several lines counts once, and a message id counts once whichever
@@ -146,7 +151,10 @@ Claude Code's own clean-up of old transcripts also shortens it. The importer nev
   totals and the window's `total`; `advisor` carries it.
 - A session's name is stored once, in `titles.jsonl`: the name set with `/rename`
   (`custom-title` line), else the agent's name (`agent-name`), else the one Claude Code makes up
-  (`ai-title`), with its kind. Each kind can repeat in a transcript and the last one wins. Only the
+  (`ai-title`), with its kind. Each kind can repeat in a transcript and the last one wins. Names
+  are merged across runs: a name from this run replaces the session's old one, and a session this
+  run did not see keeps its name for as long as it has rows in the store. Sessions whose id is
+  not a plain one are all stored as `(other)` and get no name. Only the
   session's own main transcript names it: a line that says it belongs to another session, and a
   subagent's file, are not read for names. Control and format characters are removed and a name is
   cut at 120 characters. These three line types are read for that one field each, never any

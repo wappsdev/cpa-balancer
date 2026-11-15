@@ -29,7 +29,7 @@ func TestTheTranscriptsRouteServesTheStoreAndNothingFromTheLiveHistory(t *testin
 		{Hour: hour, Session: sid + "/ab12", Model: "claude-haiku-5-5"}:            {Requests: 1, InputTokens: 4},
 		{Hour: hour, Session: sid, Model: "claude-fable-5-2", Advisor: true}:       {Requests: 1, InputTokens: 700},
 		{Hour: older, Session: "22222222-aaaa-4bbb-8ccc-000000000002", Model: "m"}: {Requests: 9, InputTokens: 9},
-	}, map[string]transcripts.Title{sid: {Text: "Made-up session name", Kind: transcripts.KindCustom}})
+	}, map[string]transcripts.Title{sid: {Text: "Made-up session name", Kind: transcripts.KindCustom}}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

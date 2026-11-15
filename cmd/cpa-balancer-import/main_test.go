@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -90,5 +92,43 @@ func TestTheRetiredFableFlagIsGone(t *testing.T) {
 	dir := t.TempDir()
 	if err := run([]string{"--projects", dir, "--state", dir, "--fable", "x"}); err == nil {
 		t.Fatal("--fable is not a flag any more")
+	}
+}
+
+func TestAPathInALinkErrorIsStrippedToo(t *testing.T) {
+	err := fmt.Errorf("writing the store: %w", &os.LinkError{Op: "rename", Old: "/private/project-name/.write-1", New: "/private/project-name/2026-10-04.jsonl", Err: syscall.ENOENT})
+	text := plain(err)
+	if strings.Contains(text, "private") || strings.Contains(text, "project-name") || !strings.Contains(text, "rename failed") {
+		t.Fatalf("%q", text)
+	}
+	// and the error a real failed rename gives
+	dir := t.TempDir()
+	if err := os.Rename(filepath.Join(dir, "private-source"), filepath.Join(dir, "private-target")); err == nil || !errors.As(err, new(*os.LinkError)) {
+		t.Fatalf("expected a link error: %v", err)
+	} else if text := plain(err); strings.Contains(text, "private") || strings.Contains(text, dir) {
+		t.Fatalf("%q", text)
+	}
+}
+
+func TestAnEmptyProjectsDirectoryFailsAndLeavesTheStoreAlone(t *testing.T) {
+	projects, state := t.TempDir(), t.TempDir()
+	store := filepath.Join(state, "transcripts")
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const day = `{"hour":"2026-10-04T11:00:00Z","session":"s","model":"m","requests":1}` + "\n"
+	if err := os.WriteFile(filepath.Join(store, "2026-10-04.jsonl"), []byte(day), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"--projects", projects, "--state", state}, {"--projects", projects, "--state", state, "--dry-run"}} {
+		if err := run(args); err == nil {
+			t.Fatalf("%v: no message found must be an error, so the exit code is not 0", args)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(store, "2026-10-04.jsonl")); err != nil || string(got) != day {
+		t.Fatalf("the store changed: %q %v", got, err)
+	}
+	if entries, _ := os.ReadDir(store); len(entries) != 1 {
+		t.Fatalf("%d entries", len(entries))
 	}
 }

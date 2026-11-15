@@ -3,6 +3,7 @@ package backfill
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -391,16 +392,99 @@ func TestRunningTwiceLeavesTheSameBytes(t *testing.T) {
 	}
 }
 
-func TestARunReplacesWhatTheStoreHeld(t *testing.T) {
+func TestARunReplacesTheDaysItCoversAndKeepsOlderDays(t *testing.T) {
 	store := storeDir(t)
-	if err := transcripts.Write(store, map[transcripts.Key]history.Traffic{{Hour: at, Session: "gone", Model: opus}: {Requests: 9}}, nil); err != nil {
+	older := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC) // Claude Code has deleted these transcripts
+	if err := transcripts.Write(store, map[transcripts.Key]history.Traffic{
+		{Hour: older, Session: "older-session", Model: opus}:         {Requests: 4, InputTokens: 4},
+		{Hour: at.Add(24 * time.Hour), Session: "gone", Model: opus}: {Requests: 9},
+	}, nil, now); err != nil {
 		t.Fatal(err)
 	}
+	oldFile := bytesOf(t, store)["/2026-09-01.jsonl"]
 	projects := project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {assistant(sessA, "m1", opus, at.Add(24*time.Hour), usage{in: 1, out: 1})}})
 	run(t, projects, store, false)
+	run(t, projects, store, false) // and a rerun changes nothing more
 	s := summary(store)
-	if root(s, "gone") != nil || s.Total.Requests != 1 {
-		t.Fatalf("%+v", s)
+	if root(s, "gone") != nil || root(s, sessA) == nil || root(s, "older-session") == nil || s.Total.Requests != 5 {
+		t.Fatalf("a covered day is replaced, an older one outlives the transcripts: %+v", s)
+	}
+	if bytesOf(t, store)["/2026-09-01.jsonl"] != oldFile {
+		t.Fatal("an older day file must stay byte for byte")
+	}
+}
+
+func TestARunThatFindsNoMessageFailsAndLeavesTheStoreAlone(t *testing.T) {
+	store := storeDir(t)
+	projects := project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {assistant(sessA, "m1", opus, at, usage{in: 1, out: 1}), titleLine("custom-title", sessA, "Made-up name")}})
+	run(t, projects, store, false)
+	before := bytesOf(t, store)
+	if len(before) == 0 {
+		t.Fatal("the fixture store is empty")
+	}
+	for name, dir := range map[string]string{
+		"an empty projects directory":           t.TempDir(),
+		"one with a project but no transcripts": project(t, map[string][]string{"proj-a/notes.txt": {"x"}}),
+		"one with only a title":                 project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {titleLine("custom-title", sessA, "Other name")}}),
+	} {
+		rep, err := Run(Options{Projects: dir, Store: store, Now: now})
+		if err == nil || !errors.Is(err, ErrNoMessages) || rep.Messages != 0 {
+			t.Fatalf("%s: %v %+v", name, err, rep)
+		}
+		after := bytesOf(t, store)
+		if len(after) != len(before) {
+			t.Fatalf("%s: the store changed", name)
+		}
+		for f, b := range before {
+			if after[f] != b {
+				t.Fatalf("%s: %s changed", name, f)
+			}
+		}
+	}
+	if _, err := Run(Options{Projects: t.TempDir(), Store: store, DryRun: true, Now: now}); !errors.Is(err, ErrNoMessages) {
+		t.Fatalf("a dry run finds nothing too: %v", err)
+	}
+}
+
+func TestSessionNamesAreMergedAcrossRuns(t *testing.T) {
+	store := storeDir(t)
+	first := project(t, map[string][]string{
+		"proj-a/" + sessA + ".jsonl": {assistant(sessA, "a1", opus, at, usage{in: 1, out: 1}), titleLine("ai-title", sessA, "Old name of A")},
+		"proj-a/" + sessB + ".jsonl": {assistant(sessB, "b1", opus, at.Add(-48*time.Hour), usage{in: 1, out: 1}), titleLine("custom-title", sessB, "Name of B")},
+	})
+	run(t, first, store, false)
+	// the second run sees only A, with a new name; B's transcript is gone
+	second := project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {assistant(sessA, "a2", opus, at.Add(time.Hour), usage{in: 1, out: 1}), titleLine("custom-title", sessA, "New name of A")}})
+	run(t, second, store, false)
+	s := summary(store)
+	if title, kind := titleOf(s, sessA); title != "New name of A" || kind != "custom" {
+		t.Fatalf("a name from this run replaces the old one: %q %q", title, kind)
+	}
+	if title, kind := titleOf(s, sessB); title != "Name of B" || kind != "custom" {
+		t.Fatalf("a session not seen this run keeps its name: %q %q", title, kind)
+	}
+}
+
+func TestSessionsThatFoldIntoOtherGetNoTitleAndTheStoreHoldsNoRawTitle(t *testing.T) {
+	raw := "  Name\x1b[31m\u202e " + strings.Repeat("x", 300)
+	projects := project(t, map[string][]string{
+		"proj-a/bad id!.jsonl":       {assistant("x", "m1", opus, at, usage{in: 1, out: 1}), titleLine("custom-title", "bad id!", "First folded name")},
+		"proj-a/bad id?.jsonl":       {assistant("y", "m2", opus, at, usage{in: 1, out: 1}), titleLine("custom-title", "bad id?", "Second folded name")},
+		"proj-a/" + sessA + ".jsonl": {assistant(sessA, "m3", opus, at, usage{in: 1, out: 1}), titleLine("custom-title", sessA, raw)},
+	})
+	for range 3 { // the map order of the names must not matter
+		store := storeDir(t)
+		rep := run(t, projects, store, false)
+		if rep.Titled != 1 {
+			t.Fatalf("only the real session is named: %+v", rep)
+		}
+		b, err := os.ReadFile(filepath.Join(store, transcripts.TitlesFile))
+		if err != nil || strings.Contains(string(b), "folded") || strings.ContainsAny(string(b), "\u202e\x1b") || strings.Contains(string(b), `\u001b`) {
+			t.Fatalf("%v %s", err, b)
+		}
+		if title, _ := titleOf(summary(store), history.OtherSession); title != "" {
+			t.Fatalf("(other) has no title: %q", title)
+		}
 	}
 }
 

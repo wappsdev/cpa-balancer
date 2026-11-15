@@ -1,6 +1,7 @@
 package backfill
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -9,6 +10,10 @@ import (
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/transcripts"
 )
+
+// ErrNoMessages is Run's failure when the projects directory held no usable message. The store
+// is not touched then: a wrong or emptied source must not wipe the history it keeps.
+var ErrNoMessages = errors.New("no transcript messages found in the projects directory")
 
 type Options struct {
 	Projects string    // the directory holding one directory per project
@@ -39,8 +44,10 @@ type Report struct {
 	Days          []Day
 }
 
-// Run reads the transcripts and makes the store hold what they say, whole: the store is a pure
-// function of the transcripts, so running it again changes nothing.
+// Run reads the transcripts and brings the store up to date with what they say (see
+// transcripts.Write): the days from the earliest message to today are replaced, older days stay,
+// so the history outlives Claude Code's deletion of old transcripts. Running it again changes
+// nothing. It fails with ErrNoMessages, and writes nothing, when it finds no message.
 func Run(o Options) (Report, error) {
 	if o.Now.IsZero() {
 		o.Now = time.Now()
@@ -76,7 +83,7 @@ func Run(o Options) (Report, error) {
 						n = &[3]string{}
 						names[f.Owner] = n
 					}
-					n[map[string]int{transcripts.KindCustom: 0, transcripts.KindAgent: 1, transcripts.KindAI: 2}[t.Kind]] = t.Text
+					n[map[string]int{transcripts.KindCustom: 0, transcripts.KindAgent: 1, transcripts.KindAI: 2}[t.Kind]] = transcripts.CleanTitle(t.Text)
 				}
 				return
 			}
@@ -98,6 +105,9 @@ func Run(o Options) (Report, error) {
 		return rep, err
 	}
 	rep.Messages = len(messages)
+	if rep.Messages == 0 {
+		return rep, ErrNoMessages
+	}
 
 	rows := map[transcripts.Key]history.Traffic{}
 	add := func(m message, model string, advisor bool, u usageFields) {
@@ -121,11 +131,12 @@ func Run(o Options) (Report, error) {
 	if o.DryRun {
 		return rep, nil
 	}
-	return rep, transcripts.Write(o.Store, rows, titles)
+	return rep, transcripts.Write(o.Store, rows, titles, o.Now)
 }
 
 // titlesOf picks each session's name, the most deliberate kind that has one, for the sessions the
-// rows hold.
+// rows hold. The names are already clean. A session whose id is not a plain one is stored as
+// (other) with every such session, so no name can belong to it.
 func titlesOf(names map[string]*[3]string, rows map[transcripts.Key]history.Traffic) map[string]transcripts.Title {
 	present := map[string]bool{}
 	for k := range rows {
@@ -135,6 +146,9 @@ func titlesOf(names map[string]*[3]string, rows map[transcripts.Key]history.Traf
 	out := map[string]transcripts.Title{}
 	for session, n := range names {
 		id := history.CleanID(session)
+		if id == history.OtherSession {
+			continue
+		}
 		for i, text := range n {
 			if text = transcripts.CleanTitle(text); text != "" && present[id] {
 				out[id] = transcripts.Title{Text: text, Kind: kinds[i]}

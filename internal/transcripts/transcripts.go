@@ -11,6 +11,7 @@ package transcripts
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -97,19 +98,42 @@ type row struct {
 	history.Traffic
 }
 
-// Write makes the directory hold exactly these rows, one file per UTC day. Every file is written
-// to a temporary name and renamed, so a reader never sees a half file, and the rows are sorted, so
-// the same input leaves the same bytes. A day file the input has no rows for is removed: the store
-// is a pure function of the transcripts, which is what makes a rerun safe. Files that are not day
-// files are left alone.
+// ErrNoRows is Write's refusal of an empty input: a wrong or empty source must not be able to
+// wipe the store.
+var ErrNoRows = errors.New("no rows to write")
+
+// Write brings the store up to date with these rows, one file per UTC day. The rows are what
+// the transcripts that exist now say; Claude Code deletes old transcripts, so the store keeps
+// what they no longer say:
 //
-// titles are the sessions' names, by session id. Only a session the rows hold (itself or through a
-// subagent) keeps one, and a name that is empty once cleaned is no name.
-func Write(dir string, rows map[Key]history.Traffic, titles map[string]Title) error {
+//   - every day from the earliest row's day to now's is replaced by the rows' (a day in that range
+//     with no rows loses its file), and the rows are sorted, so the same input leaves the same bytes;
+//   - a day file before the earliest row's day is left untouched, until it is past the history's
+//     retention (history.Retention before now), when it is removed;
+//   - files that are not day files are left alone.
+//
+// An input with no rows is refused with ErrNoRows and nothing is touched.
+//
+// Every file is written to a temporary name and renamed, so a reader never sees a half file. That
+// is per file: the store as a whole is not replaced atomically. A crash in the middle leaves each
+// day file either the old or the new one, so every day is self-consistent but some may be stale,
+// and the next run puts it right.
+//
+// titles are the sessions' names, by session id, merged into the names the store holds: a name
+// here replaces the session's old one, a session not named here keeps its own. Only a session that
+// has a row left in the store keeps a name, and a name that is empty once cleaned is no name.
+func Write(dir string, rows map[Key]history.Traffic, titles map[string]Title, now time.Time) error {
+	if len(rows) == 0 {
+		return ErrNoRows
+	}
 	byDay := map[string][]row{}
+	first := ""
 	for k, t := range rows {
 		day := k.Hour.UTC().Format(dateLayout)
 		byDay[day] = append(byDay[day], row{Hour: k.Hour.UTC(), Session: k.Session, Model: k.Model, Advisor: k.Advisor, Traffic: t})
+		if first == "" || day < first {
+			first = day
+		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -130,38 +154,71 @@ func Write(dir string, rows map[Key]history.Traffic, titles map[string]Title) er
 			return err
 		}
 	}
-	if err := writeTitles(dir, rows, titles); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), ".jsonl")
-		if _, perr := time.Parse(dateLayout, name); ok && perr == nil && byDay[name] == nil && e.Type().IsRegular() {
-			if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+	last, cutoff := now.UTC().Format(dateLayout), now.UTC().Add(-history.Retention).Format(dateLayout)
+	for _, day := range dayFiles(dir) {
+		if (day >= first && day <= last && byDay[day] == nil) || day < cutoff {
+			if err := os.Remove(filepath.Join(dir, day+".jsonl")); err != nil {
 				return err
 			}
 		}
 	}
-	return nil
+	return writeTitles(dir, titles)
 }
 
-func writeTitles(dir string, rows map[Key]history.Traffic, titles map[string]Title) error {
-	present := map[string]bool{}
-	for k := range rows {
-		root, _, _ := strings.Cut(k.Session, "/")
-		present[root] = true
+// dayFiles lists the dates of the regular day files in the store.
+func dayFiles(dir string) []string {
+	entries, _ := os.ReadDir(dir)
+	var days []string
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".jsonl")
+		if _, err := time.Parse(dateLayout, name); ok && err == nil && e.Type().IsRegular() {
+			days = append(days, name)
+		}
 	}
-	var out []byte
-	for _, id := range slices.Sorted(maps.Keys(titles)) {
-		t := titles[id]
-		t.Text = CleanTitle(t.Text)
-		if !present[id] || t.Text == "" {
+	return days
+}
+
+// sessionsInStore is every root session a day file holds a row of.
+func sessionsInStore(dir string) map[string]bool {
+	out := map[string]bool{}
+	for _, day := range dayFiles(dir) {
+		f, err := os.Open(filepath.Join(dir, day+".jsonl"))
+		if err != nil {
 			continue
 		}
-		line, err := json.Marshal(titleLine{Session: id, Title: t})
+		_, _ = lines.Each(f, history.MaxLine, func(raw []byte) {
+			var r struct {
+				Session string `json:"session"`
+			}
+			if json.Unmarshal(raw, &r) == nil {
+				root, _, _ := strings.Cut(r.Session, "/")
+				out[root] = true
+			}
+		})
+		f.Close()
+	}
+	return out
+}
+
+// writeTitles merges titles into the names file and drops the names of sessions the store no
+// longer holds.
+func writeTitles(dir string, titles map[string]Title) error {
+	merged := readTitles(dir)
+	if merged == nil {
+		merged = map[string]Title{}
+	}
+	for id, t := range titles {
+		if t.Text = CleanTitle(t.Text); t.Text != "" {
+			merged[id] = t
+		}
+	}
+	present := sessionsInStore(dir)
+	var out []byte
+	for _, id := range slices.Sorted(maps.Keys(merged)) {
+		if !present[id] {
+			continue
+		}
+		line, err := json.Marshal(titleLine{Session: id, Title: merged[id]})
 		if err != nil {
 			return err
 		}

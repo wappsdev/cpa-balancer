@@ -35,6 +35,10 @@ func plain(err error) string {
 	if errors.As(err, &pe) {
 		return fmt.Sprintf("%s failed: %v", pe.Op, pe.Err)
 	}
+	var le *os.LinkError // a rename or link names both paths
+	if errors.As(err, &le) {
+		return fmt.Sprintf("%s failed: %v", le.Op, le.Err)
+	}
 	return err.Error()
 }
 
