@@ -110,6 +110,46 @@ func TestWriteReplacesTheDaysTheRowsCoverAndKeepsEveryOlderDay(t *testing.T) {
 	}
 }
 
+func TestWriteNeverReplacesADayOlderThanTheReplaceWindow(t *testing.T) {
+	if ReplaceWindowDays >= 30 {
+		t.Fatalf("the window must stay below Claude Code's 30-day clean-up: %d", ReplaceWindowDays)
+	}
+	dir := filepath.Join(t.TempDir(), "transcripts")
+	full := map[Key]history.Traffic{
+		{Hour: hour(33, 9), Session: "a", Model: opus}: tok(1, 1, 1), {Hour: hour(33, 9), Session: "b", Model: opus}: tok(1, 2, 2), // old, with a file
+		{Hour: hour(31, 9), Session: "c", Model: opus}: tok(1, 3, 3),                                                              // old, with a file the next run has no rows for
+		{Hour: hour(5, 9), Session: "d", Model: opus}:  tok(1, 4, 4), {Hour: hour(5, 9), Session: "e", Model: opus}: tok(1, 5, 5), // recent
+	}
+	if err := Write(dir, full, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, dir)
+	partial := map[Key]history.Traffic{
+		{Hour: hour(33, 9), Session: "a", Model: opus}: tok(1, 1, 1), // the transcripts of "b" are gone: partial
+		{Hour: hour(30, 9), Session: "f", Model: opus}: tok(1, 6, 6), // old, no file yet
+		{Hour: hour(5, 9), Session: "d", Model: opus}:  tok(1, 4, 4), // "e" is gone from a recent day: replaced
+		{Hour: hour(0, 8), Session: "g", Model: opus}:  tok(1, 7, 7),
+	}
+	if err := Write(dir, partial, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot(t, dir)
+	for _, day := range []string{"2026-09-07", "2026-09-09"} { // 33 and 31 days before Oct 10
+		if got[day+".jsonl"] != before[day+".jsonl"] || got[day+".jsonl"] == "" {
+			t.Fatalf("an old day with a file stays byte for byte, rows or not: %s", day)
+		}
+	}
+	if !strings.Contains(got["2026-09-07.jsonl"], `"session":"b"`) {
+		t.Fatal("the old day kept the rows the new run lacks")
+	}
+	if got["2026-09-10.jsonl"] == "" || !strings.Contains(got["2026-09-10.jsonl"], `"session":"f"`) {
+		t.Fatalf("an old day with no file is written: %v", got)
+	}
+	if strings.Contains(got["2026-10-05.jsonl"], `"session":"e"`) || got["2026-10-05.jsonl"] == before["2026-10-05.jsonl"] || got["2026-10-10.jsonl"] == "" {
+		t.Fatalf("a recent day is replaced: %v", got)
+	}
+}
+
 func TestWriteDropsDaysPastTheRetention(t *testing.T) {
 	old := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC).Add(-history.Retention - 48*time.Hour)
 	dir := filepath.Join(t.TempDir(), "transcripts")

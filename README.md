@@ -128,9 +128,11 @@ cpa-balancer-import --projects <transcripts dir> --state <balancer data dir>
 
 The store is `<state>/transcripts/<YYYY-MM-DD>.jsonl` (UTC days), next to `history/`. Claude Code
 deletes old transcripts (after about 30 days), so a run does not rebuild the store from scratch: it
-replaces the day files from the day of the earliest message it found up to today, and leaves every
-older day file untouched. The store therefore keeps history after the transcripts are gone, up to
-90 days, when a day file is removed. Running it again on the same transcripts leaves the same
+replaces the day files of the last 28 days that it found messages for (Claude Code deletes a
+transcript by its age, after about 30 days, so those days are complete). A day older than 28 days
+is written only when it has no file yet and is never replaced, so a day whose transcripts are
+partly deleted is not shrunk. The store therefore keeps history after the transcripts are gone, up
+to 90 days, when a day file is removed. Running it again on the same transcripts leaves the same
 bytes. A run that finds no message at all (a wrong or empty `--projects`, with `--dry-run` too)
 fails with a non-zero exit code and writes nothing. Each file is replaced atomically, but the
 store as a whole is not: a crash in the middle leaves every day file self-consistent, some of them

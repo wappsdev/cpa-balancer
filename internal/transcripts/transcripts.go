@@ -98,6 +98,13 @@ type row struct {
 	history.Traffic
 }
 
+// ReplaceWindowDays is how many days back a day file may be replaced by a run. Claude Code deletes
+// a transcript by the age of its file, after about 30 days, so a day older than that can be partial
+// in the transcripts, and not only the earliest one: a run that replaced it would shrink it. Within
+// 28 days every transcript of a day still exists (a margin of two days), so the day is complete
+// by construction.
+const ReplaceWindowDays = 28
+
 // ErrNoRows is Write's refusal of an empty input: a wrong or empty source must not be able to
 // wipe the store.
 var ErrNoRows = errors.New("no rows to write")
@@ -106,10 +113,12 @@ var ErrNoRows = errors.New("no rows to write")
 // the transcripts that exist now say; Claude Code deletes old transcripts, so the store keeps
 // what they no longer say:
 //
-//   - every day from the earliest row's day to now's is replaced by the rows' (a day in that range
-//     with no rows loses its file), and the rows are sorted, so the same input leaves the same bytes;
-//   - a day file before the earliest row's day is left untouched, until it is past the history's
-//     retention (history.Retention before now), when it is removed;
+//   - a day within the last ReplaceWindowDays is replaced by the rows' (one in the range from the
+//     earliest row's day with no rows loses its file), and the rows are sorted, so the same input
+//     leaves the same bytes;
+//   - an older day is written only when it has no file yet, and is never replaced or removed, even
+//     when the rows for it are fewer: its transcripts may be partly deleted;
+//   - a day file past the history's retention (history.Retention before now) is removed;
 //   - files that are not day files are left alone.
 //
 // An input with no rows is refused with ErrNoRows and nothing is touched.
@@ -138,7 +147,12 @@ func Write(dir string, rows map[Key]history.Traffic, titles map[string]Title, no
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	recent := now.UTC().AddDate(0, 0, -ReplaceWindowDays).Format(dateLayout)
 	for day, rs := range byDay {
+		path := filepath.Join(dir, day+".jsonl")
+		if _, err := os.Stat(path); day < recent && err == nil {
+			continue
+		}
 		slices.SortFunc(rs, func(a, b row) int {
 			return cmp.Or(a.Hour.Compare(b.Hour), cmp.Compare(a.Session, b.Session), cmp.Compare(a.Model, b.Model), compareBool(a.Advisor, b.Advisor))
 		})
@@ -150,13 +164,13 @@ func Write(dir string, rows map[Key]history.Traffic, titles map[string]Title, no
 			}
 			out = append(append(out, line...), '\n')
 		}
-		if err := replace(filepath.Join(dir, day+".jsonl"), out); err != nil {
+		if err := replace(path, out); err != nil {
 			return err
 		}
 	}
 	last, cutoff := now.UTC().Format(dateLayout), now.UTC().Add(-history.Retention).Format(dateLayout)
 	for _, day := range dayFiles(dir) {
-		if (day >= first && day <= last && byDay[day] == nil) || day < cutoff {
+		if (day >= first && day >= recent && day <= last && byDay[day] == nil) || day < cutoff {
 			if err := os.Remove(filepath.Join(dir, day+".jsonl")); err != nil {
 				return err
 			}
