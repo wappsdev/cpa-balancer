@@ -3,7 +3,6 @@ package history
 import (
 	"cmp"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -12,13 +11,13 @@ import (
 const (
 	maxIDLength        = 128 // a session id comes from a client header, so only a plain id of this size is stored as given; room for a uuid, a slash and an agent id
 	maxModelLength     = 64
-	maxDepth           = 8   // levels of subagents listed; a deeper session is folded into its ancestor at the last level
-	maxSessionsPerSlot = 200 // distinct sessions kept in one slot; later ones are folded into OtherSession
-	maxKeysPerMap      = 8   // distinct models (or accounts) in one map of a slot; later ones are folded into OtherSession
-	maxLine            = 4 << 20
+	maxDepth           = 8       // levels of subagents listed; a deeper session is folded into its ancestor at the last level
+	maxSessionsPerSlot = 200     // distinct sessions kept in one slot; later ones are folded into OtherSession
+	maxKeysPerMap      = 8       // distinct models (or accounts) in one map of a slot; later ones are folded into OtherSession
+	MaxLine            = 4 << 20 // the longest history line that is read or written
 	// OtherSession stands for requests whose session id or model name is not a plain one, or that
 	// came after a slot already held its maximum of sessions or models. Its name is not valid, so
-	// no client can send it. Together the caps keep a slot far below maxLine.
+	// no client can send it. Together the caps keep a slot far below MaxLine.
 	OtherSession    = "(other)"
 	FiveHourWindow  = 5 * time.Hour
 	WeekWindow      = 7 * 24 * time.Hour
@@ -26,14 +25,13 @@ const (
 )
 
 // SessionSlot is one session's traffic in one slot. Accounts and Models split the same requests
-// two ways. Advisor is separate: advisor requests are not part of what an account reports.
+// two ways.
 type SessionSlot struct {
 	Parent   string             `json:"parent,omitempty"`
 	First    time.Time          `json:"first"`
 	Last     time.Time          `json:"last"`
 	Accounts map[string]Traffic `json:"accounts,omitempty"`
 	Models   map[string]Traffic `json:"models,omitempty"`
-	Advisor  map[string]Traffic `json:"advisor,omitempty"` // by advisor model
 }
 
 // addCapped adds t under key; a key the map does not hold yet goes under OtherSession once the map
@@ -46,7 +44,7 @@ func addCapped(m *map[string]Traffic, key string, t Traffic) {
 		key = OtherSession
 	}
 	x := (*m)[key]
-	x.add(t)
+	x.Add(t)
 	(*m)[key] = x
 }
 
@@ -61,11 +59,21 @@ func validModel(model string) bool {
 	}) < 0
 }
 
-func cleanModel(model string) string {
+// CleanModel is the model name as it is stored: a plain one as given, any other as OtherSession.
+func CleanModel(model string) string {
 	if validModel(model) {
 		return model
 	}
 	return OtherSession
+}
+
+// CleanID is a client-supplied id as it is stored: a plain one as given, any other as OtherSession.
+// An empty id stays empty.
+func CleanID(id string) string {
+	if id != "" && !validID(id) {
+		return OtherSession
+	}
+	return id
 }
 
 // validID reports whether a client-supplied id is a plain one: letters, digits and . _ : - / only.
@@ -108,25 +116,13 @@ func CanonicalSession(id, parent string) (string, string) {
 	return id, parent
 }
 
-// NewSlot is an empty slot that starts at the slot boundary t is in.
-func NewSlot(t time.Time) *Slot { return newSlot(slotStart(t)) }
-
 // AddTraffic counts requests in the slot (see Recorder.AddTraffic); the caller owns the slot.
 func (s *Slot) AddTraffic(now time.Time, src Source, t Traffic) {
-	model := cleanModel(src.Model)
+	model := CleanModel(src.Model)
 	addCapped(&s.account(src.Account).Models, model, t)
 	ss := s.session(now, src.Session, src.Parent)
 	addCapped(&ss.Accounts, src.Account, t)
 	addCapped(&ss.Models, model, t)
-}
-
-// AddAdvisor counts requests an advisor model answered for a session. They use quota too but are
-// not in the executor's own usage, so they are kept apart from the account totals. Only the
-// importer calls it: CPA reports only the top-level usage of a response, which leaves the advisor
-// iterations out, so live advisor tokens are invisible to the plugin.
-func (s *Slot) AddAdvisor(now time.Time, session, parent, model string, t Traffic) {
-	ss := s.session(now, session, parent)
-	addCapped(&ss.Advisor, cleanModel(model), t)
 }
 
 // session returns the slot's record of a session. An id that is not a plain one, or that would be
@@ -168,30 +164,25 @@ func (s *Slot) session(now time.Time, id, parent string) *SessionSlot {
 func (t Traffic) Tokens() int64 { return t.InputTokens + t.OutputTokens + t.CacheCreationTokens }
 
 // SessionUsage is a session in a window. Own is its requests alone; Total adds its subagents'
-// (and theirs in turn). Accounts, Models, Advisor and AdvisorModels describe the whole family, as
-// Total does. An advisor's requests are not in Own or Total.
+// (and theirs in turn). Accounts and Models describe the whole family, as Total does.
 type SessionUsage struct {
-	ID            string             `json:"id"` // empty: requests that came without a session
-	Parent        string             `json:"parent,omitempty"`
-	First         time.Time          `json:"first,omitzero"`
-	Last          time.Time          `json:"last,omitzero"`
-	Estimated     bool               `json:"estimated,omitempty"` // part of it was rebuilt from transcripts, with its account guessed
-	Own           Traffic            `json:"own"`
-	Total         Traffic            `json:"total"`
-	Accounts      map[string]Traffic `json:"accounts"`
-	Models        map[string]Traffic `json:"models"`
-	Advisor       Traffic            `json:"advisor"`
-	AdvisorModels map[string]Traffic `json:"advisor_models,omitempty"`
-	Subagents     []SessionUsage     `json:"subagents,omitempty"`
+	ID        string             `json:"id"` // empty: requests that came without a session
+	Parent    string             `json:"parent,omitempty"`
+	First     time.Time          `json:"first,omitzero"`
+	Last      time.Time          `json:"last,omitzero"`
+	Own       Traffic            `json:"own"`
+	Total     Traffic            `json:"total"`
+	Accounts  map[string]Traffic `json:"accounts"`
+	Models    map[string]Traffic `json:"models"`
+	Subagents []SessionUsage     `json:"subagents,omitempty"`
 }
 
-func (u SessionUsage) weight() int64 { return u.Total.Tokens() + u.Advisor.Tokens() }
+func (u SessionUsage) weight() int64 { return u.Total.Tokens() }
 
 // Remainder is what the window's other root sessions used, when only the top ones are listed.
 type Remainder struct {
 	Sessions int     `json:"sessions"`
 	Total    Traffic `json:"total"`
-	Advisor  Traffic `json:"advisor"`
 }
 
 // SessionWindow is the use of one window [From, To). Total and Accounts come from the accounts'
@@ -200,7 +191,6 @@ type SessionWindow struct {
 	From     time.Time          `json:"from"`
 	To       time.Time          `json:"to"`
 	Total    Traffic            `json:"total"`
-	Advisor  Traffic            `json:"advisor"`
 	Accounts map[string]Traffic `json:"accounts"`
 	Sessions []SessionUsage     `json:"sessions"` // root sessions, the largest first
 	Other    Remainder          `json:"other"`
@@ -236,11 +226,9 @@ func (r *Recorder) Sessions(now time.Time) Sessions {
 type node struct {
 	id, parent  string
 	first, last time.Time
-	estimated   bool
 	own         Traffic
 	accounts    map[string]Traffic
 	models      map[string]Traffic
-	advisor     map[string]Traffic
 	children    []*node
 }
 
@@ -250,14 +238,14 @@ func mergeInto(dst *map[string]Traffic, src map[string]Traffic) {
 			*dst = map[string]Traffic{}
 		}
 		x := (*dst)[k]
-		x.add(t)
+		x.Add(t)
 		(*dst)[k] = x
 	}
 }
 
 func sum(m map[string]Traffic) (t Traffic) {
 	for _, x := range m {
-		t.add(x)
+		t.Add(x)
 	}
 	return t
 }
@@ -290,10 +278,10 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int) SessionWindow {
 		}
 		for name, a := range s.Accounts {
 			t := sum(a.Models)
-			w.Total.add(t)
+			w.Total.Add(t)
 			if t != (Traffic{}) {
 				x := w.Accounts[name]
-				x.add(t)
+				x.Add(t)
 				w.Accounts[name] = x
 			}
 		}
@@ -302,17 +290,15 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int) SessionWindow {
 			if ss.Parent != "" && ss.Parent != id {
 				n.parent = ss.Parent
 			}
-			n.estimated = n.estimated || s.Backfill
 			if !ss.First.IsZero() && (n.first.IsZero() || ss.First.Before(n.first)) {
 				n.first = ss.First
 			}
 			if ss.Last.After(n.last) {
 				n.last = ss.Last
 			}
-			n.own.add(sum(ss.Accounts))
+			n.own.Add(sum(ss.Accounts))
 			mergeInto(&n.accounts, ss.Accounts)
 			mergeInto(&n.models, ss.Models)
-			mergeInto(&n.advisor, ss.Advisor)
 		}
 	}
 	for _, n := range slices.Collect(maps.Values(nodes)) {
@@ -346,15 +332,13 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int) SessionWindow {
 	rows := make([]SessionUsage, len(roots))
 	for i, n := range roots {
 		rows[i] = n.usage(1)
-		w.Advisor.add(rows[i].Advisor)
 	}
 	sortRows(rows)
 	listed := 0
 	for _, row := range rows {
 		if row.ID != "" && limit > 0 && listed >= limit {
 			w.Other.Sessions++
-			w.Other.Total.add(row.Total)
-			w.Other.Advisor.add(row.Advisor)
+			w.Other.Total.Add(row.Total)
 			continue
 		}
 		if row.ID != "" {
@@ -373,17 +357,15 @@ func sortRows(rows []SessionUsage) {
 
 // absorb adds another node's own use to this one, as if the requests had come from it.
 func (n *node) absorb(c *node) {
-	n.estimated = n.estimated || c.estimated
 	if !c.first.IsZero() && (n.first.IsZero() || c.first.Before(n.first)) {
 		n.first = c.first
 	}
 	if c.last.After(n.last) {
 		n.last = c.last
 	}
-	n.own.add(c.own)
+	n.own.Add(c.own)
 	mergeInto(&n.accounts, c.accounts)
 	mergeInto(&n.models, c.models)
-	mergeInto(&n.advisor, c.advisor)
 }
 
 // foldDescendants absorbs every session below n into it and leaves it without children. Cycles
@@ -404,20 +386,16 @@ func (n *node) usage(depth int) SessionUsage {
 	if depth >= maxDepth {
 		n.foldDescendants()
 	}
-	u := SessionUsage{ID: n.id, Parent: n.parent, First: n.first, Last: n.last, Estimated: n.estimated, Own: n.own, Total: n.own,
-		Accounts: map[string]Traffic{}, Models: map[string]Traffic{}, Advisor: sum(n.advisor)}
+	u := SessionUsage{ID: n.id, Parent: n.parent, First: n.first, Last: n.last, Own: n.own, Total: n.own,
+		Accounts: map[string]Traffic{}, Models: map[string]Traffic{}}
 	mergeInto(&u.Accounts, n.accounts)
 	mergeInto(&u.Models, n.models)
-	mergeInto(&u.AdvisorModels, n.advisor)
 	for _, c := range n.children {
 		cu := c.usage(depth + 1)
 		u.Subagents = append(u.Subagents, cu)
-		u.Total.add(cu.Total)
-		u.Advisor.add(cu.Advisor)
-		u.Estimated = u.Estimated || cu.Estimated
+		u.Total.Add(cu.Total)
 		mergeInto(&u.Accounts, cu.Accounts)
 		mergeInto(&u.Models, cu.Models)
-		mergeInto(&u.AdvisorModels, cu.AdvisorModels)
 		if !cu.First.IsZero() && (u.First.IsZero() || cu.First.Before(u.First)) {
 			u.First = cu.First
 		}
@@ -427,73 +405,4 @@ func (n *node) usage(depth int) SessionUsage {
 	}
 	sortRows(u.Subagents)
 	return u
-}
-
-func hasTraffic(s *Slot) bool {
-	if len(s.Sessions) > 0 {
-		return true
-	}
-	for _, a := range s.Accounts {
-		if sum(a.Models) != (Traffic{}) {
-			return true
-		}
-	}
-	return false
-}
-
-// Slots returns the stored and in-memory slots with T in [from, to).
-func (r *Recorder) Slots(from, to time.Time) []*Slot { return r.slots(from, to) }
-
-// Untaken returns the slots whose time no slot of the history covers yet. The plugin writes a
-// slot at every tick while it runs, so a slot with only levels means the proxy saw no managed
-// request then: a transcript message in it was counted in a slot next to it, or never used a
-// balancer account. Either way the import must not add it. A slot from an earlier backfill covers
-// its time too.
-func (r *Recorder) Untaken(slots []*Slot) []*Slot {
-	if len(slots) == 0 {
-		return nil
-	}
-	from, to := slots[0].T, slots[0].T
-	for _, s := range slots {
-		if s.T.Before(from) {
-			from = s.T
-		}
-		if s.T.After(to) {
-			to = s.T
-		}
-	}
-	taken := map[time.Time]bool{}
-	for _, s := range r.slots(from, to.Add(SlotLength)) {
-		taken[s.T] = true
-	}
-	var out []*Slot
-	for _, s := range slots {
-		if !taken[s.T] && hasTraffic(s) {
-			out = append(out, s)
-			taken[s.T] = true
-		}
-	}
-	return out
-}
-
-// AppendBackfill appends slots rebuilt from transcripts, marked as such, and returns how many it
-// wrote. The caller passes what Untaken returned, so running an import again adds nothing.
-func (r *Recorder) AppendBackfill(todo []*Slot) (int, error) {
-	if len(todo) == 0 {
-		return 0, nil
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if err := os.MkdirAll(r.dir, 0o700); err != nil {
-		return 0, err
-	}
-	written := 0
-	for _, s := range todo {
-		s.Backfill = true
-		if err := r.appendSlot(s); err != nil {
-			return written, err
-		}
-		written++
-	}
-	return written, nil
 }

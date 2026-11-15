@@ -1,11 +1,12 @@
-// Command cpa-balancer-import rebuilds the balancer's per-session history from Claude Code
-// transcripts. It is a one-off: run it once after installing the plugin, with --dry-run first.
+// Command cpa-balancer-import writes the transcript store from Claude Code's transcripts: the
+// exact tokens each session used, per hour and model. Run it whenever the store should catch up,
+// with --dry-run first.
 //
-//	cpa-balancer-import --projects <dir> --state <balancer data dir> [--dry-run] [--fable <name part>]
+//	cpa-balancer-import --projects <dir> --state <balancer data dir> [--dry-run]
 //
-// It reads only the usage fields of assistant messages. It writes only into time slots that no
-// slot of the history covers (the plugin writes one at every tick while it runs), so running it
-// again changes nothing. Run it while CPA is idle or stopped.
+// It reads only the usage fields of assistant messages, never their text. The store is
+// <state>/transcripts, written whole on every run, so running it again changes nothing. It never
+// touches the balancer's history, which stays quota-accurate.
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/wappsdev/cpa-balancer/internal/backfill"
+	"github.com/wappsdev/cpa-balancer/internal/transcripts"
 )
 
 func main() {
@@ -41,8 +43,6 @@ func run(args []string) error {
 	projects := fs.String("projects", "", "the directory with one directory of transcripts per project (required)")
 	state := fs.String("state", "", "the balancer's data directory, the one holding its history directory (required)")
 	dry := fs.Bool("dry-run", false, "print counts and write nothing")
-	// The bucket lists live in CPA's config file, which can hold keys, so the importer does not read it.
-	fable := fs.String("fable", "fable", "a model whose name holds this belongs to the Fable bucket; the others to main")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func run(args []string) error {
 	if info, err := os.Stat(*state); err != nil || !info.IsDir() {
 		return fmt.Errorf("--state is not a directory")
 	}
-	rep, err := backfill.Run(backfill.Options{Projects: *projects, History: filepath.Join(*state, "history"), FableMark: *fable, DryRun: *dry})
+	rep, err := backfill.Run(backfill.Options{Projects: *projects, Store: filepath.Join(*state, transcripts.Dir), DryRun: *dry})
 	rep.Write(os.Stdout)
 	return err
 }

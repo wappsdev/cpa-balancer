@@ -321,8 +321,7 @@ function sessionsView(w) {
     rows.push({
       depth, id: s.id, label: s.id ? s.id.slice(0, 8) : "no session", none: s.id === "", last: s.last,
       requests: s.total?.requests || 0, tokens: tokens(s.total), ownTokens: tokens(s.own), cacheRead: s.total?.cache_read_tokens || 0,
-      share: percent(tokens(s.total), total.tokens), accounts: split(s.accounts), estimated: !!s.estimated,
-      advisor: { requests: s.advisor?.requests || 0, tokens: tokens(s.advisor), models: Object.keys(s.advisor_models || {}).sort() },
+      share: percent(tokens(s.total), total.tokens), accounts: split(s.accounts),
     });
     // The balancer folds anything deeper into its ancestor, so a deeper row is only defence: its use is already in this row's total.
     if (depth + 1 < MAX_SESSION_DEPTH) for (const c of s.subagents || []) add(c, depth + 1);
@@ -333,14 +332,11 @@ function sessionsView(w) {
 
 function sessionRowHtml(r, name) {
   const accounts = r.accounts.map(a => esc(name(a.key)) + (r.accounts.length > 1 ? ` <span class="faint">${a.share}%</span>` : "")).join(" · ") || "—";
-  const advisor = r.advisor.requests
-    ? `${r.advisor.requests} · ${num(r.advisor.tokens)} <span class="faint">${esc(r.advisor.models.join(", "))}</span>` : "—";
   const detail = `${r.depth ? "" : `own ${num(r.ownTokens)} · `}cache reads ${num(r.cacheRead)}`;
   return `<tr class="${r.depth ? "sub" : ""}${r.none ? " none" : ""}">
-    <th scope="row" title="${esc(r.id)}">${r.depth ? '<span class="faint">↳ </span>' : ""}<span class="sid">${esc(r.label)}</span>${r.estimated
-      ? ' <span class="est" title="Rebuilt from transcripts: the account is a guess">~</span>' : ""}</th>
+    <th scope="row" title="${esc(r.id)}">${r.depth ? '<span class="faint">↳ </span>' : ""}<span class="sid">${esc(r.label)}</span></th>
     <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td>
-    <td>${r.share}%</td><td class="left">${accounts}</td><td class="left">${advisor}</td></tr>`;
+    <td>${r.share}%</td><td class="left">${accounts}</td></tr>`;
 }
 
 let sessionSpan = "five_hour";
@@ -358,7 +354,7 @@ function drawSessions() {
   const v = sessionsView(w);
   $("sessions-hint").textContent = `${sessionSpan === "week" ? "last 7 days" : "last 5 hours"} · ${v.total.requests} requests · ${num(v.total.tokens)} tokens (input, output, cache writes)`;
   card.innerHTML = v.rows.length ? `<table class="sessions-table">
-      <thead><tr><th>Session</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Accounts</th><th class="left">Advisor</th></tr></thead>
+      <thead><tr><th>Session</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Accounts</th></tr></thead>
       <tbody>${v.rows.map(r => sessionRowHtml(r, short)).join("")}</tbody>
     </table>${v.other.sessions ? `<p class="hint">${v.other.sessions} smaller sessions not listed: ${num(v.other.tokens)} tokens.</p>` : ""}`
     : '<p class="empty">No requests in this window.</p>';

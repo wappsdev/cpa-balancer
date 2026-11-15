@@ -31,7 +31,7 @@ type Traffic struct {
 	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
 }
 
-func (t *Traffic) add(o Traffic) {
+func (t *Traffic) Add(o Traffic) {
 	t.Requests += o.Requests
 	t.Failed += o.Failed
 	t.InputTokens += o.InputTokens
@@ -194,11 +194,11 @@ func (r *Recorder) appendSlot(s *Slot) error {
 	if err != nil {
 		return err
 	}
-	// The caps keep a slot far below maxLine, but a line the reader cannot take would be lost
+	// The caps keep a slot far below MaxLine, but a line the reader cannot take would be lost
 	// whole. So make it fit: without its session detail (the reader counts such a slot's traffic
 	// as having no session), then without its events.
 	for _, drop := range []func(*Slot){func(c *Slot) { c.Sessions = nil }, func(c *Slot) { c.Events = nil }} {
-		if len(line) <= maxLine {
+		if len(line) <= MaxLine {
 			break
 		}
 		c := *s
@@ -240,7 +240,7 @@ func (r *Recorder) slots(from, to time.Time) []*Slot {
 }
 
 // readSlots is slots, and also counts the stored lines it could not use: broken, or longer than
-// maxLine. Those are skipped, and the lines after them are still read.
+// MaxLine. Those are skipped, and the lines after them are still read.
 func (r *Recorder) readSlots(from, to time.Time) ([]*Slot, int) {
 	skipped := 0
 	r.mu.Lock()
@@ -261,7 +261,7 @@ func (r *Recorder) readSlots(from, to time.Time) ([]*Slot, int) {
 		if err != nil {
 			continue
 		}
-		bad, err := lines.Each(f, maxLine, func(line []byte) {
+		bad, err := lines.Each(f, MaxLine, func(line []byte) {
 			var s Slot
 			if json.Unmarshal(line, &s) != nil {
 				skipped++

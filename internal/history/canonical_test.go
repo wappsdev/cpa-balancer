@@ -7,14 +7,6 @@ import (
 	"time"
 )
 
-// advisor counts advisor requests the way the importer does, for the tests: live traffic has none,
-// because CPA reports only the top-level usage of a response.
-func advisor(r *Recorder, at time.Time, session, parent, model string, t Traffic) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.current(at).AddAdvisor(at, session, parent, model, t)
-}
-
 // sessionWindow is the use of [from, to), for the tests that look at one window.
 func (r *Recorder) sessionWindow(from, to time.Time, limit int) SessionWindow {
 	return buildWindow(r.slots(from, to), from, to, limit)
@@ -39,24 +31,6 @@ func TestCPAsSessionIdsBecomeTheKeysTheTranscriptsUse(t *testing.T) {
 		if id != c.wantID || parent != c.wantParent {
 			t.Errorf("%q %q -> %q %q, want %q %q", c.id, c.parent, id, parent, c.wantID, c.wantParent)
 		}
-	}
-}
-
-func TestLiveAndImportedRowsOfOneSessionShareTheKey(t *testing.T) {
-	r := NewRecorder(t.TempDir())
-	live, liveParent := CanonicalSession("claude:"+uid, "")
-	r.AddTraffic(t0, src("a", "m", live, liveParent), tok(1, 1, 1))
-	sub, subParent := CanonicalSession("claude:"+uid+":agent:ab12", "claude:"+uid)
-	r.AddTraffic(t0, src("a", "m", sub, subParent), tok(2, 2, 2))
-	imported := NewSlot(t0.Add(10 * time.Minute))
-	imported.AddTraffic(t0.Add(10*time.Minute), Source{Account: "unknown", Model: "m", Session: uid}, tok(4, 4, 4)) // bare uuid, as a transcript file names it
-	if _, err := r.AppendBackfill(r.Untaken([]*Slot{imported})); err != nil {
-		t.Fatal(err)
-	}
-	w := window(r, 0)
-	if len(w.Sessions) != 1 || w.Sessions[0].ID != uid || w.Sessions[0].Own.Requests != 5 || w.Sessions[0].Total.Requests != 7 ||
-		len(w.Sessions[0].Subagents) != 1 || w.Sessions[0].Subagents[0].ID != uid+"/ab12" {
-		t.Fatalf("%+v", w.Sessions)
 	}
 }
 
@@ -92,5 +66,18 @@ func TestSubagentsDeeperThanTheLimitAreFoldedIntoTheirAncestor(t *testing.T) {
 	// the last level holds its own request and those of every session below it
 	if row.Own.Requests != levels-maxDepth+1 || w.Sessions[0].Total.Requests != levels || w.Total.Requests != levels {
 		t.Fatalf("last level own %d, root total %d", row.Own.Requests, w.Sessions[0].Total.Requests)
+	}
+}
+
+func TestCleanIDAndCleanModelKeepPlainNamesAndFoldTheRest(t *testing.T) {
+	for in, want := range map[string]string{"": "", uid: uid, uid + "/ab12": uid + "/ab12", "has space": OtherSession, "<x>": OtherSession, strings.Repeat("a", maxIDLength+1): OtherSession} {
+		if got := CleanID(in); got != want {
+			t.Errorf("CleanID(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{"": "", "claude-opus-5-5[1m]": "claude-opus-5-5[1m]", "<synthetic>": OtherSession, strings.Repeat("m", maxModelLength+1): OtherSession} {
+		if got := CleanModel(in); got != want {
+			t.Errorf("CleanModel(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

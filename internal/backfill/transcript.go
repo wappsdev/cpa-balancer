@@ -1,4 +1,6 @@
-// Package backfill rebuilds per-session history from Claude Code transcripts.
+// Package backfill reads Claude Code's transcripts and writes what they say into the transcript
+// store (package transcripts). It touches nothing else: the balancer's own history is quota-accurate
+// and stays apart.
 //
 // A transcript line is decoded into the fields below and nothing else: the message text is never
 // kept, printed or stored.
@@ -62,7 +64,7 @@ type advisorCall struct {
 
 // message is one assistant message: a request.
 type message struct {
-	Session string // the top-level session the transcript file belongs to
+	Owner   string // the session key of the transcript it was read from, in the form the live history uses
 	ID      string
 	At      time.Time
 	Model   string
@@ -71,7 +73,7 @@ type message struct {
 }
 
 // decode reads one line; ok is false for anything that is not a usable assistant message.
-func decode(raw []byte, session string) (m message, ok bool, err error) {
+func decode(raw []byte, owner string) (m message, ok bool, err error) {
 	var l transcriptLine
 	if err := json.Unmarshal(raw, &l); err != nil {
 		return message{}, false, err
@@ -83,7 +85,7 @@ func decode(raw []byte, session string) (m message, ok bool, err error) {
 	if err != nil {
 		return message{}, false, nil
 	}
-	m = message{Session: session, ID: l.Message.ID, At: at.UTC(), Model: l.Message.Model, Usage: l.Message.Usage.usageFields}
+	m = message{Owner: owner, ID: l.Message.ID, At: at.UTC(), Model: l.Message.Model, Usage: l.Message.Usage.usageFields}
 	for _, it := range l.Message.Usage.Iterations {
 		// The top-level usage already holds the executor's own sub-calls ("message"); an advisor's are
 		// on top of it.
@@ -98,7 +100,7 @@ func decode(raw []byte, session string) (m message, ok bool, err error) {
 }
 
 // readFile decodes every assistant message of one transcript file.
-func readFile(path, session string, each func(message, int), skipped *int) error {
+func readFile(path, owner string, each func(message, int), skipped *int) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -107,7 +109,7 @@ func readFile(path, session string, each func(message, int), skipped *int) error
 	n := 0
 	bad, err := lines.Each(f, MaxLine, func(raw []byte) {
 		n++
-		m, ok, derr := decode(raw, session)
+		m, ok, derr := decode(raw, owner)
 		if derr != nil {
 			*skipped++
 		} else if ok {
@@ -118,9 +120,32 @@ func readFile(path, session string, each func(message, int), skipped *int) error
 	return err
 }
 
-// walk calls fn for every main transcript (session = its file name) and every subagent transcript
-// (session = the directory of the session it belongs to). Links are not followed.
-func walk(projects string, fn func(path, session string) error) error {
+// maxNesting is how deep below a session's subagents directory a transcript is looked for: Claude
+// Code keeps a workflow's agents in a directory of their own there.
+const maxNesting = 4
+
+// file is one transcript found on disk.
+type file struct {
+	Path     string
+	Owner    string // the session key its messages belong to: `<session>`, or `<session>/<agent>` for a subagent
+	Subagent bool   // a subagent transcript, whether or not its name gives an agent id
+	Nested   bool   // a subagent transcript below a directory of the subagents directory
+}
+
+// agentID is the agent id in a subagent transcript's name, `agent-<id>.jsonl`; empty when the
+// name has no such form, and the transcript's use then counts under its session alone.
+func agentID(name string) string {
+	id, _ := strings.CutPrefix(strings.TrimSuffix(name, ".jsonl"), "agent-")
+	if id == strings.TrimSuffix(name, ".jsonl") {
+		return ""
+	}
+	return id
+}
+
+// walk calls fn for every main transcript (`<project>/<session>.jsonl`) and every subagent
+// transcript (`<project>/<session>/subagents/**/agent-<id>.jsonl`). Only regular files are read and
+// links are not followed.
+func walk(projects string, fn func(file) error) error {
 	dirs, err := os.ReadDir(projects)
 	if err != nil {
 		return err
@@ -137,23 +162,47 @@ func walk(projects string, fn func(path, session string) error) error {
 		for _, e := range entries {
 			switch {
 			case e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".jsonl"):
-				if err := fn(filepath.Join(project, e.Name()), strings.TrimSuffix(e.Name(), ".jsonl")); err != nil {
+				session := strings.TrimSuffix(e.Name(), ".jsonl")
+				if err := fn(file{Path: filepath.Join(project, e.Name()), Owner: session}); err != nil {
 					return err
 				}
 			case e.IsDir():
-				subs, err := os.ReadDir(filepath.Join(project, e.Name(), "subagents"))
-				if err != nil {
-					continue // most sessions have no subagents
-				}
-				for _, s := range subs {
-					if s.Type().IsRegular() && strings.HasSuffix(s.Name(), ".jsonl") {
-						if err := fn(filepath.Join(project, e.Name(), "subagents", s.Name()), e.Name()); err != nil {
-							return err
-						}
-					}
+				if err := walkSubagents(filepath.Join(project, e.Name(), "subagents"), e.Name(), 0, fn); err != nil {
+					return err
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func walkSubagents(dir, session string, depth int, fn func(file) error) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // most sessions have no subagents
+	}
+	for _, e := range entries {
+		switch {
+		case e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".jsonl"):
+			owner := session
+			if agent := agentID(e.Name()); agent != "" {
+				owner = session + "/" + agent
+			}
+			if err := fn(file{Path: filepath.Join(dir, e.Name()), Owner: owner, Subagent: true, Nested: depth > 0}); err != nil {
+				return err
+			}
+		case e.IsDir() && depth < maxNesting:
+			if err := walkSubagents(filepath.Join(dir, e.Name()), session, depth+1, fn); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// rootOf is the session a store key belongs to: the key itself, or the part before the slash of a
+// subagent's.
+func rootOf(key string) string {
+	root, _, _ := strings.Cut(key, "/")
+	return root
 }

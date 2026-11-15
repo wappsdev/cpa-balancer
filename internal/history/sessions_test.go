@@ -148,12 +148,12 @@ func TestSessionsSumToTheAccountTotalsOfTheWindow(t *testing.T) {
 	}
 	w := window(r, 0)
 	var own, roots, accounts Traffic
-	walk(w.Sessions, func(s SessionUsage) { own.add(s.Own) })
+	walk(w.Sessions, func(s SessionUsage) { own.Add(s.Own) })
 	for _, s := range w.Sessions {
-		roots.add(s.Total)
+		roots.Add(s.Total)
 	}
 	for _, a := range w.Accounts {
-		accounts.add(a)
+		accounts.Add(a)
 	}
 	if w.Total.Requests != n || own != w.Total || roots != w.Total || accounts != w.Total {
 		t.Fatalf("total %+v own %+v roots %+v accounts %+v", w.Total, own, roots, accounts)
@@ -186,26 +186,11 @@ func TestTheTopSessionsAreKeptAndTheRestIsSummedUp(t *testing.T) {
 	}
 	var sum Traffic
 	for _, s := range w.Sessions {
-		sum.add(s.Total)
+		sum.Add(s.Total)
 	}
-	sum.add(w.Other.Total)
+	sum.Add(w.Other.Total)
 	if sum != w.Total {
 		t.Fatalf("roots %+v total %+v", sum, w.Total)
-	}
-}
-
-func TestAdvisorUseIsItsOwnColumnAndRollsUp(t *testing.T) {
-	r := NewRecorder(t.TempDir())
-	advisor(r, t0, "p", "", "fable", tok(1, 775, 6))
-	advisor(r, t0, "c", "p", "opus", tok(2, 10, 1))
-	r.AddTraffic(t0, src("a", "m", "p", ""), tok(1, 1, 1))
-	w := window(r, 0)
-	p := find(w, "p")
-	if p.Advisor.Requests != 3 || p.Advisor.InputTokens != 785 || p.AdvisorModels["fable"].OutputTokens != 6 || p.AdvisorModels["opus"].Requests != 2 {
-		t.Fatalf("advisor %+v %+v", p.Advisor, p.AdvisorModels)
-	}
-	if p.Total.Requests != 1 || w.Total.Requests != 1 || w.Advisor.Requests != 3 {
-		t.Fatalf("advisor use stays out of the account totals: %+v %+v", p.Total, w.Total)
 	}
 }
 
@@ -227,7 +212,7 @@ func TestSlotsWrittenBeforeSessionsWereRecordedCountAsTheEmptyId(t *testing.T) {
 	}
 	var sum Traffic
 	for _, s := range w.Sessions {
-		sum.add(s.Total)
+		sum.Add(s.Total)
 	}
 	if sum != w.Total || w.Total.Requests != 6 {
 		t.Fatalf("sum %+v total %+v", sum, w.Total)
@@ -292,18 +277,17 @@ func TestSessionsPerSlotAreCappedAndTheOverflowIsFolded(t *testing.T) {
 	}
 	// a session already in the slot keeps counting after the cap is reached
 	r.AddTraffic(t0, src("a", "m", "s0001", ""), tok(1, 5, 5))
-	advisor(r, t0, "never-seen", "", "fable", tok(1, 1, 1))
 	if got := len(r.open.Sessions); got != maxSessionsPerSlot+1 {
 		t.Fatalf("%d sessions kept, want the cap and one for the overflow", got)
 	}
 	w := window(r, 0)
 	var own Traffic
-	walk(w.Sessions, func(s SessionUsage) { own.add(s.Own) })
+	walk(w.Sessions, func(s SessionUsage) { own.Add(s.Own) })
 	if w.Total.Requests != maxSessionsPerSlot+extra+1 || own != w.Total {
 		t.Fatalf("total %+v own %+v", w.Total, own)
 	}
 	other := find(w, OtherSession)
-	if other == nil || other.Own.Requests != extra || other.Advisor.Requests != 1 || other.Parent != "" {
+	if other == nil || other.Own.Requests != extra || other.Parent != "" {
 		t.Fatalf("overflow row: %+v", other)
 	}
 	if !hasNested(w, "s0001") || find(w, "s0000").Own.Requests != 1 {
@@ -320,7 +304,7 @@ func hasNested(w SessionWindow, id string) bool {
 func TestAnOversizedOrBrokenHistoryLineIsSkippedAndCounted(t *testing.T) {
 	dir := t.TempDir()
 	good := `{"t":"2026-10-04T11:55:00Z","accounts":{"a":{"models":{"m":{"requests":5}}}}}` + "\n"
-	huge := `{"t":"2026-10-04T11:50:00Z","x":"` + strings.Repeat("y", maxLine+10) + `"}` + "\n"
+	huge := `{"t":"2026-10-04T11:50:00Z","x":"` + strings.Repeat("y", MaxLine+10) + `"}` + "\n"
 	body := good + huge + "not json\n" + strings.Replace(good, "11:55", "11:56", 1)
 	if err := os.WriteFile(filepath.Join(dir, "2026-10-04.jsonl"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -341,20 +325,5 @@ func TestSessionsReportsBothWindowsFromOneRead(t *testing.T) {
 	}
 	if !s.FiveHour.To.After(t0) || !s.Week.To.Equal(s.FiveHour.To) || s.FiveHour.To.Sub(s.FiveHour.From) < 5*time.Hour {
 		t.Fatalf("bounds %v %v", s.FiveHour.From, s.FiveHour.To)
-	}
-}
-
-func TestABackfilledSlotMarksItsSessionsEstimated(t *testing.T) {
-	r := NewRecorder(t.TempDir())
-	r.AddTraffic(t0, src("a", "m", "live", ""), tok(1, 1, 1))
-	slot := &Slot{T: t0.Add(10 * time.Minute), Backfill: true, Sessions: map[string]*SessionSlot{
-		"old": {First: t0.Add(10 * time.Minute), Last: t0.Add(11 * time.Minute), Accounts: map[string]Traffic{"unknown": tok(1, 1, 1)}, Models: map[string]Traffic{"m": tok(1, 1, 1)}}},
-		Accounts: map[string]*AccountSlot{"unknown": {Models: map[string]Traffic{"m": tok(1, 1, 1)}}}}
-	if _, err := r.AppendBackfill(r.Untaken([]*Slot{slot})); err != nil {
-		t.Fatal(err)
-	}
-	w := window(r, 0)
-	if o := find(w, "old"); o == nil || !o.Estimated || find(w, "live").Estimated || w.Total.Requests != 2 {
-		t.Fatalf("%+v", w.Sessions)
 	}
 }
