@@ -16,6 +16,7 @@ const (
 	resourceBase = "/v0/resource/plugins/" + PluginID
 	routeBase    = "/v0/management/plugins/" + PluginID
 	pagePath     = "/status" // the menu entry; serves index.html
+	maxPinBody   = 4096      // a pin body is a kind, a name of up to 255 bytes and an auth file
 )
 
 // API is what the routes need from the running plugin.
@@ -26,6 +27,9 @@ type API interface {
 	Transcripts(rangeName string) (any, error) // read-only: what Claude Code's transcripts say, apart from the live history
 	Run() any
 	Recheck(authFile string) any // "" = every account
+	// Pin pins a folder ("folder") or a main session ("session") to an account; "" unpins. The
+	// names travel in the body: a folder name is user data and a URL reaches access logs.
+	Pin(kind, key, account string) error
 	Credentials() (any, error)
 }
 
@@ -54,6 +58,7 @@ var routes = []struct{ method, path string }{
 	{http.MethodGet, "/transcripts"},
 	{http.MethodPost, "/run"},
 	{http.MethodPost, "/recheck"},
+	{http.MethodPost, "/pin"},
 	{http.MethodGet, "/credentials"},
 }
 
@@ -99,6 +104,15 @@ func Handle(req pluginapi.ManagementRequest, api API) pluginapi.ManagementRespon
 		return jsonResponse(api.Run(), nil)
 	case "POST /recheck":
 		return jsonResponse(api.Recheck(req.Query.Get("auth_file")), nil)
+	case "POST /pin":
+		var body struct{ Kind, Key, Account string }
+		if len(req.Body) > maxPinBody || json.Unmarshal(req.Body, &body) != nil {
+			return text(http.StatusBadRequest, "a pin needs a JSON body of kind, key and account")
+		}
+		if err := api.Pin(body.Kind, body.Key, body.Account); err != nil {
+			return text(http.StatusBadRequest, err.Error())
+		}
+		return jsonResponse(api.Status(), nil)
 	case "GET /credentials":
 		return jsonResponse(api.Credentials())
 	}

@@ -191,6 +191,11 @@ func configure(req []byte) []byte {
 		}
 		mu.Unlock()
 	default:
+		// The new engine reads the state file, so what the running one has not saved yet (a project
+		// placed in the last half minute) is written first.
+		if running := engineNow(); running != nil {
+			running.Shutdown()
+		}
 		mu.Lock()
 		// The recorder outlives engines: a config change must not drop the open history slot.
 		if recorder == nil {
@@ -236,6 +241,19 @@ func (pluginAPI) Status() any {
 		v.Sessions = &s
 	}
 	return v
+}
+
+// Pin pins a folder or a main session to an account; an empty account removes the pin. Nothing but
+// the pin itself is named in an error.
+func (pluginAPI) Pin(kind, key, account string) error {
+	e := engineNow()
+	if e == nil {
+		return errors.New("not configured")
+	}
+	if account == "" {
+		return e.ClearPin(kind, key)
+	}
+	return e.SetPin(kind, key, account)
 }
 
 func (pluginAPI) History(rangeName string) (any, error) {

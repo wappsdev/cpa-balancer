@@ -13,6 +13,15 @@ import (
 type fakeAPI struct {
 	ran       int
 	rechecked []string
+	pins      []string // kind/key/account of each pin call
+}
+
+func (f *fakeAPI) Pin(kind, key, account string) error {
+	f.pins = append(f.pins, kind+"/"+key+"/"+account)
+	if account == "claude-bad.json" {
+		return errors.New("the account is not one of the configured accounts")
+	}
+	return nil
 }
 
 func (f *fakeAPI) Status() any { return map[string]string{"mode": "apply"} }
@@ -105,7 +114,7 @@ func TestRoutes(t *testing.T) {
 
 func TestRegistrationListsEveryRouteAndResource(t *testing.T) {
 	reg := Registration()
-	if len(reg["routes"].([]map[string]any)) != 7 || len(reg["resources"].([]map[string]any)) != len(resources) {
+	if len(reg["routes"].([]map[string]any)) != 8 || len(reg["resources"].([]map[string]any)) != len(resources) {
 		t.Fatalf("%+v", reg)
 	}
 	menus := 0
