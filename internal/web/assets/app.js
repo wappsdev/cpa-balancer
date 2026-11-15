@@ -322,7 +322,9 @@ function sessionsView(w, picks) {
       depth, id: s.id, label: s.id ? s.id.slice(0, 8) : "no session", none: s.id === "", last: s.last,
       requests: s.total?.requests || 0, tokens: tokens(s.total), ownTokens: tokens(s.own), cacheRead: s.total?.cache_read_tokens || 0,
       share: percent(tokens(s.total), total.tokens), accounts: split(s.accounts),
-      pick: picks?.[s.id] ?? null, // where its last request went and why; the balancer keeps it in memory only
+      // where its last request went and why (the balancer keeps it in memory only); a subagent the balancer
+      // saw no request of, such as one CPA names from the request body, shows its main session's
+      pick: picks?.[s.id] ?? picks?.[s.id.split("/")[0]] ?? null,
     });
     // The balancer folds anything deeper into its ancestor, so a deeper row is only defence: its use is already in this row's total.
     if (depth + 1 < MAX_SESSION_DEPTH) for (const c of s.subagents || []) add(c, depth + 1);

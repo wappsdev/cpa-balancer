@@ -34,6 +34,10 @@ const accounts = [{ auth_file: 'a.json', name: 'first' }, { auth_file: 'b.json',
 
 const v = sessionsView(win, picks)
 check('a row carries the pick of its own session id', v.rows[0].pick?.account === 'b.json' && v.rows[1].pick?.account === 'b.json' && v.rows[2].pick === null)
+check('a subagent the balancer has no pick for shows its main session\'s', (() => {
+  const only = sessionsView(win, { [SID]: picks[SID] })
+  return only.rows[1].id === SID + '/ab12' && only.rows[1].pick?.account === 'b.json'
+})())
 check('the view works without picks', sessionsView(win).rows.every(r => r.pick === null) && sessionsView(win, null).rows.length === 3)
 
 for (const [reason, word] of [['project_home', 'project home'], ['folder_pin', 'folder pin'], ['session_pin', 'session pin'], ['fallback', 'fallback after cap'],

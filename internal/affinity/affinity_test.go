@@ -36,7 +36,7 @@ func TestSessionIDFromTheClaudeCodeHeaders(t *testing.T) {
 		{"a colon would break the key", headers("X-Claude-Code-Session-Id", "a:agent:b"), "", ""},
 		{"a space is not plain", headers("X-Claude-Code-Session-Id", "a b"), "", ""},
 		{"too long", headers("X-Claude-Code-Session-Id", strings.Repeat("a", 200)), "", ""},
-		{"a bad agent id is no session either, so a client cannot name a path", headers("X-Claude-Code-Session-Id", sid, "X-Claude-Code-Agent-Id", "a/b"), "", ""},
+		{"a bad agent id keeps the project: the agent id never reaches a path", headers("X-Claude-Code-Session-Id", sid, "X-Claude-Code-Agent-Id", "a/b"), sid, sid},
 	}
 	for _, c := range cases {
 		id, root := SessionID(c.h)

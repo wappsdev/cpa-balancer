@@ -50,24 +50,20 @@ func ValidSID(s string) bool {
 // session `<sid>`, or a subagent `<sid>/<agentId>` whose root is `<sid>`. CPA hands the plugin the
 // client's headers (CPA's own `claude:<sid>` ids are made later, after the scheduler picks), so the
 // key is made here, through the same CanonicalSession the usage records go through. A request
-// without a usable session gives "", "".
+// without a usable session gives "", "". Only the root session reaches a path, so an agent id that
+// is not usable (or makes the key too long) leaves the request as the main session: it keeps its
+// project.
 func SessionID(h map[string][]string) (id, root string) {
 	sid := header(h, sessionHeader)
-	if sid == "" {
+	if sid == "" || !ValidSID(sid) {
 		return "", ""
 	}
-	raw := "claude:" + sid
-	if agent := header(h, agentHeader); agent != "" && agent != mainAgent {
-		raw += ":agent:" + agent
-		if !ValidSID(agent) {
-			return "", ""
+	if agent := header(h, agentHeader); agent != "" && agent != mainAgent && ValidSID(agent) {
+		if id, _ = history.CanonicalSession("claude:"+sid+":agent:"+agent, ""); history.PlainID(id) {
+			return id, sid
 		}
 	}
-	if !ValidSID(sid) {
-		return "", ""
-	}
-	id, _ = history.CanonicalSession(raw, "")
-	return id, sid
+	return sid, sid
 }
 
 // ValidProject reports whether name can be a project: one file name of at most 255 bytes, valid
