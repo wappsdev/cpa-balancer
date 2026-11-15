@@ -388,8 +388,11 @@ func hasTraffic(s *Slot) bool {
 // Slots returns the stored and in-memory slots with T in [from, to).
 func (r *Recorder) Slots(from, to time.Time) []*Slot { return r.slots(from, to) }
 
-// Untaken returns the slots whose time holds no recorded traffic or sessions yet, live or from an
-// earlier backfill. A slot with only levels does not count as taken.
+// Untaken returns the slots whose time no slot of the history covers yet. The plugin writes a
+// slot at every tick while it runs, so a slot with only levels means the proxy saw no managed
+// request then: a transcript message in it was counted in a slot next to it, or never used a
+// balancer account. Either way the import must not add it. A slot from an earlier backfill covers
+// its time too.
 func (r *Recorder) Untaken(slots []*Slot) []*Slot {
 	if len(slots) == 0 {
 		return nil
@@ -405,9 +408,7 @@ func (r *Recorder) Untaken(slots []*Slot) []*Slot {
 	}
 	taken := map[time.Time]bool{}
 	for _, s := range r.slots(from, to.Add(SlotLength)) {
-		if hasTraffic(s) {
-			taken[s.T] = true
-		}
+		taken[s.T] = true
 	}
 	var out []*Slot
 	for _, s := range slots {
@@ -419,10 +420,9 @@ func (r *Recorder) Untaken(slots []*Slot) []*Slot {
 	return out
 }
 
-// WriteBackfill appends slots rebuilt from transcripts, marked as such. A slot time that already
-// holds recorded traffic or sessions is left alone, so running it again adds nothing. It returns
-// how many slots it wrote. A written slot sits beside any levels-only slot of the same time:
-// readers add the traffic of slots with one time and take the highest level.
+// WriteBackfill appends slots rebuilt from transcripts, marked as such. A slot time the history
+// already covers is left alone (see Untaken), so running it again adds nothing. It returns how
+// many slots it wrote.
 func (r *Recorder) WriteBackfill(slots []*Slot) (int, error) {
 	todo := r.Untaken(slots)
 	if len(todo) == 0 {

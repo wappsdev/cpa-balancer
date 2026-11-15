@@ -115,9 +115,10 @@ A message that spans several lines counts once, a subagent's transcript counts u
 session, and an advisor model's calls (`usage.iterations`) are counted apart from the account's
 own use. Transcripts do not name an account: each request is given the account the balancer had
 active for its bucket (main, or Fable by model name) at that time, from its recorded history, or
-`unknown`. Those rows are marked `~` (estimated) on the page. Only 5-minute slots that hold no
-recorded traffic are written, so running it again adds nothing and live data is never changed;
-run it while CPA is idle.
+`unknown`. Those rows are marked `~` (estimated) on the page. The plugin writes a slot at every
+tick while it runs, so a slot it wrote, busy or idle, is never touched: the import fills only the
+time before the plugin ran and the gaps when it was off. Running it again adds nothing; run it
+while CPA is idle.
 
 ## Look-ahead
 

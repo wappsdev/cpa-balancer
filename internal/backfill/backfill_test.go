@@ -142,61 +142,61 @@ func TestRunningTwiceAddsNothing(t *testing.T) {
 	}
 }
 
-func TestLiveDataWinsAndAnIdleSlotIsFilled(t *testing.T) {
+func TestEverySlotThePluginWroteIsLeftAlone(t *testing.T) {
 	root := transcripts(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {
-		assistant(sessA, "msg_1", "claude-opus-5-5", at, usage{in: 10, out: 1}),                     // 11:00 slot has live traffic
-		assistant(sessA, "msg_2", "claude-opus-5-5", at.Add(10*time.Minute), usage{in: 10, out: 1}), // 11:10 slot has levels only
-		assistant(sessA, "msg_3", "claude-opus-5-5", at.Add(20*time.Minute), usage{in: 10, out: 1}), // 11:20 slot is not there at all
+		assistant(sessA, "msg_1", "claude-opus-5-5", at.Add(5*time.Minute), usage{in: 10, out: 1}),                // the slot with live traffic
+		assistant(sessA, "msg_2", "claude-opus-5-5", at.Add(4*time.Minute+50*time.Second), usage{in: 20, out: 1}), // 10 s before it, in the slot the plugin saw idle
+		assistant(sessA, "msg_3", "claude-opus-5-5", at.Add(20*time.Minute), usage{in: 40, out: 1}),               // a time with no slot at all
 	}})
 	hist := t.TempDir()
 	live := history.NewRecorder(hist)
-	live.AddTraffic(at, history.Source{Account: "g", Model: "claude-opus-5-5", Session: sessB}, history.Traffic{Requests: 1, InputTokens: 99})
-	live.Snapshot(at.Add(10*time.Minute), map[string]string{"main": "g"}, map[string]history.Levels{"g": {}})
+	// The plugin writes a slot on every tick: 11:00 saw no traffic, 11:05 saw one request.
+	live.Snapshot(at, map[string]string{"main": "g"}, map[string]history.Levels{"g": {}})
+	live.AddTraffic(at.Add(5*time.Minute), history.Source{Account: "g", Model: "claude-opus-5-5", Session: sessB}, history.Traffic{Requests: 1, InputTokens: 99})
 	if err := live.Flush(at.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	rep := run(t, root, hist, false)
-	if rep.SlotsAdded != 2 || rep.SlotsLive != 1 {
-		t.Fatalf("%+v", rep)
+	if rep.SlotsAdded != 1 || rep.SlotsLive != 2 {
+		t.Fatalf("a slot the plugin wrote, idle or busy, must not take transcript traffic: %+v", rep)
 	}
 	w := window(t, hist)
 	if b := row(w, sessB); b == nil || b.Own.InputTokens != 99 {
 		t.Fatalf("live data must stay as it was: %+v", b)
 	}
-	if a := row(w, sessA); a == nil || a.Own.Requests != 2 || !a.Estimated {
-		t.Fatalf("%+v", a)
+	if a := row(w, sessA); a == nil || a.Own.Requests != 1 || a.Own.InputTokens != 40 || !a.Estimated {
+		t.Fatalf("only the message in a slot the plugin never wrote is added: %+v", a)
 	}
 }
 
 func TestEachRequestGoesToTheAccountTheBalancerHadActive(t *testing.T) {
 	const opus, fable = "claude-opus-5-5", "claude-fable-5-2"
 	root := transcripts(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {
-		assistant(sessA, "m1", opus, at.Add(-3*time.Hour), usage{in: 1, out: 1}),    // before any record: unknown
-		assistant(sessA, "m2", opus, at.Add(6*time.Minute), usage{in: 2, out: 1}),   // main on g
-		assistant(sessA, "m3", opus, at.Add(31*time.Minute), usage{in: 4, out: 1}),  // main on w after the switch at 11:30
-		assistant(sessA, "m4", fable, at.Add(31*time.Minute), usage{in: 8, out: 1}), // Fable stays on g
-		assistant(sessA, "m5", opus, at.Add(6*time.Hour), usage{in: 16, out: 1}),    // the balancer was not recording any more: unknown
+		assistant(sessA, "m1", opus, at.Add(-3*time.Hour), usage{in: 1, out: 1}),   // before any record: unknown
+		assistant(sessA, "m2", opus, at.Add(10*time.Minute), usage{in: 2, out: 1}), // the plugin was down: the last record says g
+		assistant(sessA, "m3", opus, at.Add(20*time.Minute), usage{in: 4, out: 1}),
+		assistant(sessA, "m4", fable, at.Add(50*time.Minute), usage{in: 8, out: 1}), // Fable stays on g
+		assistant(sessA, "m5", opus, at.Add(50*time.Minute), usage{in: 16, out: 1}), // after the switch to w at 11:32
+		assistant(sessA, "m6", opus, at.Add(6*time.Hour), usage{in: 32, out: 1}),    // more than an hour after the last record: unknown
 	}})
 	hist := t.TempDir()
 	live := history.NewRecorder(hist)
-	for i := range 8 { // dense snapshots from 10:55 to 11:35, like the plugin writes while it runs
-		live.Snapshot(at.Add(time.Duration(i-1)*5*time.Minute), map[string]string{"main": "g", "fable": "g"}, nil)
-	}
-	live.AddEvent(history.Event{At: at.Add(30 * time.Minute), Kind: "switch", Bucket: "main", From: "g", To: "w"})
-	live.Snapshot(at.Add(30*time.Minute), map[string]string{"main": "w", "fable": "g"}, nil)
-	live.Snapshot(at.Add(35*time.Minute), map[string]string{"main": "w", "fable": "g"}, nil)
+	// The plugin ran until 11:05, was down, and came back for one slot at 11:30 that saw a switch.
+	live.Snapshot(at.Add(-5*time.Minute), map[string]string{"main": "g", "fable": "g"}, nil)
+	live.Snapshot(at, map[string]string{"main": "g", "fable": "g"}, nil)
+	live.AddEvent(history.Event{At: at.Add(32 * time.Minute), Kind: "switch", Bucket: "main", From: "g", To: "w"})
 	if err := live.Flush(at.Add(24 * time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	run(t, root, hist, false)
 	got := window(t, hist).Sessions[0].Accounts
-	want := map[string]int64{Unknown: 2, "g": 2, "w": 1}
+	want := map[string]int64{Unknown: 2, "g": 3, "w": 1}
 	for account, requests := range want {
 		if got[account].Requests != requests {
 			t.Errorf("%s has %d requests, want %d (%+v)", account, got[account].Requests, requests, got)
 		}
 	}
-	if got["g"].InputTokens != 2+8 || got["w"].InputTokens != 4 {
+	if got["g"].InputTokens != 2+4+8 || got["w"].InputTokens != 16 {
 		t.Errorf("%+v", got)
 	}
 }

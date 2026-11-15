@@ -3,8 +3,9 @@
 //
 //	cpa-balancer-import --projects <dir> --state <balancer data dir> [--dry-run] [--fable <name part>]
 //
-// It reads only the usage fields of assistant messages. It writes only into time slots that hold
-// no recorded traffic, so running it again changes nothing. Run it while CPA is idle or stopped.
+// It reads only the usage fields of assistant messages. It writes only into time slots that no
+// slot of the history covers (the plugin writes one at every tick while it runs), so running it
+// again changes nothing. Run it while CPA is idle or stopped.
 package main
 
 import (

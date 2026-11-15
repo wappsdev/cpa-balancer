@@ -37,14 +37,15 @@ type Report struct {
 	Messages     int // distinct messages in range
 	Sessions     int
 	SlotsFound   int // 5-minute slots the messages fall into
-	SlotsLive    int // of those, slots that already hold traffic
+	SlotsLive    int // of those, slots the history already covers (the plugin wrote one at that time)
 	SlotsWould   int // slots a dry run would write
 	SlotsAdded   int // slots written
 	Days         []Day
 }
 
-// Run reads the transcripts and writes the sessions they hold into the history, in the slots that
-// hold no recorded traffic yet. Running it again adds nothing.
+// Run reads the transcripts and writes the sessions they hold into the history, in the slots no
+// slot of the history covers yet: the plugin writes one at every tick while it runs, so this is
+// the time before it ran and the gaps when it was off. Running it again adds nothing.
 func Run(o Options) (Report, error) {
 	if o.Now.IsZero() {
 		o.Now = time.Now()
@@ -175,7 +176,7 @@ func (r Report) Write(w io.Writer) {
 	if r.DryRun {
 		adds = r.SlotsWould
 	}
-	fmt.Fprintf(w, "  5-minute slots:   %d found, %d already hold recorded traffic (left as they are), %d to add\n", r.SlotsFound, r.SlotsLive, adds)
+	fmt.Fprintf(w, "  5-minute slots:   %d found, %d already covered by the history (left as they are), %d to add\n", r.SlotsFound, r.SlotsLive, adds)
 	fmt.Fprintf(w, "\n  %-10s  %8s  %9s  %12s  %8s\n", "day (UTC)", "sessions", "requests", "tokens", "advisor")
 	for _, d := range r.Days {
 		fmt.Fprintf(w, "  %-10s  %8d  %9d  %12d  %8d\n", d.Date, d.Sessions, d.Requests, d.Tokens, d.Advisor)
