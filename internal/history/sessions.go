@@ -10,7 +10,13 @@ import (
 )
 
 const (
-	maxIDLength     = 128 // a session id comes from a client header; it is cut before it is stored
+	maxIDLength        = 64  // a session id comes from a client header, so only a plain id of this size is stored as given
+	maxSessionsPerSlot = 200 // distinct sessions kept in one slot; later ones are folded into OtherSession
+	maxLine            = 4 << 20
+	// OtherSession stands for requests whose session id is not a plain id, or that came after a
+	// slot already held maxSessionsPerSlot sessions. Its name is not a valid id, so no client can
+	// send it.
+	OtherSession    = "(other)"
 	FiveHourWindow  = 5 * time.Hour
 	WeekWindow      = 7 * 24 * time.Hour
 	weekTopSessions = 30 // root sessions listed for the week; the rest is summed in Other
@@ -36,25 +42,58 @@ func (ss *SessionSlot) addTo(m *map[string]Traffic, key string, t Traffic) {
 	(*m)[key] = x
 }
 
-// boundID makes a client-supplied id safe to store: valid UTF-8 and at most maxIDLength bytes.
-func boundID(id string) string {
-	id = strings.ToValidUTF8(strings.TrimSpace(id), "")
-	if len(id) > maxIDLength {
-		id = strings.ToValidUTF8(id[:maxIDLength], "")
+// validID reports whether a client-supplied id is a plain one: letters, digits and . _ : - only.
+func validID(id string) bool {
+	if len(id) == 0 || len(id) > maxIDLength {
+		return false
 	}
-	return id
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == ':' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
-// session returns the slot's record of a session; callers hold the recorder's lock.
+// NewSlot is an empty slot that starts at the slot boundary t is in.
+func NewSlot(t time.Time) *Slot { return newSlot(slotStart(t)) }
+
+// AddTraffic counts requests in the slot (see Recorder.AddTraffic); the caller owns the slot.
+func (s *Slot) AddTraffic(now time.Time, src Source, t Traffic) {
+	a := s.account(src.Account)
+	m := a.Models[src.Model]
+	m.add(t)
+	a.Models[src.Model] = m
+	ss := s.session(now, src.Session, src.Parent)
+	ss.addTo(&ss.Accounts, src.Account, t)
+	ss.addTo(&ss.Models, src.Model, t)
+}
+
+// AddAdvisor counts advisor requests in the slot (see Recorder.AddAdvisor).
+func (s *Slot) AddAdvisor(now time.Time, session, parent, model string, t Traffic) {
+	ss := s.session(now, session, parent)
+	ss.addTo(&ss.Advisor, model, t)
+}
+
+// session returns the slot's record of a session. An id that is not a plain one, or that would be
+// one session too many for the slot, becomes OtherSession.
 func (s *Slot) session(now time.Time, id, parent string) *SessionSlot {
-	id, parent = boundID(id), boundID(parent)
-	if parent == id {
+	id, parent = strings.TrimSpace(id), strings.TrimSpace(parent)
+	if id != "" && !validID(id) {
+		id, parent = OtherSession, ""
+	}
+	if parent != "" && !validID(parent) || parent == id {
 		parent = ""
 	}
 	if s.Sessions == nil {
 		s.Sessions = map[string]*SessionSlot{}
 	}
 	ss, ok := s.Sessions[id]
+	if !ok && id != OtherSession && len(s.Sessions) >= maxSessionsPerSlot {
+		id, parent = OtherSession, ""
+		ss, ok = s.Sessions[id]
+	}
 	if !ok {
 		ss = &SessionSlot{First: now}
 		s.Sessions[id] = ss
@@ -118,6 +157,8 @@ type SessionWindow struct {
 type Sessions struct {
 	FiveHour SessionWindow `json:"five_hour"`
 	Week     SessionWindow `json:"week"`
+	// SkippedLines counts history lines that could not be read: broken or past the size limit.
+	SkippedLines int `json:"skipped_lines,omitempty"`
 }
 
 // Sessions reads the history once for both windows, which end with the slot now is in. The
@@ -125,7 +166,7 @@ type Sessions struct {
 // span.
 func (r *Recorder) Sessions(now time.Time) Sessions {
 	to := slotStart(now).Add(SlotLength)
-	slots := r.slots(to.Add(-WeekWindow), to)
+	slots, skipped := r.readSlots(to.Add(-WeekWindow), to)
 	var recent []*Slot
 	for _, s := range slots {
 		if !s.T.Before(to.Add(-FiveHourWindow)) {
@@ -133,8 +174,9 @@ func (r *Recorder) Sessions(now time.Time) Sessions {
 		}
 	}
 	return Sessions{
-		FiveHour: buildWindow(recent, to.Add(-FiveHourWindow), to, 0), // never cut: the current session must be found in it
-		Week:     buildWindow(slots, to.Add(-WeekWindow), to, weekTopSessions),
+		FiveHour:     buildWindow(recent, to.Add(-FiveHourWindow), to, 0), // never cut: the current session must be found in it
+		Week:         buildWindow(slots, to.Add(-WeekWindow), to, weekTopSessions),
+		SkippedLines: skipped,
 	}
 }
 

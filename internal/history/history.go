@@ -2,7 +2,6 @@
 package history
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wappsdev/cpa-balancer/internal/lines"
 )
 
 const (
@@ -132,14 +133,7 @@ func (r *Recorder) AddTraffic(now time.Time, src Source, t Traffic) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s := r.current(now)
-	a := s.account(src.Account)
-	m := a.Models[src.Model]
-	m.add(t)
-	a.Models[src.Model] = m
-	ss := s.session(now, src.Session, src.Parent)
-	ss.addTo(&ss.Accounts, src.Account, t)
-	ss.addTo(&ss.Models, src.Model, t)
+	r.current(now).AddTraffic(now, src, t)
 }
 
 // AddAdvisor counts requests an advisor model answered for a session. They use quota too but are
@@ -150,8 +144,7 @@ func (r *Recorder) AddAdvisor(now time.Time, session, parent, model string, t Tr
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	ss := r.current(now).session(now, session, parent)
-	ss.addTo(&ss.Advisor, model, t)
+	r.current(now).AddAdvisor(now, session, parent, model, t)
 }
 
 func (r *Recorder) AddEvent(e Event) {
@@ -239,6 +232,14 @@ func (r *Recorder) prune(now time.Time) {
 
 // slots returns stored and in-memory slots with T in [from, to).
 func (r *Recorder) slots(from, to time.Time) []*Slot {
+	out, _ := r.readSlots(from, to)
+	return out
+}
+
+// readSlots is slots, and also counts the stored lines it could not use: broken, or longer than
+// maxLine. Those are skipped, and the lines after them are still read.
+func (r *Recorder) readSlots(from, to time.Time) ([]*Slot, int) {
+	skipped := 0
 	r.mu.Lock()
 	memory := append([]*Slot{}, r.pending...)
 	if r.open != nil {
@@ -257,14 +258,18 @@ func (r *Recorder) slots(from, to time.Time) []*Slot {
 		if err != nil {
 			continue
 		}
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for scanner.Scan() {
+		bad, err := lines.Each(f, maxLine, func(line []byte) {
 			var s Slot
-			if json.Unmarshal(scanner.Bytes(), &s) == nil && !s.T.Before(from) && s.T.Before(to) && !inMemory[s.T] {
+			if json.Unmarshal(line, &s) != nil {
+				skipped++
+			} else if !s.T.Before(from) && s.T.Before(to) && !inMemory[s.T] {
 				out = append(out, &s)
 			}
+		})
+		if err != nil {
+			skipped++
 		}
+		skipped += bad
 		f.Close()
 	}
 	var copies []*Slot
@@ -275,5 +280,5 @@ func (r *Recorder) slots(from, to time.Time) []*Slot {
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].T.Before(out[j].T) })
-	return out
+	return out, skipped
 }

@@ -1,6 +1,7 @@
 package history
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -233,12 +234,31 @@ func TestSlotsWrittenBeforeSessionsWereRecordedCountAsTheEmptyId(t *testing.T) {
 	}
 }
 
-func TestSessionsSurviveTheDiskAndLongIdsAreBounded(t *testing.T) {
+func TestSessionsSurviveTheDisk(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRecorder(dir)
-	long := strings.Repeat("x", 5000)
-	r.AddTraffic(t0, src("a", "m", long, "p"), tok(1, 1, 1))
 	r.AddTraffic(t0, src("a", "m", "s1", ""), tok(1, 1, 1))
+	r.AddTraffic(t0, src("a", "m", "s2", "s1"), tok(1, 1, 1))
+	if err := r.Flush(t0.Add(10 * time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	w := NewRecorder(dir).SessionWindow(t0.Add(-time.Hour), t0.Add(time.Hour), 0)
+	if s1 := find(w, "s1"); s1 == nil || s1.Total.Requests != 2 || len(s1.Subagents) != 1 || w.Total.Requests != 2 {
+		t.Fatalf("%+v", w)
+	}
+}
+
+func TestAnIdOutsideTheAllowedFormatIsStoredAsOther(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRecorder(dir)
+	valid := strings.Repeat("a", 64)
+	bad := []string{strings.Repeat("x", 65), "has space", "../../etc", "naïve", "tab\there", "<img>", "line\nbreak"}
+	r.AddTraffic(t0, src("a", "m", valid, ""), tok(1, 1, 1))
+	r.AddTraffic(t0, src("a", "m", "ok.Id_1:2-3", ""), tok(1, 1, 1))
+	for _, id := range bad {
+		r.AddTraffic(t0, src("a", "m", id, "p"), tok(1, 1, 1))
+	}
+	r.AddTraffic(t0, src("a", "m", "child", "bad parent"), tok(1, 1, 1))
 	if err := r.Flush(t0.Add(10 * time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -246,12 +266,68 @@ func TestSessionsSurviveTheDiskAndLongIdsAreBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(raw) > 2000 {
-		t.Fatalf("an id must be cut before it reaches the disk: %d bytes", len(raw))
+	for _, id := range append(bad, "bad parent") {
+		if strings.Contains(string(raw), id) {
+			t.Fatalf("%q reached the disk", id)
+		}
 	}
-	w := NewRecorder(dir).SessionWindow(t0.Add(-time.Hour), t0.Add(time.Hour), 0)
-	if find(w, "s1") == nil || w.Total.Requests != 2 {
-		t.Fatalf("%+v", w)
+	w := window(r, 0)
+	other := find(w, OtherSession)
+	if find(w, valid) == nil || find(w, "ok.Id_1:2-3") == nil || other == nil || other.Own.Requests != int64(len(bad)) || other.Parent != "" {
+		t.Fatalf("%+v", w.Sessions)
+	}
+	if c := find(w, "child"); c == nil || c.Parent != "" {
+		t.Fatalf("a parent in a bad format means no parent: %+v", c)
+	}
+	if w.Total.Requests != int64(len(bad)+3) {
+		t.Fatalf("every request still counts: %+v", w.Total)
+	}
+}
+
+func TestSessionsPerSlotAreCappedAndTheOverflowIsFolded(t *testing.T) {
+	r := NewRecorder(t.TempDir())
+	const extra = 50
+	for i := range maxSessionsPerSlot + extra {
+		r.AddTraffic(t0, src("a", "m", fmt.Sprintf("s%04d", i), "s0000"), tok(1, int64(i), 1))
+	}
+	// a session already in the slot keeps counting after the cap is reached
+	r.AddTraffic(t0, src("a", "m", "s0001", ""), tok(1, 5, 5))
+	r.AddAdvisor(t0, "never-seen", "", "fable", tok(1, 1, 1))
+	if got := len(r.open.Sessions); got != maxSessionsPerSlot+1 {
+		t.Fatalf("%d sessions kept, want the cap and one for the overflow", got)
+	}
+	w := window(r, 0)
+	var own Traffic
+	walk(w.Sessions, func(s SessionUsage) { own.add(s.Own) })
+	if w.Total.Requests != maxSessionsPerSlot+extra+1 || own != w.Total {
+		t.Fatalf("total %+v own %+v", w.Total, own)
+	}
+	other := find(w, OtherSession)
+	if other == nil || other.Own.Requests != extra || other.Advisor.Requests != 1 || other.Parent != "" {
+		t.Fatalf("overflow row: %+v", other)
+	}
+	if !hasNested(w, "s0001") || find(w, "s0000").Own.Requests != 1 {
+		t.Fatal("sessions counted before the cap keep their own rows")
+	}
+}
+
+func hasNested(w SessionWindow, id string) bool {
+	found := false
+	walk(w.Sessions, func(s SessionUsage) { found = found || s.ID == id })
+	return found
+}
+
+func TestAnOversizedOrBrokenHistoryLineIsSkippedAndCounted(t *testing.T) {
+	dir := t.TempDir()
+	good := `{"t":"2026-10-04T11:55:00Z","accounts":{"a":{"models":{"m":{"requests":5}}}}}` + "\n"
+	huge := `{"t":"2026-10-04T11:50:00Z","x":"` + strings.Repeat("y", maxLine+10) + `"}` + "\n"
+	body := good + huge + "not json\n" + strings.Replace(good, "11:55", "11:56", 1)
+	if err := os.WriteFile(filepath.Join(dir, "2026-10-04.jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewRecorder(dir).Sessions(t0)
+	if s.Week.Total.Requests != 10 || s.SkippedLines != 2 {
+		t.Fatalf("total %+v skipped %d: the lines after a bad one must still be read", s.Week.Total, s.SkippedLines)
 	}
 }
 
