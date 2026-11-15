@@ -205,6 +205,20 @@ func (r *Recorder) appendSlot(s *Slot) error {
 	if err != nil {
 		return err
 	}
+	// The caps keep a slot far below maxLine, but a line the reader cannot take would be lost
+	// whole. So make it fit: without its session detail (the reader counts such a slot's traffic
+	// as having no session), then without its events.
+	for _, drop := range []func(*Slot){func(c *Slot) { c.Sessions = nil }, func(c *Slot) { c.Events = nil }} {
+		if len(line) <= maxLine {
+			break
+		}
+		c := *s
+		drop(&c)
+		s = &c
+		if line, err = json.Marshal(s); err != nil {
+			return err
+		}
+	}
 	f, err := os.OpenFile(filepath.Join(r.dir, s.T.Format(dateLayout)+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err

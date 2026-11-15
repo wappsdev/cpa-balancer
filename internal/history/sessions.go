@@ -12,10 +12,11 @@ import (
 const (
 	maxIDLength        = 64  // a session id comes from a client header, so only a plain id of this size is stored as given
 	maxSessionsPerSlot = 200 // distinct sessions kept in one slot; later ones are folded into OtherSession
+	maxKeysPerMap      = 8   // distinct models (or accounts) in one map of a slot; later ones are folded into OtherSession
 	maxLine            = 4 << 20
-	// OtherSession stands for requests whose session id is not a plain id, or that came after a
-	// slot already held maxSessionsPerSlot sessions. Its name is not a valid id, so no client can
-	// send it.
+	// OtherSession stands for requests whose session id or model name is not a plain one, or that
+	// came after a slot already held its maximum of sessions or models. Its name is not valid, so
+	// no client can send it. Together the caps keep a slot far below maxLine.
 	OtherSession    = "(other)"
 	FiveHourWindow  = 5 * time.Hour
 	WeekWindow      = 7 * 24 * time.Hour
@@ -33,13 +34,36 @@ type SessionSlot struct {
 	Advisor  map[string]Traffic `json:"advisor,omitempty"` // by advisor model
 }
 
-func (ss *SessionSlot) addTo(m *map[string]Traffic, key string, t Traffic) {
+// addCapped adds t under key; a key the map does not hold yet goes under OtherSession once the map
+// has maxKeysPerMap keys. The sum of the map does not change.
+func addCapped(m *map[string]Traffic, key string, t Traffic) {
 	if *m == nil {
 		*m = map[string]Traffic{}
+	}
+	if _, ok := (*m)[key]; !ok && key != OtherSession && len(*m) >= maxKeysPerMap {
+		key = OtherSession
 	}
 	x := (*m)[key]
 	x.add(t)
 	(*m)[key] = x
+}
+
+// validModel is validID's rule with the brackets and @ that model names carry, such as
+// "name[1m]" or "name@20251001". An empty name is allowed: it means the request named none.
+func validModel(model string) bool {
+	if model == "" {
+		return true
+	}
+	return len(model) <= maxIDLength && strings.IndexFunc(model, func(c rune) bool {
+		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._:-[]@", c))
+	}) < 0
+}
+
+func cleanModel(model string) string {
+	if validModel(model) {
+		return model
+	}
+	return OtherSession
 }
 
 // validID reports whether a client-supplied id is a plain one: letters, digits and . _ : - only.
@@ -61,19 +85,17 @@ func NewSlot(t time.Time) *Slot { return newSlot(slotStart(t)) }
 
 // AddTraffic counts requests in the slot (see Recorder.AddTraffic); the caller owns the slot.
 func (s *Slot) AddTraffic(now time.Time, src Source, t Traffic) {
-	a := s.account(src.Account)
-	m := a.Models[src.Model]
-	m.add(t)
-	a.Models[src.Model] = m
+	model := cleanModel(src.Model)
+	addCapped(&s.account(src.Account).Models, model, t)
 	ss := s.session(now, src.Session, src.Parent)
-	ss.addTo(&ss.Accounts, src.Account, t)
-	ss.addTo(&ss.Models, src.Model, t)
+	addCapped(&ss.Accounts, src.Account, t)
+	addCapped(&ss.Models, model, t)
 }
 
 // AddAdvisor counts advisor requests in the slot (see Recorder.AddAdvisor).
 func (s *Slot) AddAdvisor(now time.Time, session, parent, model string, t Traffic) {
 	ss := s.session(now, session, parent)
-	ss.addTo(&ss.Advisor, model, t)
+	addCapped(&ss.Advisor, cleanModel(model), t)
 }
 
 // session returns the slot's record of a session. An id that is not a plain one, or that would be
