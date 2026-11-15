@@ -51,6 +51,15 @@
     <div class="card outlook" id="outlook" hidden></div>
     <div class="section-head"><h2>Accounts</h2><span class="hint">bar = utilization · tick = cap in force</span></div>
     <div class="accounts" id="accounts"></div>
+    <div class="section-head">
+      <h2>Sessions</h2>
+      <div class="segmented" role="group" aria-label="Window" id="session-span">
+        <button type="button" data-span="five_hour" aria-pressed="true">5 hours</button>
+        <button type="button" data-span="week" aria-pressed="false">7 days</button>
+      </div>
+      <span class="hint" id="sessions-hint"></span>
+    </div>
+    <div class="card sessions" id="sessions"><p class="empty">Loading…</p></div>
     <div class="section-head"><h2>Recent changes</h2></div>
     <ol class="timeline card" id="changes"></ol>
   </section>

@@ -124,6 +124,7 @@ function renderStatus(v) {
     : choice("Main bucket", v.decision.main, v.decision.main_order) + choice("Fable bucket", v.decision.fable, v.decision.fable_order);
 
   $("accounts").innerHTML = (v.accounts || []).map(a => accountCard(a, v)).join("");
+  renderSessions(v.sessions);
 
   $("changes").innerHTML = (v.changes || []).slice().reverse().slice(0, 12).map(c => `<li>
       <span class="mark"></span><span class="chip">${esc(c.bucket)}</span>
@@ -298,6 +299,71 @@ function renderOutlook(o) {
   card.innerHTML = `<div class="eyebrow">All accounts · the week ahead</div>
     <div class="outlook-head"><span class="chip ${v.chip.tone}">${esc(v.chip.text)}</span><span class="reason">${v.used}% of all the weekly room used</span></div>
     ${v.lines.map(l => `<p class="reason">${esc(l)}</p>`).join("")}${table}`;
+}
+
+// ---------- sessions ----------
+
+// What the sessions card shows for one window: rows nested under their parent, each with its
+// tokens and share. A session's tokens are input, output and cache writes (cache reads are
+// shown apart); a parent's count its subagents' too. Pure, so it is tested.
+function sessionsView(w) {
+  const tokens = t => (t?.input_tokens || 0) + (t?.output_tokens || 0) + (t?.cache_creation_tokens || 0);
+  const total = { requests: w.total?.requests || 0, tokens: tokens(w.total) };
+  const percent = (n, of) => of ? Math.round(n * 100 / of) : 0;
+  const split = m => {
+    const entries = Object.entries(m || {}).map(([key, t]) => ({ key, n: tokens(t) || t.requests || 0 })).sort((a, b) => b.n - a.n || (a.key < b.key ? -1 : 1));
+    const sum = entries.reduce((s, e) => s + e.n, 0);
+    return entries.map(e => ({ key: e.key, share: sum ? percent(e.n, sum) : 100 }));
+  };
+  const rows = [];
+  const add = (s, depth) => {
+    rows.push({
+      depth, id: s.id, label: s.id ? s.id.slice(0, 8) : "no session", none: s.id === "", last: s.last,
+      requests: s.total?.requests || 0, tokens: tokens(s.total), ownTokens: tokens(s.own), cacheRead: s.total?.cache_read_tokens || 0,
+      share: percent(tokens(s.total), total.tokens), accounts: split(s.accounts), estimated: !!s.estimated,
+      advisor: { requests: s.advisor?.requests || 0, tokens: tokens(s.advisor), models: Object.keys(s.advisor_models || {}).sort() },
+    });
+    for (const c of s.subagents || []) add(c, depth + 1);
+  };
+  for (const s of w.sessions || []) add(s, 0);
+  return { total, rows, other: { sessions: w.other?.sessions || 0, tokens: tokens(w.other?.total) } };
+}
+
+function sessionRowHtml(r, name) {
+  const accounts = r.accounts.map(a => esc(name(a.key)) + (r.accounts.length > 1 ? ` <span class="faint">${a.share}%</span>` : "")).join(" · ") || "—";
+  const advisor = r.advisor.requests
+    ? `${r.advisor.requests} · ${num(r.advisor.tokens)} <span class="faint">${esc(r.advisor.models.join(", "))}</span>` : "—";
+  const detail = `${r.depth ? "" : `own ${num(r.ownTokens)} · `}cache reads ${num(r.cacheRead)}`;
+  return `<tr class="${r.depth ? "sub" : ""}${r.none ? " none" : ""}">
+    <th scope="row" title="${esc(r.id)}">${r.depth ? '<span class="faint">↳ </span>' : ""}<span class="sid">${esc(r.label)}</span>${r.estimated
+      ? ' <span class="est" title="Rebuilt from transcripts: the account is a guess">~</span>' : ""}</th>
+    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td>
+    <td>${r.share}%</td><td class="left">${accounts}</td><td class="left">${advisor}</td></tr>`;
+}
+
+let sessionSpan = "five_hour";
+let sessionData = null;
+
+function renderSessions(s) {
+  if (s) sessionData = s;
+  const w = sessionData?.[sessionSpan];
+  const card = $("sessions");
+  if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; return; }
+  const v = sessionsView(w);
+  $("sessions-hint").textContent = `${sessionSpan === "week" ? "last 7 days" : "last 5 hours"} · ${v.total.requests} requests · ${num(v.total.tokens)} tokens (input, output, cache writes)`;
+  card.innerHTML = v.rows.length ? `<table class="sessions-table">
+      <thead><tr><th>Session</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Accounts</th><th class="left">Advisor</th></tr></thead>
+      <tbody>${v.rows.map(r => sessionRowHtml(r, short)).join("")}</tbody>
+    </table>${v.other.sessions ? `<p class="hint">${v.other.sessions} smaller sessions not listed: ${num(v.other.tokens)} tokens.</p>` : ""}`
+    : '<p class="empty">No requests in this window.</p>';
+}
+
+for (const b of $("session-span").querySelectorAll("button")) {
+  b.addEventListener("click", () => {
+    sessionSpan = b.dataset.span;
+    for (const o of $("session-span").querySelectorAll("button")) o.setAttribute("aria-pressed", String(o === b));
+    renderSessions();
+  });
 }
 
 // A config write makes CPA rebuild the plugin; read the status back once it has settled.
