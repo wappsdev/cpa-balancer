@@ -43,6 +43,7 @@ import (
 	"github.com/wappsdev/cpa-balancer/internal/engine"
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/outlook"
+	"github.com/wappsdev/cpa-balancer/internal/transcripts"
 	"github.com/wappsdev/cpa-balancer/internal/web"
 )
 
@@ -54,6 +55,7 @@ var (
 	configYAML string // the config current was built from
 	configErr  string // why the last config was rejected; "" when it was applied
 	recorder   *history.Recorder
+	transcript string // the transcript store's directory, next to the history
 	stop       chan struct{}
 	host       hostClient
 )
@@ -193,6 +195,7 @@ func configure(req []byte) []byte {
 		// The recorder outlives engines: a config change must not drop the open history slot.
 		if recorder == nil {
 			recorder = history.NewRecorder(filepath.Join(filepath.Dir(cfg.StatePath), "history"))
+			transcript = filepath.Join(filepath.Dir(cfg.StatePath), transcripts.Dir)
 		}
 		e := engine.New(cfg, host, time.Now, recorder)
 		previous := current
@@ -243,6 +246,23 @@ func (pluginAPI) History(rangeName string) (any, error) {
 		return nil, errors.New("not configured")
 	}
 	return rec.Query(rangeName, time.Now())
+}
+
+// Transcripts reads the transcript store: what Claude Code's transcripts say, which no account's
+// quota figure includes. It never touches the history. The path is copied under the lock and the
+// files are read outside it, bounded by transcripts.Query.
+func (pluginAPI) Transcripts(rangeName string) (any, error) {
+	days, ok := map[string]int{"7d": 7, "30d": 30}[rangeName]
+	if !ok {
+		return nil, errors.New("range must be one of 7d, 30d")
+	}
+	mu.Lock()
+	dir := transcript
+	mu.Unlock()
+	if dir == "" {
+		return nil, errors.New("not configured")
+	}
+	return transcripts.Query(dir, time.Now(), days), nil
 }
 
 // Outlook looks a week ahead at all accounts together.

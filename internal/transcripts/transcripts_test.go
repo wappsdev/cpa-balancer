@@ -31,7 +31,7 @@ func hour(daysAgo int, h int) time.Time {
 func store(t *testing.T, rows map[Key]history.Traffic) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "transcripts")
-	if err := Write(dir, rows); err != nil {
+	if err := Write(dir, rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -75,7 +75,7 @@ func TestWriteIsAPureFunctionOfItsInputAndLeavesNoStaleDay(t *testing.T) {
 	if len(first) != 2 || first["2026-10-09.jsonl"] == "" || first["2026-10-07.jsonl"] == "" {
 		t.Fatalf("one file per UTC day: %v", first)
 	}
-	if err := Write(dir, rows); err != nil {
+	if err := Write(dir, rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	if again := snapshot(t, dir); len(again) != len(first) || again["2026-10-09.jsonl"] != first["2026-10-09.jsonl"] || again["2026-10-07.jsonl"] != first["2026-10-07.jsonl"] {
@@ -86,7 +86,7 @@ func TestWriteIsAPureFunctionOfItsInputAndLeavesNoStaleDay(t *testing.T) {
 		t.Fatal(err)
 	}
 	delete(rows, Key{Hour: hour(3, 23), Session: sid2, Model: opus})
-	if err := Write(dir, rows); err != nil {
+	if err := Write(dir, rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := snapshot(t, dir)
@@ -226,5 +226,61 @@ func TestTheModelsOfOneSessionAreCapped(t *testing.T) {
 	row := find(s, sid)
 	if len(row.Models) != 9 || row.Models[history.OtherSession].Requests != 4 || row.Total.Requests != 12 {
 		t.Fatalf("%+v", row.Models)
+	}
+}
+
+func TestAnEmptyTitleIsNoTitleAndTitlesAreCleanedOnTheWayIn(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "transcripts")
+	rows := map[Key]history.Traffic{{Hour: hour(1, 9), Session: sid, Model: opus}: tok(1, 1, 1)}
+	long := strings.Repeat("é", 300)
+	err := Write(dir, rows, map[string]Title{
+		sid:  {Text: "  a\x00b\n\u202ec" + long, Kind: KindCustom},
+		sid2: {Text: " \x01 ", Kind: KindAI}, // nothing left once cleaned
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, TitlesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), sid2) || strings.ContainsAny(string(b), "\u202e") || strings.Contains(string(b), `\u0000`) {
+		t.Fatalf("what the store holds is clean: %s", b)
+	}
+	got := find(Query(dir, now, 7), sid)
+	if got == nil || got.TitleKind != KindCustom || len([]rune(got.Title)) != MaxTitle || !strings.HasPrefix(got.Title, "abc") {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestTheTitleOfASessionWithNoRowInTheStoreIsNotKept(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "transcripts")
+	rows := map[Key]history.Traffic{{Hour: hour(1, 9), Session: sid + "/ab12", Model: opus}: tok(1, 1, 1)}
+	if err := Write(dir, rows, map[string]Title{sid: {Text: "kept", Kind: KindAgent}, sid2: {Text: "dropped", Kind: KindAI}}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, TitlesFile))
+	if !strings.Contains(string(b), "kept") || strings.Contains(string(b), "dropped") {
+		t.Fatalf("a family's title is kept, an absent session's is not: %s", b)
+	}
+	if err := Write(dir, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, TitlesFile)); err == nil {
+		t.Fatal("a run with no titles leaves no titles file")
+	}
+}
+
+func TestATitleFileFromOutsideIsReadWithTheSameBounds(t *testing.T) {
+	dir := store(t, map[Key]history.Traffic{{Hour: hour(1, 9), Session: sid, Model: opus}: tok(1, 1, 1)})
+	body := `{"session":"` + sid + `","title":"<img src=x onerror=1>` + strings.Repeat("t", 500) + `","kind":"custom"}` + "\n" +
+		`{"session":"` + sid + `","title":"second line is ignored","kind":"ai"}` + "\nnot json\n" +
+		`{"session":"` + sid2 + `","title":"` + strings.Repeat("x", history.MaxLine) + `","kind":"ai"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, TitlesFile), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := find(Query(dir, now, 7), sid)
+	if got == nil || len([]rune(got.Title)) != MaxTitle || !strings.HasPrefix(got.Title, "<img") {
+		t.Fatalf("a long title is cut (the page escapes it): %+v", got)
 	}
 }

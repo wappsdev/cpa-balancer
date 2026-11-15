@@ -18,6 +18,7 @@ var now = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 const (
 	sessA = "11111111-aaaa-4bbb-8ccc-000000000001"
 	sessB = "22222222-aaaa-4bbb-8ccc-000000000002"
+	sessC = "33333333-aaaa-4bbb-8ccc-000000000003"
 	opus  = "claude-opus-5-5"
 	haiku = "claude-haiku-5-5"
 	fable = "claude-fable-5-2"
@@ -40,6 +41,12 @@ func assistant(session, id, model string, at time.Time, u usage) string {
 	}
 	return line(map[string]any{"type": "assistant", "sessionId": session, "timestamp": at.Format(time.RFC3339Nano), "isSidechain": false,
 		"message": map[string]any{"id": id, "model": model, "usage": us, "content": []map[string]any{{"type": "text", "text": secret}}}})
+}
+
+// titleLine builds one of the lines that name a session: kind is custom-title, agent-name or ai-title.
+func titleLine(kind, session, value string) string {
+	field := map[string]string{"custom-title": "customTitle", "agent-name": "agentName", "ai-title": "aiTitle"}[kind]
+	return line(map[string]any{"type": kind, field: value, "sessionId": session})
 }
 
 func line(v map[string]any) string {
@@ -129,6 +136,72 @@ func bytesOf(t *testing.T, dir string) map[string]string {
 		return nil
 	})
 	return out
+}
+
+func titleOf(s transcripts.Summary, id string) (string, string) {
+	if r := root(s, id); r != nil {
+		return r.Title, r.TitleKind
+	}
+	return "", "?"
+}
+
+func TestTheLastTitleOfEachKindWinsAndTheMostDeliberateKindShows(t *testing.T) {
+	msg := func(session string) string { return assistant(session, "m-"+session, opus, at, usage{in: 1, out: 1}) }
+	projects := project(t, map[string][]string{
+		// a custom name set before the later automatic ones still shows; the last custom one wins
+		"proj-a/" + sessA + ".jsonl": {titleLine("custom-title", sessA, "Custom one"), msg(sessA), titleLine("ai-title", sessA, "Ai late"), titleLine("agent-name", sessA, "Agent late"), titleLine("custom-title", sessA, "Custom two")},
+		// no custom name: the agent's name beats the automatic one, whatever the order
+		"proj-a/" + sessB + ".jsonl": {titleLine("agent-name", sessB, "Agent first"), titleLine("ai-title", sessB, "Ai second"), titleLine("agent-name", sessB, "Agent last"), titleLine("ai-title", sessB, "Ai last"), msg(sessB)},
+		"proj-a/" + sessC + ".jsonl": {titleLine("ai-title", sessC, "Ai one"), msg(sessC), titleLine("ai-title", sessC, "Ai two")},
+	})
+	store := storeDir(t)
+	rep := run(t, projects, store, false)
+	s := summary(store)
+	for id, want := range map[string][2]string{sessA: {"Custom two", "custom"}, sessB: {"Agent last", "agent"}, sessC: {"Ai two", "ai"}} {
+		if title, kind := titleOf(s, id); title != want[0] || kind != want[1] {
+			t.Errorf("%s: %q %q, want %q %q", id[:2], title, kind, want[0], want[1])
+		}
+	}
+	if rep.Titled != 3 {
+		t.Fatalf("%+v", rep)
+	}
+}
+
+func TestATitleOnlyCountsForTheSessionWhoseTranscriptHoldsIt(t *testing.T) {
+	projects := project(t, map[string][]string{
+		"proj-a/" + sessA + ".jsonl": {
+			assistant(sessA, "m1", opus, at, usage{in: 1, out: 1}),
+			titleLine("custom-title", sessB, "Copied from another session"), // a line copied in from a resumed session
+		},
+		"proj-a/" + sessA + "/subagents/agent-ab12.jsonl": {assistant(sessA, "m2", haiku, at, usage{in: 1, out: 1}), titleLine("custom-title", sessA, "Named by a subagent")},
+		"proj-a/" + sessB + ".jsonl":                      {titleLine("custom-title", sessB, "A name with no usage behind it")},
+	})
+	store := storeDir(t)
+	rep := run(t, projects, store, false)
+	if title, _ := titleOf(summary(store), sessA); title != "" {
+		t.Fatalf("a name from another session or a subagent's file is not the session's: %q", title)
+	}
+	if rep.Titled != 0 {
+		t.Fatalf("%+v", rep)
+	}
+	if _, err := os.Stat(filepath.Join(store, transcripts.TitlesFile)); err == nil {
+		t.Fatal("no title, no titles file")
+	}
+}
+
+func TestATitleIsBoundedAndStrippedOfControlCharacters(t *testing.T) {
+	hostile := "<img src=x onerror=alert(1)>\x00\x1b[31m\n" + strings.Repeat("z", 400)
+	projects := project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {assistant(sessA, "m1", opus, at, usage{in: 1, out: 1}), titleLine("custom-title", sessA, hostile)}})
+	store := storeDir(t)
+	run(t, projects, store, false)
+	title, kind := titleOf(summary(store), sessA)
+	if kind != "custom" || len([]rune(title)) != transcripts.MaxTitle || !strings.HasPrefix(title, "<img src=x onerror=alert(1)>[31m") || strings.ContainsAny(title, "\x00\x1b\n") {
+		t.Fatalf("%q %q", title, kind)
+	}
+	b, _ := os.ReadFile(filepath.Join(store, transcripts.TitlesFile))
+	if strings.Contains(string(b), `\u001b`) || strings.Contains(string(b), `\u0000`) || strings.Count(string(b), "\n") != 1 {
+		t.Fatalf("%s", b)
+	}
 }
 
 func TestAMessageSplitOverSeveralLinesCountsOnceWithItsLargestOutput(t *testing.T) {
@@ -225,6 +298,25 @@ func TestSubagentTranscriptsRollIntoTheirParentAndAreKeptPerChild(t *testing.T) 
 	}
 }
 
+func TestLinksAreNotFollowed(t *testing.T) {
+	elsewhere := project(t, map[string][]string{"agent-ab12.jsonl": {assistant(sessA, "m-linked", haiku, at, usage{in: 1, out: 1})}})
+	projects := project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {assistant(sessA, "m1", opus, at, usage{in: 1, out: 1})}})
+	if err := os.MkdirAll(filepath.Join(projects, "proj-a", sessA), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(projects, "proj-a", sessA, "subagents")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(projects, "proj-a", sessA+".jsonl"), filepath.Join(projects, "proj-a", sessB+".jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	store := storeDir(t)
+	rep := run(t, projects, store, false)
+	if rep.Messages != 1 || rep.MainFiles != 1 || rep.SubagentFiles != 0 {
+		t.Fatalf("a linked directory or file is not read: %+v", rep)
+	}
+}
+
 func TestAnAdvisorIterationIsItsOwnRowWithTheAdvisorModel(t *testing.T) {
 	iterations := []map[string]any{
 		{"type": "message", "model": opus, "input_tokens": 3, "output_tokens": 139},
@@ -301,7 +393,7 @@ func TestRunningTwiceLeavesTheSameBytes(t *testing.T) {
 
 func TestARunReplacesWhatTheStoreHeld(t *testing.T) {
 	store := storeDir(t)
-	if err := transcripts.Write(store, map[transcripts.Key]history.Traffic{{Hour: at, Session: "gone", Model: opus}: {Requests: 9}}); err != nil {
+	if err := transcripts.Write(store, map[transcripts.Key]history.Traffic{{Hour: at, Session: "gone", Model: opus}: {Requests: 9}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	projects := project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {assistant(sessA, "m1", opus, at.Add(24*time.Hour), usage{in: 1, out: 1})}})
@@ -317,6 +409,7 @@ func TestADryRunWritesNothingAndPrintsOnlyCounts(t *testing.T) {
 	projects := project(t, map[string][]string{"proj-a/" + sessA + ".jsonl": {
 		assistant(sessA, "m1", opus, at, usage{in: 10, out: 1}),
 		long,
+		titleLine("custom-title", sessA, "Made-up name that must not be printed"),
 		"not json at all",
 		assistant(sessA, "m2", opus, at.Add(24*time.Hour), usage{in: 20, out: 2}),
 	}})
@@ -325,7 +418,7 @@ func TestADryRunWritesNothingAndPrintsOnlyCounts(t *testing.T) {
 	if _, err := os.Stat(store); err == nil {
 		t.Fatal("a dry run must not create the store")
 	}
-	if rep.Rows != 2 || rep.Sessions != 1 || rep.SkippedLines != 2 || rep.Messages != 2 || !rep.DryRun {
+	if rep.Rows != 2 || rep.Sessions != 1 || rep.SkippedLines != 2 || rep.Messages != 2 || rep.Titled != 1 || !rep.DryRun {
 		t.Fatalf("%+v", rep)
 	}
 	var out bytes.Buffer
@@ -336,7 +429,7 @@ func TestADryRunWritesNothingAndPrintsOnlyCounts(t *testing.T) {
 			t.Errorf("no %s in\n%s", want, text)
 		}
 	}
-	for _, leak := range []string{secret, sessA, "proj-a", "opus"} {
+	for _, leak := range []string{secret, sessA, "proj-a", "opus", "Made-up name"} {
 		if strings.Contains(text, leak) {
 			t.Errorf("the report names %q:\n%s", leak, text)
 		}

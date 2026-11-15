@@ -8,6 +8,7 @@ test:
 	node internal/web/session_test.mjs
 	node internal/web/outlook_test.mjs
 	node internal/web/sessions_test.mjs
+	node internal/web/transcripts_test.mjs
 
 build:
 	go build -buildmode=c-shared -o dist/cpa-balancer.dylib ./cmd/cpa-balancer

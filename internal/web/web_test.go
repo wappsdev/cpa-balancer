@@ -28,6 +28,12 @@ func (f *fakeAPI) History(r string) (any, error) {
 	return map[string]int{"step": 1800}, nil
 }
 func (f *fakeAPI) Outlook() (any, error) { return map[string]string{"verdict": "lasts"}, nil }
+func (f *fakeAPI) Transcripts(r string) (any, error) {
+	if r != "7d" {
+		return nil, errors.New("range must be one of 7d, 30d")
+	}
+	return map[string]int{"days": 7}, nil
+}
 func (f *fakeAPI) Credentials() (any, error) {
 	return ClaudeCredentials([]pluginapi.HostAuthFileEntry{
 		{ID: "claude-a.json", Provider: "claude", Email: "a@x", Status: "active", AuthIndex: "7", Path: "/secret/path"},
@@ -86,6 +92,12 @@ func TestRoutes(t *testing.T) {
 	if res := call(api, "GET", base+"/outlook", nil); res.StatusCode != 200 || string(res.Body) != `{"verdict":"lasts"}` {
 		t.Fatalf("outlook: %d %s", res.StatusCode, res.Body)
 	}
+	if res := call(api, "GET", base+"/transcripts", url.Values{"range": {"7d"}}); res.StatusCode != 200 || string(res.Body) != `{"days":7}` {
+		t.Fatalf("transcripts: %d %s", res.StatusCode, res.Body)
+	}
+	if call(api, "GET", base+"/transcripts", url.Values{"range": {"1y"}}).StatusCode != 400 || call(api, "POST", base+"/transcripts", nil).StatusCode != 404 {
+		t.Fatal("transcripts is a GET with a checked range")
+	}
 	if call(api, "GET", "/v0/management/other", nil).StatusCode != 404 {
 		t.Fatal("unknown path must be 404")
 	}
@@ -93,7 +105,7 @@ func TestRoutes(t *testing.T) {
 
 func TestRegistrationListsEveryRouteAndResource(t *testing.T) {
 	reg := Registration()
-	if len(reg["routes"].([]map[string]any)) != 6 || len(reg["resources"].([]map[string]any)) != len(resources) {
+	if len(reg["routes"].([]map[string]any)) != 7 || len(reg["resources"].([]map[string]any)) != len(resources) {
 		t.Fatalf("%+v", reg)
 	}
 	menus := 0

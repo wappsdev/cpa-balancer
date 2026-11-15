@@ -89,16 +89,15 @@ into its parent. Requests without a session id are counted as `no session`.
 The Overview shows them for the last 5 hours and the last 7 days (rolling windows, not an
 account's own quota window): the session id (first 8 characters; the full id is in the tooltip),
 when it was last seen, requests, tokens (input, output and cache writes; cache reads are in the
-tooltip), its share of the window, the accounts it used and any advisor use. Subagents are nested
-under their parent. `/status` carries the same data as `sessions.five_hour` and `sessions.week`:
+tooltip), its share of the window and the accounts it used. Subagents are nested under their parent. `/status` carries the same data as `sessions.five_hour` and `sessions.week`:
 `total` and `accounts` are the window's own counts, each row has `own` (itself alone) and `total`
 (with its subagents), and the listed root sessions' `total` plus `other.total` always equal the
 window's `total`. The week lists its 30 largest roots; the 5 hours are not cut.
 
 CPA names a Claude Code session `claude:<sid>` and a subagent `claude:<sid>:agent:<agentId>`. The
 balancer stores the main session as `<sid>`, the name of its transcript file, and a subagent as
-`<sid>/<agentId>` under its parent (nested subagents the same way), so live rows and rows
-imported from transcripts land on the same key. An id in another form is kept as it came.
+`<sid>/<agentId>` under its parent (nested subagents the same way), the same keys the transcript
+store uses. An id in another form is kept as it came.
 
 A session id comes from a client header, so only a plain id (up to 128 of `A-Za-z0-9._:-/`) is
 stored as given. Anything else, and every session past 200 in one slot, is counted under
@@ -108,28 +107,61 @@ client cannot grow the history without bound. Slots written before sessions were
 as `no session`.
 
 Advisor models' calls are not seen live: CPA reports only the top-level `usage` of a response,
-which leaves the advisor iterations out. Only the import below fills the advisor column.
+which leaves the advisor iterations out. Claude Code's transcripts hold them; see the next section.
 
-### Importing older sessions from transcripts
+## Transcript history
 
-`cpa-balancer-import` rebuilds sessions from Claude Code's transcripts (`go build ./cmd/cpa-balancer-import`).
-It is a one-off. It reads only the usage fields of assistant messages, never their text:
+Claude Code writes every session to a transcript file, with the exact token counts of each
+message. The balancer reads them into a store of its own, apart from the live history. The two
+never mix: a transcript names no account and sees none of the proxy's quota readings, so its
+numbers are not added to an account's figures, to the live sessions or to the charts, and nothing in
+them is estimated.
+
+`cpa-balancer-import` (`make build-import`, then `dist/cpa-balancer-import`) writes the store. It
+reads only the usage fields of assistant messages, never their text, and prints counts and dates
+only:
 
 ```
 cpa-balancer-import --projects <transcripts dir> --state <balancer data dir> --dry-run
 cpa-balancer-import --projects <transcripts dir> --state <balancer data dir>
 ```
 
-A message that spans several lines counts once, and a message id counts once whichever
-transcripts hold it (a resumed session copies earlier messages); a subagent's transcript counts under its parent
-session, and an advisor model's calls (`usage.iterations`) are counted apart from the account's
-own use. Transcripts do not name an account: each request is given the account the balancer had
-active for its bucket (main, or Fable by a model name containing `--fable`, which defaults to
-`fable`; the bucket lists live in CPA's config file, which the tool does not read) at that time, from its recorded history, or
-`unknown`. Those rows are marked `~` (estimated) on the page. The plugin writes a slot at every
-tick while it runs, so a slot it wrote, busy or idle, is never touched: the import fills only the
-time before the plugin ran and the gaps when it was off. Running it again adds nothing; run it
-while CPA is idle.
+The store is `<state>/transcripts/<YYYY-MM-DD>.jsonl` (UTC days), 90 days back, next to `history/`
+and written whole on every run: the store is a pure function of the transcripts, so running it
+again leaves the same bytes. A day whose transcripts are gone is removed from the store too, so
+Claude Code's own clean-up of old transcripts also shortens it. The importer never opens
+`history/`. Each line is one session, UTC hour and model with `requests`, `input_tokens`,
+`output_tokens`, `cache_read_tokens` and `cache_creation_tokens`:
+
+- A message that spans several lines counts once, and a message id counts once whichever
+  transcript holds it (a resumed session copies earlier messages); a message with no id counts
+  once per transcript line.
+- A main transcript is the session `<uuid>`, its file name. A subagent transcript
+  (`<uuid>/subagents/**/agent-<id>.jsonl`, workflow agents included) is kept under `<uuid>/<id>`,
+  the form the live path uses (see above), and a transcript whose name holds no agent id counts
+  under the session. A row is never counted twice: a session's figure with its subagents is the sum of
+  its own row and its children's, which the plugin works out when it reads.
+- An advisor model's iteration (`usage.iterations`, type `advisor_message`) is its own row, with
+  the advisor model and `"advisor": true`. The top-level usage leaves it out, and so do the session
+  totals and the window's `total`; `advisor` carries it.
+- A session's name is stored once, in `titles.jsonl`: the name set with `/rename`
+  (`custom-title` line), else the agent's name (`agent-name`), else the one Claude Code makes up
+  (`ai-title`), with its kind. Each kind can repeat in a transcript and the last one wins. Only the
+  session's own main transcript names it: a line that says it belongs to another session, and a
+  subagent's file, are not read for names. Control and format characters are removed and a name is
+  cut at 120 characters. These three line types are read for that one field each, never any
+  message text. A name is user text and is escaped on the page like every other value.
+- Ids and model names have the same bounds as the live store: a name that is not plain (letters,
+  digits and `._:-/`, up to 128 for a session, `[]@` and 64 for a model) is stored as `(other)`;
+  a line past 4 MB is skipped.
+
+The Management Center shows it on the History tab as "Transcript history", with a 7-day and a
+30-day switch: the largest sessions (30 listed, the rest summed), each with its tokens by model
+and the advisor models' tokens apart, subagents nested. A named session shows its name with the
+short id beside it. It is labelled "From Claude Code
+transcripts — not proxy quota; no account". It is served by `GET /transcripts?range=7d|30d` (below).
+The plugin only reads the store, and only the day files of the range, at most 200,000 rows a
+request (`truncated` says so when more were there).
 
 ## Look-ahead
 
@@ -183,6 +215,7 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 |---|---|---|
 | GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes and the sessions of the last 5 hours and 7 days |
 | GET | `/history?range=24h\|7d\|30d\|90d` | utilization, active account and tokens over time |
+| GET | `/transcripts?range=7d\|30d` | the transcript store over the window: root sessions with their subagents, tokens by model and advisor tokens; no account, never part of `/status` or `/history` |
 | GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), the same at each method's pace (`week.by_method`), and the measured work pace |
 | POST | `/run` | one balancer tick now |
 | POST | `/recheck?auth_file=…` | probe one account (or every account) now |

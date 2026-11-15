@@ -368,6 +368,75 @@ for (const b of $("session-span").querySelectorAll("button")) {
   });
 }
 
+// ---------- transcript history ----------
+
+// What the transcript card shows for one window of /transcripts: root sessions with their
+// subagents nested under them, tokens by model and the advisor models' tokens apart. A session's
+// tokens are input, output and cache writes (cache reads are shown apart). These numbers come from
+// Claude Code's transcripts, not from the proxy, so there is no account in them. Pure, so it is tested.
+function transcriptsView(w) {
+  w = w || {};
+  const tokens = t => (t?.input_tokens || 0) + (t?.output_tokens || 0) + (t?.cache_creation_tokens || 0);
+  const total = { requests: w.total?.requests || 0, tokens: tokens(w.total) };
+  const percent = (n, of) => of ? Math.round(n * 100 / of) : 0;
+  const byModel = m => Object.entries(m || {}).map(([key, t]) => ({ key, tokens: tokens(t) })).sort((a, b) => b.tokens - a.tokens || (a.key < b.key ? -1 : 1));
+  const rows = [];
+  const add = (s, depth) => {
+    const agent = s.id.includes("/") ? s.id.slice(s.id.indexOf("/") + 1) : s.id;
+    rows.push({
+      depth, id: s.id, label: (depth ? agent : s.id).slice(0, 8), last: s.last, title: depth ? "" : s.title || "", titleKind: s.title_kind || "",
+      requests: s.total?.requests || 0, tokens: tokens(s.total), cacheRead: s.total?.cache_read_tokens || 0,
+      share: percent(tokens(s.total), total.tokens), models: byModel(s.models),
+      advisor: { requests: s.advisor?.requests || 0, tokens: tokens(s.advisor), models: byModel(s.advisor_models) },
+    });
+    for (const c of s.subagents || []) add(c, depth + 1);
+  };
+  for (const s of w.sessions || []) add(s, 0);
+  return {
+    total, rows, truncated: !!w.truncated, advisor: { requests: w.advisor?.requests || 0, tokens: tokens(w.advisor) },
+    other: { sessions: w.other?.sessions || 0, tokens: tokens(w.other?.total) },
+  };
+}
+
+function transcriptRowHtml(r) {
+  const kinds = { custom: "set with /rename", agent: "agent name", ai: "made up by Claude Code" };
+  const name = r.title ? `<span class="stitle" title="${esc(r.title)} — ${esc(kinds[r.titleKind] || r.titleKind)}">${esc(r.title)}</span> ` : "";
+  const models = r.models.map(m => `${esc(m.key || "—")} <span class="faint">${num(m.tokens)}</span>`).join(" · ") || "—";
+  const advisor = r.advisor.requests
+    ? `${r.advisor.requests} · ${num(r.advisor.tokens)} <span class="faint">${r.advisor.models.map(m => esc(m.key || "—")).join(", ")}</span>` : "—";
+  return `<tr class="${r.depth ? "sub" : ""}">
+    <th scope="row" title="${esc(r.id)}">${r.depth ? '<span class="faint">↳ </span>' : ""}${name}<span class="sid${r.title ? " faint" : ""}">${esc(r.label)}</span></th>
+    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(`cache reads ${num(r.cacheRead)}`)}">${num(r.tokens)}</td>
+    <td>${r.share}%</td><td class="left">${models}</td><td class="left">${advisor}</td></tr>`;
+}
+
+let transcriptSpan = "7d";
+
+async function loadTranscripts() {
+  const card = $("transcripts");
+  try {
+    const v = transcriptsView(await api("GET", `${ROUTES}/transcripts?range=${transcriptSpan}`));
+    $("transcripts-hint").textContent = `${v.total.requests} requests · ${num(v.total.tokens)} tokens (input, output, cache writes)`;
+    card.innerHTML = v.rows.length ? `<table class="sessions-table">
+        <thead><tr><th>Session</th><th>Last used</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Models</th><th class="left">Advisor</th></tr></thead>
+        <tbody>${v.rows.map(transcriptRowHtml).join("")}</tbody>
+      </table>${v.other.sessions ? `<p class="hint">${v.other.sessions} smaller sessions not listed: ${num(v.other.tokens)} tokens.</p>` : ""}${v.truncated
+        ? '<p class="hint">The store holds more rows than one request reads: the oldest are left out.</p>' : ""}`
+      : '<p class="empty">No transcript data in this window. Run cpa-balancer-import to fill it.</p>';
+  } catch (e) {
+    $("transcripts-hint").textContent = "";
+    card.innerHTML = `<p class="empty">${esc(e.message || e)}</p>`;
+  }
+}
+
+for (const b of $("transcript-span").querySelectorAll("button")) {
+  b.addEventListener("click", () => {
+    transcriptSpan = b.dataset.range;
+    for (const o of $("transcript-span").querySelectorAll("button")) o.setAttribute("aria-pressed", String(o === b));
+    loadTranscripts();
+  });
+}
+
 // A config write makes CPA rebuild the plugin; read the status back once it has settled.
 const settle = () => new Promise(r => setTimeout(r, 2000));
 
@@ -455,7 +524,7 @@ function selectTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
   placeIndicator();
   for (const t of ["overview", "history", "settings"]) $("tab-" + t).hidden = t !== name;
-  if (name === "history") loadHistory();
+  if (name === "history") { loadHistory(); loadTranscripts(); }
   if (name === "settings") loadSettings();
 }
 for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => selectTab(b.dataset.tab));

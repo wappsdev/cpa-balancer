@@ -23,6 +23,7 @@ type API interface {
 	Status() any
 	History(rangeName string) (any, error)
 	Outlook() (any, error)
+	Transcripts(rangeName string) (any, error) // read-only: what Claude Code's transcripts say, apart from the live history
 	Run() any
 	Recheck(authFile string) any // "" = every account
 	Credentials() (any, error)
@@ -50,6 +51,7 @@ var routes = []struct{ method, path string }{
 	{http.MethodGet, "/status"},
 	{http.MethodGet, "/history"},
 	{http.MethodGet, "/outlook"},
+	{http.MethodGet, "/transcripts"},
 	{http.MethodPost, "/run"},
 	{http.MethodPost, "/recheck"},
 	{http.MethodGet, "/credentials"},
@@ -91,6 +93,8 @@ func Handle(req pluginapi.ManagementRequest, api API) pluginapi.ManagementRespon
 		return jsonResponse(api.History(req.Query.Get("range")))
 	case "GET /outlook":
 		return jsonResponse(api.Outlook())
+	case "GET /transcripts":
+		return jsonResponse(api.Transcripts(req.Query.Get("range")))
 	case "POST /run":
 		return jsonResponse(api.Run(), nil)
 	case "POST /recheck":

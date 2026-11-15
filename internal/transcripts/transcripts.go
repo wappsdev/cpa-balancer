@@ -3,8 +3,9 @@
 // purpose. A transcript names no account and sees no proxy quota, so nothing here may be added to
 // an account's figures or to the live sessions.
 //
-// The store is a directory of one file per UTC day, `<YYYY-MM-DD>.jsonl`, one JSON row per line.
-// The importer writes it whole on every run (see Write), the plugin reads it (see Query).
+// The store is a directory of one file per UTC day, `<YYYY-MM-DD>.jsonl`, one JSON row per line,
+// and `titles.jsonl`, one line per session that has a name. The importer writes it whole on every
+// run (see Write), the plugin reads it (see Query).
 package transcripts
 
 import (
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/lines"
@@ -27,7 +29,47 @@ const (
 	// TopSessions is how many root sessions a Summary lists; the rest is summed in Other.
 	TopSessions = 30
 	dateLayout  = "2006-01-02"
+	// TitlesFile holds the session names, one line per session.
+	TitlesFile = "titles.jsonl"
+	// MaxTitle is the longest session name kept, in characters.
+	MaxTitle = 120
 )
+
+// The kinds of a session's name, from the most to the least deliberate: one the user set with
+// /rename, an agent's name, and the one Claude Code makes up on its own.
+const (
+	KindCustom = "custom"
+	KindAgent  = "agent"
+	KindAI     = "ai"
+)
+
+// Title is a session's name as its transcript gives it.
+type Title struct {
+	Text string `json:"title"`
+	Kind string `json:"kind"`
+}
+
+type titleLine struct {
+	Session string `json:"session"`
+	Title
+}
+
+// CleanTitle is a name as it is stored and shown: without control and format characters (a
+// bidirectional override can turn a name into another), trimmed, at most MaxTitle characters. It is
+// user text, so the page escapes it as it does every value.
+func CleanTitle(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > MaxTitle {
+		s = strings.TrimSpace(string(r[:MaxTitle]))
+	}
+	return s
+}
 
 // maxRows is how many store rows one Query reads. A row is one session, hour and model, so a
 // month of heavy use stays far below it; a store past it is cut, newest days first, and says so.
@@ -57,7 +99,10 @@ type row struct {
 // the same input leaves the same bytes. A day file the input has no rows for is removed: the store
 // is a pure function of the transcripts, which is what makes a rerun safe. Files that are not day
 // files are left alone.
-func Write(dir string, rows map[Key]history.Traffic) error {
+//
+// titles are the sessions' names, by session id. Only a session the rows hold (itself or through a
+// subagent) keeps one, and a name that is empty once cleaned is no name.
+func Write(dir string, rows map[Key]history.Traffic, titles map[string]Title) error {
 	byDay := map[string][]row{}
 	for k, t := range rows {
 		day := k.Hour.UTC().Format(dateLayout)
@@ -82,6 +127,9 @@ func Write(dir string, rows map[Key]history.Traffic) error {
 			return err
 		}
 	}
+	if err := writeTitles(dir, rows, titles); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -95,6 +143,35 @@ func Write(dir string, rows map[Key]history.Traffic) error {
 		}
 	}
 	return nil
+}
+
+func writeTitles(dir string, rows map[Key]history.Traffic, titles map[string]Title) error {
+	present := map[string]bool{}
+	for k := range rows {
+		root, _, _ := strings.Cut(k.Session, "/")
+		present[root] = true
+	}
+	var out []byte
+	for _, id := range slices.Sorted(maps.Keys(titles)) {
+		t := titles[id]
+		t.Text = CleanTitle(t.Text)
+		if !present[id] || t.Text == "" {
+			continue
+		}
+		line, err := json.Marshal(titleLine{Session: id, Title: t})
+		if err != nil {
+			return err
+		}
+		out = append(append(out, line...), '\n')
+	}
+	path := filepath.Join(dir, TitlesFile)
+	if out == nil {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return replace(path, out)
 }
 
 func compareBool(a, b bool) int {
@@ -134,6 +211,8 @@ func replace(path string, data []byte) error {
 // top of Total, as the transcript reports them apart from the message's own usage.
 type Session struct {
 	ID            string                     `json:"id"`
+	Title         string                     `json:"title,omitempty"` // the session's name, a root session only
+	TitleKind     string                     `json:"title_kind,omitempty"`
 	First         time.Time                  `json:"first"`
 	Last          time.Time                  `json:"last"`
 	Total         history.Traffic            `json:"total"`
@@ -262,7 +341,39 @@ func Query(dir string, now time.Time, days int) Summary {
 			s.Other.Advisor.Add(r.Advisor)
 		}
 	}
+	if len(s.Sessions) > 0 {
+		titles := readTitles(dir)
+		for i := range s.Sessions {
+			if t, ok := titles[s.Sessions[i].ID]; ok {
+				s.Sessions[i].Title, s.Sessions[i].TitleKind = t.Text, t.Kind
+			}
+		}
+	}
 	return s
+}
+
+// readTitles reads the names file under the same bounds as the rows: a line past the history's
+// size limit is skipped, no more than maxRows lines are read, and a name is cleaned again. The
+// first line of a session wins.
+func readTitles(dir string) map[string]Title {
+	f, err := os.Open(filepath.Join(dir, TitlesFile))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	out := map[string]Title{}
+	n := 0
+	_, _ = lines.Each(f, history.MaxLine, func(raw []byte) {
+		var l titleLine
+		if n++; n > maxRows || json.Unmarshal(raw, &l) != nil {
+			return
+		}
+		l.Text = CleanTitle(l.Text)
+		if _, seen := out[l.Session]; !seen && l.Text != "" && (l.Kind == KindCustom || l.Kind == KindAgent || l.Kind == KindAI) {
+			out[l.Session] = l.Title
+		}
+	})
+	return out
 }
 
 // tally is a node's use with its children's, before the model maps are cut to their top keys.

@@ -33,6 +33,7 @@ type Report struct {
 	NestedFiles   int // of those, the ones below a directory of the subagents directory
 	SkippedLines  int // transcript lines that were broken or past MaxLine
 	Messages      int // distinct messages in range
+	Titled        int // sessions in the store that have a name
 	Sessions      int // distinct sessions, a subagent counted with its parent
 	Rows          int // rows the store holds (written, or a dry run's)
 	Days          []Day
@@ -53,6 +54,10 @@ func Run(o Options) (Report, error) {
 	// the copy with the largest output, then the smaller session key, owns it. A line with no id is
 	// its own message.
 	messages := map[string]message{}
+	// A session's names: the last line of each kind wins. Only a main transcript names its own
+	// session; a line that says it belongs to another session was copied in, and a subagent's
+	// file holds the agent's names, not the session's.
+	names := map[string]*[3]string{}
 	err := walk(o.Projects, func(f file) error {
 		switch {
 		case f.Subagent:
@@ -63,7 +68,19 @@ func Run(o Options) (Report, error) {
 		default:
 			rep.MainFiles++
 		}
-		return readFile(f.Path, f.Owner, func(m message, lineNo int) {
+		return readFile(f.Path, f.Owner, func(rec record, lineNo int) {
+			if t := rec.Title; t != nil {
+				if !f.Subagent && (t.Session == "" || t.Session == f.Owner) {
+					n := names[f.Owner]
+					if n == nil {
+						n = &[3]string{}
+						names[f.Owner] = n
+					}
+					n[map[string]int{transcripts.KindCustom: 0, transcripts.KindAgent: 1, transcripts.KindAI: 2}[t.Kind]] = t.Text
+				}
+				return
+			}
+			m := *rec.Message
 			if m.At.Before(earliest) || !m.At.Before(o.Now) {
 				return
 			}
@@ -99,10 +116,33 @@ func Run(o Options) (Report, error) {
 	}
 	rep.Rows = len(rows)
 	rep.Sessions, rep.Days = summarize(rows)
+	titles := titlesOf(names, rows)
+	rep.Titled = len(titles)
 	if o.DryRun {
 		return rep, nil
 	}
-	return rep, transcripts.Write(o.Store, rows)
+	return rep, transcripts.Write(o.Store, rows, titles)
+}
+
+// titlesOf picks each session's name, the most deliberate kind that has one, for the sessions the
+// rows hold.
+func titlesOf(names map[string]*[3]string, rows map[transcripts.Key]history.Traffic) map[string]transcripts.Title {
+	present := map[string]bool{}
+	for k := range rows {
+		present[rootOf(k.Session)] = true
+	}
+	kinds := [3]string{transcripts.KindCustom, transcripts.KindAgent, transcripts.KindAI}
+	out := map[string]transcripts.Title{}
+	for session, n := range names {
+		id := history.CleanID(session)
+		for i, text := range n {
+			if text = transcripts.CleanTitle(text); text != "" && present[id] {
+				out[id] = transcripts.Title{Text: text, Kind: kinds[i]}
+				break
+			}
+		}
+	}
+	return out
 }
 
 // summarize counts the rows' sessions (a subagent with its parent) and totals them per UTC day.
@@ -147,6 +187,7 @@ func (r Report) Write(w io.Writer) {
 	fmt.Fprintf(w, "  lines skipped:    %d (broken, or longer than %d MB)\n", r.SkippedLines, MaxLine>>20)
 	fmt.Fprintf(w, "  messages:         %d in %d sessions\n", r.Messages, r.Sessions)
 	fmt.Fprintf(w, "  store rows:       %d (a session, hour and model each)\n", r.Rows)
+	fmt.Fprintf(w, "  named sessions:   %d\n", r.Titled)
 	fmt.Fprintf(w, "\n  %-10s  %8s  %9s  %12s  %8s\n", "day (UTC)", "sessions", "requests", "tokens", "advisor")
 	for _, d := range r.Days {
 		fmt.Fprintf(w, "  %-10s  %8d  %9d  %12d  %8d\n", d.Date, d.Sessions, d.Requests, d.Tokens, d.Advisor)

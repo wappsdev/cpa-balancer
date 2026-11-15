@@ -15,6 +15,7 @@ import (
 
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/lines"
+	"github.com/wappsdev/cpa-balancer/internal/transcripts"
 )
 
 // MaxLine is the longest transcript line that is read. A line past it holds something large, such
@@ -42,11 +43,16 @@ type iteration struct {
 	usageFields
 }
 
-// transcriptLine holds every field of a transcript line the import reads.
+// transcriptLine holds every field of a transcript line the import reads: the usage of an
+// assistant message, and the name a title line gives its session. Nothing else is decoded.
 type transcriptLine struct {
-	Type      string `json:"type"`
-	Timestamp string `json:"timestamp"`
-	Message   struct {
+	Type        string `json:"type"`
+	Timestamp   string `json:"timestamp"`
+	SessionID   string `json:"sessionId"`   // of a title line
+	CustomTitle string `json:"customTitle"` // of a custom-title line, set with /rename
+	AgentName   string `json:"agentName"`   // of an agent-name line
+	AIName      string `json:"aiTitle"`     // of an ai-title line, made up by Claude Code
+	Message     struct {
 		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage struct {
@@ -72,20 +78,41 @@ type message struct {
 	Advisor []advisorCall
 }
 
-// decode reads one line; ok is false for anything that is not a usable assistant message.
-func decode(raw []byte, owner string) (m message, ok bool, err error) {
+// nameLine is a line that names a session.
+type nameLine struct {
+	Kind    string // transcripts.KindCustom, KindAgent or KindAI
+	Session string // the session the line says it belongs to; empty when it says none
+	Text    string
+}
+
+// record is what one line holds: an assistant message, a title, or nothing the import uses.
+type record struct {
+	Message *message
+	Title   *nameLine
+}
+
+// decode reads one line; an empty record is a line the import has no use for.
+func decode(raw []byte, owner string) (rec record, err error) {
 	var l transcriptLine
 	if err := json.Unmarshal(raw, &l); err != nil {
-		return message{}, false, err
+		return record{}, err
 	}
-	if l.Type != "assistant" {
-		return message{}, false, nil
+	switch l.Type {
+	case "custom-title":
+		return record{Title: &nameLine{Kind: transcripts.KindCustom, Session: l.SessionID, Text: l.CustomTitle}}, nil
+	case "agent-name":
+		return record{Title: &nameLine{Kind: transcripts.KindAgent, Session: l.SessionID, Text: l.AgentName}}, nil
+	case "ai-title":
+		return record{Title: &nameLine{Kind: transcripts.KindAI, Session: l.SessionID, Text: l.AIName}}, nil
+	case "assistant":
+	default:
+		return record{}, nil
 	}
 	at, err := time.Parse(time.RFC3339Nano, l.Timestamp)
 	if err != nil {
-		return message{}, false, nil
+		return record{}, nil
 	}
-	m = message{Owner: owner, ID: l.Message.ID, At: at.UTC(), Model: l.Message.Model, Usage: l.Message.Usage.usageFields}
+	m := message{Owner: owner, ID: l.Message.ID, At: at.UTC(), Model: l.Message.Model, Usage: l.Message.Usage.usageFields}
 	for _, it := range l.Message.Usage.Iterations {
 		// The top-level usage already holds the executor's own sub-calls ("message"); an advisor's are
 		// on top of it.
@@ -94,13 +121,13 @@ func decode(raw []byte, owner string) (m message, ok bool, err error) {
 		}
 	}
 	if m.Usage.zero() && len(m.Advisor) == 0 {
-		return message{}, false, nil // an error placeholder or a message that used nothing
+		return record{}, nil // an error placeholder or a message that used nothing
 	}
-	return m, true, nil
+	return record{Message: &m}, nil
 }
 
 // readFile decodes every assistant message of one transcript file.
-func readFile(path, owner string, each func(message, int), skipped *int) error {
+func readFile(path, owner string, each func(record, int), skipped *int) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -109,11 +136,11 @@ func readFile(path, owner string, each func(message, int), skipped *int) error {
 	n := 0
 	bad, err := lines.Each(f, MaxLine, func(raw []byte) {
 		n++
-		m, ok, derr := decode(raw, owner)
+		rec, derr := decode(raw, owner)
 		if derr != nil {
 			*skipped++
-		} else if ok {
-			each(m, n)
+		} else if rec.Message != nil || rec.Title != nil {
+			each(rec, n)
 		}
 	})
 	*skipped += bad
@@ -177,9 +204,12 @@ func walk(projects string, fn func(file) error) error {
 }
 
 func walkSubagents(dir, session string, depth int, fn func(file) error) error {
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return nil // most sessions have no subagents; a link in their place is not followed
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil // most sessions have no subagents
+		return nil
 	}
 	for _, e := range entries {
 		switch {
