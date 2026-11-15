@@ -43,6 +43,7 @@ type State struct {
 	Active   map[quota.Bucket]policy.Active `json:"active"`
 	Accounts map[string]*Account            `json:"accounts"`
 	Changes  []Change                       `json:"changes"`
+	Affinity Affinity                       `json:"affinity,omitzero"`
 }
 
 func New() *State {
@@ -67,6 +68,7 @@ func Load(path string) (*State, error) {
 	if s.Accounts == nil {
 		s.Accounts = map[string]*Account{}
 	}
+	s.Affinity.normalize()
 	return s, nil
 }
 

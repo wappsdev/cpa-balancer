@@ -76,6 +76,10 @@ func CleanID(id string) string {
 	return id
 }
 
+// PlainID reports whether id is a key the history would store as given: a plain id, neither empty
+// nor the name OtherSession stands under.
+func PlainID(id string) bool { return id != OtherSession && validID(id) }
+
 // validID reports whether a client-supplied id is a plain one: letters, digits and . _ : - / only.
 func validID(id string) bool {
 	if len(id) == 0 || len(id) > maxIDLength {

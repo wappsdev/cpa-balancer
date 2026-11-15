@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wappsdev/cpa-balancer/internal/affinity"
 	"gopkg.in/yaml.v3"
 )
 
@@ -66,6 +67,25 @@ type Buckets struct {
 	Fable []string `yaml:"fable" json:"fable"`
 }
 
+// Pins a project folder, or a single session, to an account. A pin holds until the account is
+// full; then the project falls back like any other. More pins can be set on the page (the
+// state's), and those win over these for the same key.
+const (
+	MaxFolderPins  = 100
+	MaxSessionPins = 200
+)
+
+// Affinity binds every Claude Code session to an account through its project folder.
+type Affinity struct {
+	// ProjectsDir is Claude Code's projects directory; a session's folder is the directory in it
+	// that holds `<session id>.jsonl`.
+	ProjectsDir string `yaml:"projects_dir" json:"projects_dir"`
+	// FolderPins maps a folder name to the auth file of its account.
+	FolderPins map[string]string `yaml:"folder_pins,omitempty" json:"folder_pins,omitempty"`
+	// SessionPins maps a main session's id to the auth file of its account; its subagents follow it.
+	SessionPins map[string]string `yaml:"session_pins,omitempty" json:"session_pins,omitempty"`
+}
+
 type Config struct {
 	Enabled    bool       `yaml:"enabled" json:"enabled"`
 	Paused     bool       `yaml:"paused" json:"paused"` // stay loaded, delegate every pick, no probes or anchors
@@ -75,6 +95,7 @@ type Config struct {
 	Buckets    Buckets    `yaml:"buckets" json:"buckets"`
 	Thresholds Thresholds `yaml:"thresholds" json:"thresholds"`
 	Anchor     Anchor     `yaml:"anchor" json:"anchor"`
+	Affinity   Affinity   `yaml:"affinity" json:"affinity"`
 }
 
 func Default() Config {
@@ -87,7 +108,8 @@ func Default() Config {
 			FinalCap: 99, SessionCap: 98,
 			MinDwellMinutes: 60, StaleHours: 6,
 		},
-		Anchor: Anchor{Enabled: true, Model: "claude-haiku-4-5-20251001", FallbackModel: "claude-sonnet-5-5"},
+		Anchor:   Anchor{Enabled: true, Model: "claude-haiku-4-5-20251001", FallbackModel: "claude-sonnet-5-5"},
+		Affinity: Affinity{ProjectsDir: "~/.claude/projects"},
 	}
 }
 
@@ -111,6 +133,13 @@ func Parse(raw []byte) (Config, error) {
 			return Config{}, fmt.Errorf("resolve state_path: %w", err)
 		}
 		cfg.StatePath = filepath.Join(home, cfg.StatePath[2:])
+	}
+	if strings.HasPrefix(cfg.Affinity.ProjectsDir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve affinity.projects_dir: %w", err)
+		}
+		cfg.Affinity.ProjectsDir = filepath.Join(home, cfg.Affinity.ProjectsDir[2:])
 	}
 	return cfg, nil
 }
@@ -175,6 +204,38 @@ func (c Config) Validate() error {
 			return fmt.Errorf("accounts %s and %s are both named %q; give one a label", other, file, name)
 		}
 		taken[strings.ToLower(name)] = file
+	}
+	return c.validateAffinity()
+}
+
+// validateAffinity checks the directory and the pins. Messages never name a folder or a session:
+// they reach the log and the page, and a folder name is user data.
+func (c Config) validateAffinity() error {
+	a := c.Affinity
+	if a.ProjectsDir == "" {
+		return fmt.Errorf("affinity.projects_dir must not be empty")
+	}
+	if len(a.FolderPins) > MaxFolderPins {
+		return fmt.Errorf("affinity.folder_pins holds at most %d pins", MaxFolderPins)
+	}
+	if len(a.SessionPins) > MaxSessionPins {
+		return fmt.Errorf("affinity.session_pins holds at most %d pins", MaxSessionPins)
+	}
+	for folder, account := range a.FolderPins {
+		if !affinity.ValidProject(folder) {
+			return fmt.Errorf("affinity.folder_pins: a folder name is not valid")
+		}
+		if !c.Managed(account) {
+			return fmt.Errorf("affinity.folder_pins: a pin names an account that is not configured")
+		}
+	}
+	for session, account := range a.SessionPins {
+		if !affinity.ValidSID(session) {
+			return fmt.Errorf("affinity.session_pins: a session id is not valid")
+		}
+		if !c.Managed(account) {
+			return fmt.Errorf("affinity.session_pins: a pin names an account that is not configured")
+		}
 	}
 	return nil
 }
