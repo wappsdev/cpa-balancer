@@ -163,7 +163,7 @@ func isClaude(req pluginapi.SchedulerPickRequest) bool {
 	return req.Provider == "claude" || (len(req.Providers) == 1 && req.Providers[0] == "claude")
 }
 
-// Pick answers scheduler.pick without I/O.
+// Pick answers scheduler.pick. Its only I/O is the directory-name lookup of a session not seen before.
 func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
 	candidates := map[string]bool{}
 	for _, c := range req.Candidates {

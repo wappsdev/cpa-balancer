@@ -61,6 +61,10 @@ The config lives in CPA's config file under `plugins.configs.cpa-balancer`:
             enabled: true
             model: claude-haiku-4-5-20251001
             fallback_model: claude-sonnet-5-5
+          affinity:
+            projects_dir: ~/.claude/projects   # Claude Code's projects directory
+            folder_pins: {my-folder: claude-xxxxxxxx-first@example.com.json}   # optional
+            session_pins: {<main session id>: claude-xxxxxxxx-second@example.com.json}   # optional
 
 An invalid config is not applied: the plugin keeps the previous one and reports
 `config_error` on its page.
@@ -108,6 +112,47 @@ as `no session`.
 
 Advisor models' calls are not seen live: CPA reports only the top-level `usage` of a response,
 which leaves the advisor iterations out. Claude Code's transcripts hold them; see the next section.
+
+## Project affinity
+
+Every Claude Code session is bound to an account through its project folder, so all sessions of one
+folder use one account (and one prompt cache). Each rule below applies to requests of the configured
+buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to CPA as before.
+
+- **Session and folder.** CPA gives the scheduler plugin the client's request headers, not its own
+  `claude:<sid>` ids (it makes those later). The balancer reads `X-Claude-Code-Session-Id` and
+  `X-Claude-Code-Agent-Id`, and builds the same key the history uses (`<sid>`, or `<sid>/<agentId>` for a
+  subagent). A session's folder is the directory under `affinity.projects_dir` that holds
+  `<sid>.jsonl`; a subagent uses its parent's folder. The balancer lists directory names and checks that
+  the file exists. It never opens a transcript. The lookup is cached (a miss for 30 seconds, because
+  Claude Code writes the transcript after the first request). A session with no header, no folder yet or
+  an id that is not a plain one has no project: its pick is CPA's, as before.
+- **Stay until full.** A project stays on its home account until that account reaches its weekly cap,
+  the cap in force from `thresholds` and the account's reserve (the same cap the balancer switches on).
+  Only a fresh weekly reading at or over the cap is "full". A 5-hour cap, a CPA cooldown, stale data
+  or an account CPA does not offer for a request is a detour for that request: the project keeps its
+  home and the request goes to another account (reason `fallback`). When the home is full the project
+  moves to another account and stays there. A project never moves only to balance.
+- **Balance over time.** A new project, and a project that moves, takes the account with the most weekly
+  headroom: room under the cap in percent, times the plan's size (a plan not read yet counts as one
+  Pro), so the load evens out over the week. A tie goes to CPA's existing order. If no account is usable
+  the project keeps its home and CPA's existing order decides (it releases reserves and uses credits as
+  before).
+- **Pins.** A folder pin and a session pin (a main session's id; its subagents follow it) hold until the
+  pinned account is full or held back. Then the request falls back like any other, and the page says
+  so; the pin returns when the account has room. A session pin outranks a folder pin, and either outranks
+  the home. Pins come from the config (`affinity.folder_pins`, `affinity.session_pins`, read only on the
+  page) and from the page (kept in the state file). Limits: 100 folder pins and 200 session pins in
+  each place; the state keeps at most 200 project homes (the least recently used one is dropped).
+- **Fable.** A project moves only when its all-models week is full. A full Fable week alone sends that
+  Fable request to another account and leaves the project where it is.
+
+The Sessions card shows each session's account and why: `project home`, `folder pin`, `session pin`,
+`fallback after cap`, `folder pin: account full, fallback`, `session pin: account full, fallback` or
+`no project`. Under the table are the pins (with "Unpin" for the ones set on the page) and the project
+homes. A folder name is user data, so the page escapes it and the plugin keeps it out of its log, its
+recent changes and its history. The picks behind the card are kept in memory (500 sessions); homes and
+pins are in the state file, which is written at once when a pin changes.
 
 ## Transcript history
 
@@ -223,12 +268,13 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 
 | Method | Path | |
 |---|---|---|
-| GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes and the sessions of the last 5 hours and 7 days |
+| GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes, the sessions of the last 5 hours and 7 days, and `affinity`: the project homes, the pins and each recent session's account and reason, by session key |
 | GET | `/history?range=24h\|7d\|30d\|90d` | utilization, active account and tokens over time |
 | GET | `/transcripts?range=7d\|30d` | the transcript store over the window: root sessions with their subagents, tokens by model and advisor tokens; no account, never part of `/status` or `/history` |
 | GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), the same at each method's pace (`week.by_method`), and the measured work pace |
 | POST | `/run` | one balancer tick now |
 | POST | `/recheck?auth_file=…` | probe one account (or every account) now |
+| POST | `/pin` | body `{"kind": "folder"\|"session", "key": …, "account": …}` pins a folder or a main session to an account; an empty `account` removes a pin set on the page. The names are in the body, never in the URL. Answers with the status |
 | GET | `/credentials` | the Claude credentials CPA lists |
 
 ## License
