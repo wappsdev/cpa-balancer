@@ -52,6 +52,8 @@ type View struct {
 	// Sessions is read from the history files, so the plugin adds it after Status returns: the
 	// engine's lock is not held for a disk read.
 	Sessions *history.Sessions `json:"sessions,omitempty"`
+	// Affinity is where each recent session went and why, the project homes and the pins.
+	Affinity *AffinityView `json:"affinity,omitempty"`
 }
 
 // Config is the configuration the engine runs on; it never changes for one engine.
@@ -104,5 +106,6 @@ func (e *Engine) Status() View {
 		}
 		v.Accounts = append(v.Accounts, av)
 	}
+	v.Affinity = e.affinityView(now)
 	return v
 }

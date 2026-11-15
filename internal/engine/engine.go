@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	"github.com/wappsdev/cpa-balancer/internal/affinity"
 	"github.com/wappsdev/cpa-balancer/internal/anchor"
 	"github.com/wappsdev/cpa-balancer/internal/config"
 	"github.com/wappsdev/cpa-balancer/internal/history"
@@ -48,6 +49,8 @@ type Engine struct {
 	decision    policy.Decision
 	switchedTo  map[string]bool // accounts that became active since the last tick, to probe if stale
 	dirty       bool
+	projects    *affinity.Projects     // finds a session's project folder by name
+	picks       map[string]SessionPick // each recent session's last pick, in memory only; bounded
 }
 
 var delegate = pluginapi.SchedulerPickResponse{DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Handled: true}
@@ -58,7 +61,7 @@ func New(cfg config.Config, host Host, now func() time.Time, rec *history.Record
 		host.Log("warn", "cpa-balancer: state not loaded, starting empty: "+err.Error())
 		st = state.New()
 	}
-	e := &Engine{cfg: cfg, host: host, now: now, rec: rec, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}}
+	e := &Engine{cfg: cfg, host: host, now: now, rec: rec, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}, projects: affinity.NewProjects(cfg.Affinity.ProjectsDir, now)}
 	e.mu.Lock()
 	e.recompute(now())
 	e.mu.Unlock()
@@ -176,18 +179,17 @@ func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPic
 	if e.cfg.Mode != "apply" || e.cfg.Paused || !isClaude(req) || !ok {
 		return delegate
 	}
+	// CPA hands the scheduler the client's headers; the session is in them. The folder is looked up
+	// before the lock is taken: it reads directory names.
+	if id, root := affinity.SessionID(req.Options.Headers); root != "" {
+		folder, _ := e.projects.Folder(root)
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.place(b, id, root, folder, candidates, e.now())
+	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	order := e.decision.MainOrder
-	if b == quota.Fable {
-		order = e.decision.FableOrder
-	}
-	for _, name := range order {
-		if candidates[name] {
-			return pluginapi.SchedulerPickResponse{AuthID: name, Handled: true}
-		}
-	}
-	return delegate
+	return e.existing(b, candidates)
 }
 
 // Tick runs the periodic work: refresh credentials, probe, re-decide, anchor, persist.
