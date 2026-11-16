@@ -25,12 +25,14 @@ type AccountView struct {
 	SessionSteps []config.ReserveStep       `json:"session_steps,omitempty"` // its own 5-hour steps; absent, the default cap
 	ExtraUsage   bool                       `json:"extra_usage"`
 	Listed       bool                       `json:"listed"`
-	FiveHour     bool                       `json:"five_hour"`        // the plan has a 5-hour limit (true until a probe says otherwise)
-	Fable        bool                       `json:"fable"`            // the plan has a Fable weekly limit (true until a probe says otherwise)
-	Plan         string                     `json:"plan,omitempty"`   // max_20x, max_5x or pro; empty while unknown
-	Weight       float64                    `json:"weight,omitempty"` // the weekly limit in Pro plans: 10, 5 or 1
-	Unavailable  bool                       `json:"unavailable"`      // CPA holds the credential back (cooldown or disabled)
-	Disabled     bool                       `json:"disabled"`         // switched off by hand: no reset brings it back
+	FiveHour     bool                       `json:"five_hour"`            // the plan has a 5-hour limit (true until a probe says otherwise)
+	Fable        bool                       `json:"fable"`                // the plan has a Fable weekly limit (true until a probe says otherwise)
+	Plan         string                     `json:"plan,omitempty"`       // max_20x, max_5x or pro; empty while unknown
+	PlanLabel    string                     `json:"plan_label,omitempty"` // the page's name for the plan
+	Meter        *AccountMeter              `json:"meter,omitempty"`      // what the account's own meter says (see AddSessions); only an Ultra account has one
+	Weight       float64                    `json:"weight,omitempty"`     // the weekly limit in Pro plans: 10, 5 or 1
+	Unavailable  bool                       `json:"unavailable"`          // CPA holds the credential back (cooldown or disabled)
+	Disabled     bool                       `json:"disabled"`             // switched off by hand: no reset brings it back
 	Readings     quota.Readings             `json:"readings"`
 	Eligibility  map[quota.Bucket]string    `json:"eligibility"`
 	Caps         map[quota.Bucket]float64   `json:"caps"`                // the switch threshold in force per bucket
@@ -38,6 +40,21 @@ type AccountView struct {
 	Reopens      map[quota.Bucket]time.Time `json:"reopens,omitempty"`   // when a held account takes work again
 	LastAnchor   time.Time                  `json:"last_anchor,omitzero"`
 	AnchorModel  string                     `json:"anchor_model,omitempty"`
+}
+
+// AccountMeter is what an Ultra account's own meter taught the balancer: the percent of the account's
+// limit window that one million units of use cost (see history.BasisText).
+type AccountMeter struct {
+	Known        bool    `json:"known"` // false until a window with enough on the meter has been seen
+	PerMillion   float64 `json:"per_million"`
+	FromPrevious bool    `json:"from_previous"`          // the current window shows too little: the previous window's figure
+	WindowHours  float64 `json:"window_hours,omitempty"` // the time between two resets, measured; 0 until two have been seen
+}
+
+// MeterView says what the percent of the Sessions card means.
+type MeterView struct {
+	Label string `json:"label"` // the plan the percent is of, as the page names it
+	Basis string `json:"basis"` // what one unit of use counts
 }
 
 type View struct {
@@ -54,6 +71,8 @@ type View struct {
 	Sessions *history.Sessions `json:"sessions,omitempty"`
 	// Affinity is where each recent session went and why, the project homes and the pins.
 	Affinity *AffinityView `json:"affinity,omitempty"`
+	// Meter is added with the history's sessions (see AddSessions).
+	Meter *MeterView `json:"meter,omitempty"`
 }
 
 // Config is the configuration the engine runs on; it never changes for one engine.
@@ -70,7 +89,7 @@ func (e *Engine) Status() View {
 		snap := e.snaps[a.AuthFile]
 		cred, listed := e.credentials[a.AuthFile]
 		av := AccountView{AuthFile: a.AuthFile, Name: names[a.AuthFile], Reserve: a.Reserve, ReserveSteps: a.ReserveSteps, SessionSteps: a.SessionSteps, ExtraUsage: a.ExtraUsage, Listed: listed, Unavailable: cred.unavailable, Disabled: cred.disabled,
-			Plan: e.st.Account(a.AuthFile).Plan.Name, Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
+			Plan: e.st.Account(a.AuthFile).Plan.Name, PlanLabel: probe.DisplayName(e.st.Account(a.AuthFile).Plan.Name), Weight: probe.WeightOf(e.st.Account(a.AuthFile).Plan.Name), Readings: snap.Readings,
 			Eligibility: map[quota.Bucket]string{}, Caps: map[quota.Bucket]float64{}, NextCaps: map[quota.Bucket]NextCap{}, Reopens: map[quota.Bucket]time.Time{}}
 		av.FiveHour = !e.st.Account(a.AuthFile).NoFiveHour
 		av.Fable = !e.st.Account(a.AuthFile).NoFable

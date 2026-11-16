@@ -9,7 +9,7 @@ import (
 
 // sessionWindow is the use of [from, to), for the tests that look at one window.
 func (r *Recorder) sessionWindow(from, to time.Time, limit int) SessionWindow {
-	return buildWindow(r.slots(from, to), from, to, limit)
+	return buildWindow(r.slots(from, to), from, to, limit, nil)
 }
 
 const uid = "11111111-aaaa-4bbb-8ccc-000000000001"

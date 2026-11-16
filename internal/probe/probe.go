@@ -125,6 +125,19 @@ func ParsePlan(body []byte) (Plan, error) {
 	return Plan{}, fmt.Errorf("unknown plan %q / %q", p.Organization.Type, p.Organization.Tier)
 }
 
+// DisplayName is what the page calls a plan: the owner's names for the plans' ids.
+func DisplayName(name string) string {
+	switch name {
+	case "max_20x":
+		return "Ultra"
+	case "max_5x":
+		return "Max 5x"
+	case "pro":
+		return "Pro"
+	}
+	return ""
+}
+
 // WeightOf is a plan's weekly limit in Pro plans, from its name, so a weight saved by an older
 // version never outlives a correction; 0 for an unknown name.
 func WeightOf(name string) float64 {

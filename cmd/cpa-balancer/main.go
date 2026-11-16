@@ -237,7 +237,7 @@ func (pluginAPI) Status() any {
 	v := e.Status()
 	v.ConfigError = cfgErr
 	if rec != nil {
-		e.AddSessions(&v, rec.Sessions(time.Now()))
+		e.AddSessions(&v, e.ReadSessions(time.Now()))
 	}
 	return v
 }
