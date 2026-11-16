@@ -108,6 +108,24 @@ func TestAHomeAssignedJustBeforeAConfigChangeIsNotLost(t *testing.T) {
 	}
 }
 
+func TestTheStatusGroupsTheLiveSessionsByTheirProjectFolder(t *testing.T) {
+	affinitySetup(t, "")
+	rec := pluginapi.UsageRecord{Provider: "claude", AuthID: "a.json", Model: "m", SessionID: "claude:" + affinitySession}
+	rec.Detail.InputTokens = 40
+	raw, _ := json.Marshal(rec)
+	dispatch(pluginabi.MethodUsageHandle, raw)
+	v := pluginAPI{}.Status().(engine.View)
+	var alpha engine.ProjectUsage
+	for _, p := range v.Affinity.Projects {
+		if p.Project == "-work-alpha" {
+			alpha = p
+		}
+	}
+	if alpha.Week.Tokens != 40 || alpha.FiveHour.Requests != 1 || v.Affinity.SessionProjects[affinitySession] != "-work-alpha" {
+		t.Fatalf("%+v %+v", v.Affinity.Projects, v.Affinity.SessionProjects)
+	}
+}
+
 func TestARebalanceIsPlannedAndAppliedThroughThePluginAPI(t *testing.T) {
 	affinitySetup(t, "")
 	usageVia(t, "a.json", 10)

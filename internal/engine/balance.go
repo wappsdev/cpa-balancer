@@ -24,9 +24,9 @@ func (e *Engine) readLoads(now time.Time) (loads map[string]int64, ok bool) {
 		return nil, false
 	}
 	loads = map[string]int64{}
-	for _, root := range e.rec.Sessions(now).Week.AllRoots {
-		if folder, found := e.projects.Folder(root.ID); found {
-			loads[folder] += root.Total.Tokens()
+	for project, u := range e.byProject(e.rec.Sessions(now).Week.AllRoots) {
+		if project != "" {
+			loads[project] = u.Tokens
 		}
 	}
 	return loads, true

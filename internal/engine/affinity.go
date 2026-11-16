@@ -61,6 +61,10 @@ type AffinityView struct {
 	FolderPins  []PinView              `json:"folder_pins"`
 	SessionPins []PinView              `json:"session_pins"`
 	Sessions    map[string]SessionPick `json:"sessions"` // by the session key the history uses
+	// Projects and SessionProjects are added with the history's sessions (see AddSessions): what each
+	// project used, and the folder of each listed root session, found by name.
+	Projects        []ProjectUsage    `json:"projects"`
+	SessionProjects map[string]string `json:"session_projects"`
 }
 
 // standing is an account's standing for a request in a bucket. An account that is not configured
