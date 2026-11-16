@@ -51,6 +51,8 @@ type Engine struct {
 	dirty       bool
 	projects    *affinity.Projects     // finds a session's project folder by name
 	picks       map[string]SessionPick // each recent session's last pick, in memory only; bounded
+	loads       map[string]int64       // each project's tokens over the last 7 days, read by Tick; placement weighs the homes by it
+	loadsAt     time.Time
 }
 
 var delegate = pluginapi.SchedulerPickResponse{DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Handled: true}
@@ -225,6 +227,9 @@ func (e *Engine) Tick() {
 	}
 	e.anchorIdle(now)
 	e.checkPlans(now)
+	if e.loadsDue(now) {
+		e.refreshLoads(now)
+	}
 	e.save()
 }
 

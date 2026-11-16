@@ -327,3 +327,28 @@ func TestSessionsReportsBothWindowsFromOneRead(t *testing.T) {
 		t.Fatalf("bounds %v %v", s.FiveHour.From, s.FiveHour.To)
 	}
 }
+
+func TestAllRootsListsEveryRootEvenWhenTheWindowIsCut(t *testing.T) {
+	r := NewRecorder(t.TempDir())
+	r.AddTraffic(t0, src("a", "opus", "s1", ""), tok(1, 300, 0))
+	r.AddTraffic(t0, src("a", "opus", "s1/x", "s1"), tok(1, 50, 0))
+	r.AddTraffic(t0.Add(time.Minute), src("a", "opus", "s2", ""), tok(2, 200, 0))
+	r.AddTraffic(t0.Add(2*time.Minute), src("a", "opus", "s3", ""), tok(3, 100, 0))
+
+	w := window(r, 1) // only the largest root is listed
+	if len(w.Sessions) != 1 || w.Other.Sessions != 2 {
+		t.Fatalf("setup: %+v", w)
+	}
+	got := map[string]int64{}
+	for _, root := range w.AllRoots {
+		got[root.ID] = root.Total.Tokens()
+	}
+	if len(w.AllRoots) != 3 || got["s1"] != 350 || got["s2"] != 200 || got["s3"] != 100 {
+		t.Fatalf("every root with its family's total: %+v", w.AllRoots)
+	}
+	for _, root := range w.AllRoots {
+		if root.Last.IsZero() {
+			t.Fatal("a root carries when it was last seen")
+		}
+	}
+}

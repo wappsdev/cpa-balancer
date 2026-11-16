@@ -198,6 +198,17 @@ type SessionWindow struct {
 	Accounts map[string]Traffic `json:"accounts"`
 	Sessions []SessionUsage     `json:"sessions"` // root sessions, the largest first
 	Other    Remainder          `json:"other"`
+	// AllRoots is every root session of the window, listed or not, with its family's total. It
+	// stays on the server: the project totals and the balancer's load are summed from it, so a cut
+	// list does not make them short.
+	AllRoots []RootUse `json:"-"`
+}
+
+// RootUse is a root session's family in a window, without its detail.
+type RootUse struct {
+	ID    string
+	Last  time.Time
+	Total Traffic
 }
 
 // Sessions is what the status page shows: the last five hours and the last seven days.
@@ -340,6 +351,7 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int) SessionWindow {
 	sortRows(rows)
 	listed := 0
 	for _, row := range rows {
+		w.AllRoots = append(w.AllRoots, RootUse{ID: row.ID, Last: row.Last, Total: row.Total})
 		if row.ID != "" && limit > 0 && listed >= limit {
 			w.Other.Sessions++
 			w.Other.Total.Add(row.Total)

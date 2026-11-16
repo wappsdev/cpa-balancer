@@ -281,8 +281,9 @@ func TestFolderPin(t *testing.T) {
 	if err := w.e.ClearPin(state.PinFolder, "-work-alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if w.pick(1) != W {
-		t.Fatal("without the pin the project is placed by room")
+	// W already carries the other folder, so the balancing rule puts this project on G
+	if got := w.pick(1); got != G || w.reason(sidN(1)) != ReasonProject {
+		t.Fatalf("without the pin the project is placed by the balancing rule: %q %q", got, w.reason(sidN(1)))
 	}
 }
 

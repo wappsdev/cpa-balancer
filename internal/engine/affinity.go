@@ -93,16 +93,21 @@ func (e *Engine) orderOf(b quota.Bucket) []string {
 	return e.decision.MainOrder
 }
 
-// best is the account among names with the most headroom in a bucket; a tie goes to the existing
-// order, then to the config's.
-func (e *Engine) best(names []string, b quota.Bucket, now time.Time) string {
+// ranker is an account's place in the existing order of a bucket; an account outside it comes last.
+func (e *Engine) ranker(b quota.Bucket) func(string) int {
 	order := e.orderOf(b)
-	rank := func(a string) int {
+	return func(a string) int {
 		if i := slices.Index(order, a); i >= 0 {
 			return i
 		}
 		return len(order)
 	}
+}
+
+// best is the account among names with the most headroom in a bucket; a tie goes to the existing
+// order, then to the config's.
+func (e *Engine) best(names []string, b quota.Bucket, now time.Time) string {
+	rank := e.ranker(b)
 	best := ""
 	for _, a := range names {
 		switch {
@@ -130,22 +135,24 @@ func (e *Engine) existing(b quota.Bucket, candidates map[string]bool) pluginapi.
 // pinFor is the account a session is pinned to, if any: a session's pin outranks its folder's, and
 // a pin in the config outranks one set on the page for the same key (the page refuses to set one).
 func (e *Engine) pinFor(root, folder string) (kind, account string) {
-	look := func(config, ui map[string]string, key string) string {
-		if a := config[key]; a != "" {
-			return a
-		}
-		return ui[key]
-	}
 	a := &e.st.Affinity
-	if acct := look(e.cfg.Affinity.SessionPins, a.SessionPins, root); acct != "" {
+	if acct := pinned(e.cfg.Affinity.SessionPins, a.SessionPins, root); acct != "" {
 		return state.PinSession, acct
 	}
 	if folder != "" {
-		if acct := look(e.cfg.Affinity.FolderPins, a.FolderPins, folder); acct != "" {
+		if acct := pinned(e.cfg.Affinity.FolderPins, a.FolderPins, folder); acct != "" {
 			return state.PinFolder, acct
 		}
 	}
 	return "", ""
+}
+
+// pinned is the account a key is pinned to: the config's pin, else the one set on the page.
+func pinned(config, ui map[string]string, key string) string {
+	if a := config[key]; a != "" {
+		return a
+	}
+	return ui[key]
 }
 
 // homeOf is the project's account, placing the project first when it has none, or moving it when its
@@ -164,7 +171,7 @@ func (e *Engine) homeOf(project string, now time.Time) string {
 			usable = append(usable, a.AuthFile)
 		}
 	}
-	best := e.best(usable, quota.Main, now)
+	best := e.balanced(project, usable, now)
 	switch {
 	case best != "":
 		e.st.SetHome(project, best, now)
