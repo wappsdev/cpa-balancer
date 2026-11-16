@@ -108,6 +108,21 @@ func TestAHomeAssignedJustBeforeAConfigChangeIsNotLost(t *testing.T) {
 	}
 }
 
+func TestARebalanceIsPlannedAndAppliedThroughThePluginAPI(t *testing.T) {
+	affinitySetup(t, "")
+	usageVia(t, "a.json", 10)
+	usageVia(t, "b.json", 10)
+	pickViaWire(t, http.Header{"X-Claude-Code-Session-Id": {affinitySession}}) // gives the project a home
+	res, err := (pluginAPI{}).Rebalance(false)
+	plan, ok := res.(engine.RebalanceResult)
+	if err != nil || !ok || plan.Applied || len(plan.Plan) != 1 || plan.Plan[0].Project != "-work-alpha" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if res, err = (pluginAPI{}).Rebalance(true); err != nil || !res.(engine.RebalanceResult).Applied {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
 func TestPinsAreSetAndClearedThroughThePluginAPI(t *testing.T) {
 	affinitySetup(t, "")
 	if err := (pluginAPI{}).Pin("session", affinitySession, "b.json"); err != nil {

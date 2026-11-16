@@ -256,6 +256,15 @@ func (pluginAPI) Pin(kind, key, account string) error {
 	return e.SetPin(kind, key, account)
 }
 
+// Rebalance plans a fresh placement of the projects without a folder pin, and applies it when asked.
+func (pluginAPI) Rebalance(apply bool) (any, error) {
+	e := engineNow()
+	if e == nil {
+		return nil, errors.New("not configured")
+	}
+	return e.Rebalance(apply), nil
+}
+
 func (pluginAPI) History(rangeName string) (any, error) {
 	mu.Lock()
 	rec := recorder

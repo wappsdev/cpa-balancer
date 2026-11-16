@@ -16,7 +16,7 @@ const (
 	resourceBase = "/v0/resource/plugins/" + PluginID
 	routeBase    = "/v0/management/plugins/" + PluginID
 	pagePath     = "/status" // the menu entry; serves index.html
-	maxPinBody   = 4096      // a pin body is a kind, a name of up to 255 bytes and an auth file
+	maxPinBody   = 4096      // the longest body: a pin is a kind, a name of up to 255 bytes and an auth file
 )
 
 // API is what the routes need from the running plugin.
@@ -30,6 +30,9 @@ type API interface {
 	// Pin pins a folder ("folder") or a main session ("session") to an account; "" unpins. The
 	// names travel in the body: a folder name is user data and a URL reaches access logs.
 	Pin(kind, key, account string) error
+	// Rebalance plans a fresh placement of every project without a folder pin, and carries it out
+	// when apply is set. The plan names folders, so it is an answer, never a URL.
+	Rebalance(apply bool) (any, error)
 	Credentials() (any, error)
 }
 
@@ -59,6 +62,7 @@ var routes = []struct{ method, path string }{
 	{http.MethodPost, "/run"},
 	{http.MethodPost, "/recheck"},
 	{http.MethodPost, "/pin"},
+	{http.MethodPost, "/rebalance"},
 	{http.MethodGet, "/credentials"},
 }
 
@@ -113,6 +117,12 @@ func Handle(req pluginapi.ManagementRequest, api API) pluginapi.ManagementRespon
 			return text(http.StatusBadRequest, err.Error())
 		}
 		return jsonResponse(api.Status(), nil)
+	case "POST /rebalance":
+		var body struct{ Apply bool }
+		if len(req.Body) > maxPinBody || json.Unmarshal(req.Body, &body) != nil {
+			return text(http.StatusBadRequest, "a rebalance needs a JSON body, {\"apply\": true} or {\"apply\": false}")
+		}
+		return jsonResponse(api.Rebalance(body.Apply))
 	case "GET /credentials":
 		return jsonResponse(api.Credentials())
 	}

@@ -14,6 +14,12 @@ type fakeAPI struct {
 	ran       int
 	rechecked []string
 	pins      []string // kind/key/account of each pin call
+	rebalance []bool   // the apply flag of each rebalance call
+}
+
+func (f *fakeAPI) Rebalance(apply bool) (any, error) {
+	f.rebalance = append(f.rebalance, apply)
+	return map[string]bool{"applied": apply}, nil
 }
 
 func (f *fakeAPI) Pin(kind, key, account string) error {
@@ -114,7 +120,7 @@ func TestRoutes(t *testing.T) {
 
 func TestRegistrationListsEveryRouteAndResource(t *testing.T) {
 	reg := Registration()
-	if len(reg["routes"].([]map[string]any)) != 8 || len(reg["resources"].([]map[string]any)) != len(resources) {
+	if len(reg["routes"].([]map[string]any)) != 9 || len(reg["resources"].([]map[string]any)) != len(resources) {
 		t.Fatalf("%+v", reg)
 	}
 	menus := 0

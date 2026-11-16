@@ -23,6 +23,33 @@ func TestPinRouteTakesTheFolderInTheBodyAndAnswersWithTheStatus(t *testing.T) {
 	}
 }
 
+func TestRebalanceRoutePlansUnlessTheBodyAsksToApply(t *testing.T) {
+	api := &fakeAPI{}
+	if res := post(api, "/rebalance", `{"apply":false}`); res.StatusCode != 200 || string(res.Body) != `{"applied":false}` {
+		t.Fatalf("%d %s", res.StatusCode, res.Body)
+	}
+	if res := post(api, "/rebalance", `{"apply":true}`); res.StatusCode != 200 || string(res.Body) != `{"applied":true}` {
+		t.Fatalf("%d %s", res.StatusCode, res.Body)
+	}
+	if res := post(api, "/rebalance", `{}`); res.StatusCode != 200 {
+		t.Fatalf("an empty object is a plan: %d", res.StatusCode)
+	}
+	if len(api.rebalance) != 3 || api.rebalance[0] || !api.rebalance[1] || api.rebalance[2] {
+		t.Fatalf("only an explicit apply applies: %v", api.rebalance)
+	}
+	for name, body := range map[string]string{"not json": `nope`, "empty": ``, "a body past a bound": `{"apply":true,"x":"` + strings.Repeat("a", 5000) + `"}`} {
+		if res := post(api, "/rebalance", body); res.StatusCode != 400 {
+			t.Errorf("%s: %d", name, res.StatusCode)
+		}
+	}
+	if len(api.rebalance) != 3 {
+		t.Fatalf("a body it cannot read reaches nothing: %v", api.rebalance)
+	}
+	if call(api, "GET", "/v0/management/plugins/cpa-balancer/rebalance", nil).StatusCode != 404 {
+		t.Fatal("rebalance is POST only")
+	}
+}
+
 func TestPinRouteRefusesWhatItCannotRead(t *testing.T) {
 	api := &fakeAPI{}
 	for name, body := range map[string]string{
