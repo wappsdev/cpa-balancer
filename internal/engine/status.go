@@ -55,6 +55,10 @@ type AccountMeter struct {
 type MeterView struct {
 	Label string `json:"label"` // the plan the percent is of, as the page names it
 	Basis string `json:"basis"` // what one unit of use counts
+	// FableModels are the models of the Fable limit. Their use draws on that limit as well as on the
+	// meter the percent is of (the unified limit header counts Fable use toward it), so it is inside
+	// the percent, and marked on the page.
+	FableModels []string `json:"fable_models"`
 }
 
 type View struct {

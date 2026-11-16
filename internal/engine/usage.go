@@ -98,7 +98,7 @@ func (e *Engine) byProject(roots []history.RootUse) map[string]Use {
 // meter) and to each project; the rows have it already.
 func (e *Engine) AddSessions(v *View, s history.Sessions) {
 	v.Sessions = &s
-	v.Meter = &MeterView{Label: probe.DisplayName(meteredPlan), Basis: history.BasisText}
+	v.Meter = &MeterView{Label: probe.DisplayName(meteredPlan), Basis: history.BasisText, FableModels: e.cfg.Buckets.Fable}
 	for i := range v.Accounts {
 		if v.Accounts[i].Plan != meteredPlan {
 			continue

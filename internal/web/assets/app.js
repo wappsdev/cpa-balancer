@@ -323,6 +323,9 @@ function sessionsView(w, picks) {
       depth, id: s.id, label: s.id ? s.id.slice(0, 8) : "no session", none: s.id === "", last: s.last,
       requests: s.total?.requests || 0, tokens: tokens(s.total), ownTokens: tokens(s.own), cacheRead: s.total?.cache_read_tokens || 0,
       share: percent(tokens(s.total), total.tokens), accounts: split(s.accounts),
+      // use of the Ultra accounts' limit windows in the 5 hours and the 7 days (null: not known), and tokens on
+      // accounts with no meter, which those figures leave out; and each model the family used, by first seen
+      share5: s.planShare5h ?? null, share7: s.planShare7d ?? null, off5: s.elsewhere5h || 0, off7: s.elsewhere7d || 0, lines: s.model_lines || [],
       // where its last request went and why (the balancer keeps it in memory only); a subagent the balancer
       // saw no request of, such as one CPA names from the request body, shows its main session's
       pick: picks?.[s.id] ?? picks?.[s.id.split("/")[0]] ?? null,
@@ -356,6 +359,68 @@ function writeOpen(open) {
   try { localStorage.setItem(OPEN_KEY, JSON.stringify([...open].slice(-MAX_OPEN))); } catch { /* storage can be blocked: the state then lasts until the next reload */ }
 }
 
+// What a row used of ONE Ultra account's limit window, in percent: "~3.2%", "<0.1%", or "—" when it
+// cannot be priced. Anything that is not a plain number is "—", never raw text.
+function planShareText(p) {
+  if (typeof p !== "number" || !Number.isFinite(p) || p < 0) return "—";
+  return p === 0 ? "~0.0%" : p < 0.05 ? "<0.1%" : `~${p.toFixed(1)}%`;
+}
+
+// A row's figures for the window in view, and the other window beside it.
+function planOf(share5, share7, off5, off7, span) {
+  const week = span === "week";
+  return { share: week ? share7 : share5, alt: week ? share5 : share7, altLabel: week ? "5 h" : "7 d", elsewhere: week ? off7 : off5 };
+}
+
+// What the status says about the Ultra accounts' meters, ready to show: null when it says nothing.
+function meterInfo(v) {
+  if (!v?.meter) return null;
+  const accounts = (v.accounts || []).filter(a => a.meter);
+  const hours = [...new Set(accounts.map(a => a.meter.window_hours).filter(h => h > 0).map(h => Math.round(h * 10) / 10))];
+  const apart = [...new Set((v.accounts || []).filter(a => !a.meter && a.plan_label).map(a => a.plan_label))];
+  return { label: v.meter.label, basis: v.meter.basis, fable: v.meter.fable_models || [], accounts, hours, apart };
+}
+
+// The header line: what a million units of use cost each Ultra account, learned from its own meter.
+function meterLine(m, name) {
+  if (!m || !m.accounts.length) return "";
+  const parts = m.accounts.map(a => a.meter.known
+    ? `${name(a.auth_file)} ${a.meter.per_million.toFixed(1)}%${a.meter.from_previous ? " (previous window)" : ""}`
+    : `${name(a.auth_file)} not learned yet`);
+  return `${m.label}: 1M units of use ≈ ${parts.join(" · ")} of a limit window${m.hours.length ? ` · window ${m.hours.join(" / ")} h` : ""}`;
+}
+
+// The tooltip of the "~% Ultra" cells: it is an estimate, where it comes from, and what it leaves out.
+function meterTip(m, elsewhere) {
+  if (!m) return "";
+  const parts = [
+    `An estimate of how much of one ${m.label} account's limit window this used.`,
+    `Learned from each ${m.label} account's own meter: its percent so far over what it has served since its window opened, so the rows add up to the meter. One unit of use = ${m.basis}. Accounts are not mixed: a row is priced at the factor of the account that served it.`,
+    "A window with under 5 points on the meter takes the previous window's factor; with none, the figure is —.",
+    "Models are not weighted apart: the fit found no difference between them.",
+    "Advisor calls are not counted.",
+  ];
+  if (m.hours.length) parts.push(`Window: ${m.hours.join(" / ")} h, measured between resets.`);
+  if (elsewhere > 0) parts.push(`On ${m.apart.length ? m.apart.join(" / ") : "other accounts"}: ${num(elsewhere)} tokens (not in this percent).`);
+  return parts.join(" ");
+}
+
+// The "~% Ultra" cell: the window in view, and the other window beside it.
+function planCellHtml(plan = { share: null, alt: null, altLabel: "7 d", elsewhere: 0 }, m = null) {
+  return `<td title="${esc(meterTip(m, plan.elsewhere))}">${planShareText(plan.share)} <span class="faint">· ${plan.altLabel} ${planShareText(plan.alt)}</span></td>`;
+}
+
+// Each model a project or session used, by first seen: when it was first and last seen, and its
+// tokens, with what its subagents ran apart. Models of the Fable limit are marked.
+function modelLinesHtml(lines, fable) {
+  if (!lines?.length) return "";
+  const tokens = t => (t?.input_tokens || 0) + (t?.output_tokens || 0) + (t?.cache_creation_tokens || 0);
+  return `<div class="mlines">${lines.map(l => {
+    const sub = tokens(l.subagents);
+    return `<div class="mline"><span class="mname" title="${esc(l.model)}">${esc(l.model || "no model name")}</span>${(fable || []).includes(l.model) ? ' <span class="chip">Fable limit</span>' : ""} <span class="faint">${when(l.first)} – ${when(l.last)} · ${num(tokens(l.own) + sub)}${sub ? ` (${num(sub)} in subagents)` : ""}</span></div>`;
+  }).join("")}</div>`;
+}
+
 // The rows of sessionsView, grouped by project folder and sorted by use, the largest first. A
 // project's totals are the balancer's own (summed from every session, so the week's cut list does
 // not make them short); what the listed sessions leave out is `unlisted`. Pure, so it is tested.
@@ -366,12 +431,13 @@ function projectGroups(v, aff, span) {
     if (!groups.has(project)) groups.set(project, { project, sessions: [] });
     return groups.get(project);
   };
+  const withPlan = r => ({ ...r, plan: planOf(r.share5, r.share7, r.off5, r.off7, span) });
   let family = null;
   for (const r of v.rows) {
     if (r.depth === 0) {
-      family = { row: r, subs: [] };
+      family = { row: withPlan(r), subs: [] };
       group(aff?.session_projects?.[r.id] ?? r.pick?.project ?? "").sessions.push(family);
-    } else if (family) family.subs.push(r);
+    } else if (family) family.subs.push(withPlan(r));
   }
   const used = new Map(), usage = new Map((aff?.projects || []).map(p => [p.project, p]));
   const other = span === "week" ? "five_hour" : "week";
@@ -388,11 +454,12 @@ function projectGroups(v, aff, span) {
       if (row.last && (!listed.last || Date.parse(row.last) > Date.parse(listed.last))) listed.last = row.last;
     }
     const u = used.get(g.project) || listed;
-    const o = usage.get(g.project)?.[other]; // the other window, shown beside the one in view
+    const p = usage.get(g.project), o = p?.[other]; // the other window, shown beside the one in view
     return {
       alt: o ? { label: other === "week" ? "7 d" : "5 h", requests: o.requests || 0, tokens: o.tokens || 0 } : null,
       key: g.project === "" ? "n:" : "p:" + g.project, project: g.project, none: g.project === "", sessions: g.sessions,
       requests: u.requests, tokens: u.tokens, last: u.last || "", share: percent(u.tokens, v.total.tokens), unlisted: Math.max(0, u.tokens - listed.tokens),
+      plan: planOf(p?.planShare5h ?? null, p?.planShare7d ?? null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span), lines: u.models || [],
     };
   }).sort((a, b) => b.tokens - a.tokens || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
 }
@@ -438,52 +505,53 @@ function homeText(project, aff, name) {
   return '<span class="faint">no home yet</span>';
 }
 
-function projectRowHtml(g, open, aff, name, accounts) {
+function projectRowHtml(g, open, aff, name, accounts, m = null, fable = []) {
   const label = g.none ? '<span class="stitle none">no project</span>' : `<span class="stitle" title="${esc(g.project)}">${esc(g.project)}</span>`;
   const count = g.sessions.length;
   const pin = homeInfo(g.project, aff).pin;
   const alt = n => g.alt ? ` <span class="faint">· ${g.alt.label} ${n(g.alt)}</span>` : "";
   return `<tr class="project">
-    <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${g.unlisted > 0 ? "+" : ""} session${count === 1 && !g.unlisted ? "" : "s"}</span></th>
-    <td>${g.last ? when(g.last) : "—"}</td><td>${g.requests}${alt(a => a.requests)}</td><td>${num(g.tokens)}${alt(a => num(a.tokens))}</td><td>${g.share}%</td>
+    <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${g.unlisted > 0 ? "+" : ""} session${count === 1 && !g.unlisted ? "" : "s"}</span>${modelLinesHtml(g.lines, fable)}</th>
+    <td>${g.last ? when(g.last) : "—"}</td><td>${g.requests}${alt(a => a.requests)}</td><td>${num(g.tokens)}${alt(a => num(a.tokens))}</td><td>${g.share}%</td>${planCellHtml(g.plan, m)}
     <td class="left">${g.none ? '<span class="faint">CPA\'s own order</span>' : homeText(g.project, aff, name)}</td>
     <td class="left">${g.none ? "" : pinSelectHtml("folder", g.project, pin, accounts, name)}</td></tr>`;
 }
 
-function sessionRowHtml(f, open, aff, name, accounts) {
+function sessionRowHtml(f, open, aff, name, accounts, m = null, fable = []) {
   const r = f.row;
   const used = r.accounts.map(a => name(a.key) + (r.accounts.length > 1 ? ` ${a.share}%` : "")).join(" · ");
   const detail = [`own ${num(r.ownTokens)}`, `cache reads ${num(r.cacheRead)}`, used && `accounts ${used}`].filter(Boolean).join(" · ");
   const pin = (aff?.session_pins || []).find(p => p.key === r.id) || null;
   const subs = f.subs.length;
   return `<tr class="session${r.none ? " none" : ""}">
-    <th scope="row" title="${esc(r.id)}">${subs ? toggleHtml("s:" + r.id, open) : '<span class="toggle-space"></span>'}<span class="sid">${esc(r.label)}</span>${subs ? ` <span class="faint">${subs} subagent${subs === 1 ? "" : "s"}</span>` : ""}</th>
-    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td><td>${r.share}%</td>
+    <th scope="row" title="${esc(r.id)}">${subs ? toggleHtml("s:" + r.id, open) : '<span class="toggle-space"></span>'}<span class="sid">${esc(r.label)}</span>${subs ? ` <span class="faint">${subs} subagent${subs === 1 ? "" : "s"}</span>` : ""}${modelLinesHtml(r.lines, fable)}</th>
+    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td><td>${r.share}%</td>${planCellHtml(r.plan, m)}
     <td class="left">${placementText(r.pick, name)}</td>
     <td class="left">${r.id ? pinSelectHtml("session", r.id, pin, accounts, name) : ""}</td></tr>`;
 }
 
-function subRowHtml(r, name) {
+function subRowHtml(r, name, m = null, fable = []) {
   return `<tr class="sub">
-    <th scope="row" title="${esc(r.id)}" style="padding-left: ${28 + r.depth * 14}px"><span class="faint">↳ </span><span class="sid">${esc(r.label)}</span></th>
-    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(`cache reads ${num(r.cacheRead)}`)}">${num(r.tokens)}</td><td>${r.share}%</td>
+    <th scope="row" title="${esc(r.id)}" style="padding-left: ${28 + r.depth * 14}px"><span class="faint">↳ </span><span class="sid">${esc(r.label)}</span>${modelLinesHtml(r.lines, fable)}</th>
+    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(`cache reads ${num(r.cacheRead)}`)}">${num(r.tokens)}</td><td>${r.share}%</td>${planCellHtml(r.plan, m)}
     <td class="left">${placementText(r.pick, name)}</td><td></td></tr>`;
 }
 
 // The table body: every project, and below an open one its sessions, and below an open session its subagents.
-function groupRowsHtml(groups, open, aff, name, accounts) {
+function groupRowsHtml(groups, open, aff, name, accounts, m = null) {
   const rows = [];
+  const fable = m?.fable || [];
   for (const g of groups) {
     const isOpen = open.has(g.key);
-    rows.push(projectRowHtml(g, isOpen, aff, name, accounts));
+    rows.push(projectRowHtml(g, isOpen, aff, name, accounts, m, fable));
     if (!isOpen) continue;
     for (const f of g.sessions) {
       const sessionOpen = open.has("s:" + f.row.id);
-      rows.push(sessionRowHtml(f, sessionOpen, aff, name, accounts));
-      if (sessionOpen) for (const s of f.subs) rows.push(subRowHtml(s, name));
+      rows.push(sessionRowHtml(f, sessionOpen, aff, name, accounts, m, fable));
+      if (sessionOpen) for (const s of f.subs) rows.push(subRowHtml(s, name, m, fable));
     }
     if (g.unlisted > 0) {
-      rows.push(`<tr class="sub"><th scope="row" class="faint" style="padding-left: 28px">smaller sessions not listed</th><td></td><td></td><td>${num(g.unlisted)}</td><td></td><td></td><td></td></tr>`);
+      rows.push(`<tr class="sub"><th scope="row" class="faint" style="padding-left: 28px">smaller sessions not listed</th><td></td><td></td><td>${num(g.unlisted)}</td><td></td><td></td><td></td><td></td></tr>`);
     }
   }
   return rows.join("");
@@ -536,19 +604,24 @@ function renderSessions(s) {
 function drawSessions() {
   const w = sessionData?.[sessionSpan];
   const card = $("sessions");
-  if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; return; }
+  if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; $("sessions-meter").hidden = true; return; }
   // a refresh must not close the account list the owner has open
   if (card.contains(document.activeElement) && document.activeElement.matches("select")) return;
   const aff = view?.affinity;
   const v = sessionsView(w, aff?.sessions);
   const groups = projectGroups(v, aff, sessionSpan);
+  const meter = meterInfo(view);
   $("sessions-hint").textContent = `${sessionSpan === "week" ? "last 7 days" : "last 5 hours"} · ${v.total.requests} requests · ${num(v.total.tokens)} tokens (input, output, cache writes)`;
   card.innerHTML = groups.length ? `<table class="sessions-table">
-      <thead><tr><th>Project</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Account</th><th class="left">Pin</th></tr></thead>
-      <tbody>${groupRowsHtml(groups, openGroups, aff, short, pinAccounts())}</tbody>
+      <thead><tr><th>Project</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th>~% ${esc(meter?.label ?? "")}</th><th class="left">Account</th><th class="left">Pin</th></tr></thead>
+      <tbody>${groupRowsHtml(groups, openGroups, aff, short, pinAccounts(), meter)}</tbody>
     </table>`
     : '<p class="empty">No requests in this window.</p>';
   card.innerHTML += strayPinsHtml(aff, groups, short);
+  const line = $("sessions-meter");
+  line.textContent = meterLine(meter, short);
+  line.title = meter ? `One unit of use = ${meter.basis}.` : "";
+  line.hidden = !line.textContent;
 }
 
 const pinAccounts = () => (view?.accounts || []).map(a => ({ auth_file: a.auth_file, name: a.name }));

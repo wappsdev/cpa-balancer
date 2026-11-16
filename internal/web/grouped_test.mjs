@@ -6,11 +6,14 @@ const when = 'const when = t => `<span class="when">${esc(t)}</span>`;'
 const lib = (params = {}) => load({
   consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText', 'OPEN_KEY', 'MAX_OPEN'],
   fns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'homeInfo', 'toggleHtml', 'pinSelectHtml', 'placementText', 'homeText',
-    'projectRowHtml', 'sessionRowHtml', 'subRowHtml', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml'],
+    'projectRowHtml', 'sessionRowHtml', 'subRowHtml', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
+    'planShareText', 'planOf', 'meterInfo', 'meterLine', 'meterTip', 'planCellHtml', 'modelLinesHtml'],
   extra: when, params,
-  returns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml'],
+  returns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
+    'planShareText', 'meterInfo', 'meterLine', 'meterTip', 'modelLinesHtml'],
 })
-const { sessionsView, readOpen, writeOpen, projectGroups, groupRowsHtml, strayPinsHtml, rebalanceHtml } = lib({ localStorage: {} })
+const { sessionsView, readOpen, writeOpen, projectGroups, groupRowsHtml, strayPinsHtml, rebalanceHtml,
+  planShareText, meterInfo, meterLine, meterTip, modelLinesHtml } = lib({ localStorage: {} })
 
 const fails = []
 const check = (name, ok) => { if (!ok) fails.push(name) }
@@ -94,6 +97,63 @@ const evilGroups = projectGroups(sessionsView(win, evilAff.sessions), evilAff, '
 const evilRows = groupRowsHtml(evilGroups, new Set(['p:' + hostile, 's:' + A]), evilAff, k => k, [{ auth_file: hostile, name: hostile }]) + strayPinsHtml(evilAff, evilGroups, k => k)
 check('hostile text is escaped everywhere', !evilRows.includes('<img') && evilRows.includes('&lt;img') && !evilRows.includes('"><img'))
 check('no attribute can be closed by a folder name', !/data-(toggle|key)="[^"]*"[^>]*onerror/.test(evilRows))
+
+// use of an Ultra account's limit window
+check('a share is shown to one decimal', planShareText(3.24) === '~3.2%' && planShareText(12) === '~12.0%')
+check('none at all is ~0.0%, a trace is <0.1%', planShareText(0) === '~0.0%' && planShareText(0.01) === '<0.1%')
+check('an unknown share, and anything that is not a plain number, is a dash', [null, undefined, 'x', NaN, Infinity, -1, '<img src=x>', {}].every(v => planShareText(v) === '—'))
+
+const meterStatus = {
+  meter: { label: 'Ultra', basis: 'input + output + cache writes + 1.5% of cache reads', fable_models: ['fable-1'] },
+  accounts: [
+    { auth_file: 'a.json', plan_label: 'Ultra', meter: { known: true, per_million: 4.04, from_previous: false, window_hours: 168 } },
+    { auth_file: 'b.json', plan_label: 'Ultra', meter: { known: false, per_million: 0, from_previous: false } },
+    { auth_file: 'c.json', plan_label: 'Pro' },
+  ],
+}
+const m = meterInfo(meterStatus)
+check('no meter in the status, no meter info', meterInfo({}) === null && meterInfo(undefined) === null)
+check('the header line gives each Ultra account its own figure, never a mean', meterLine(m, name) === 'Ultra: 1M units of use ≈ first 4.0% · second not learned yet of a limit window · window 168 h')
+check('a figure taken from the previous window says so', meterLine(meterInfo({ ...meterStatus, accounts: [{ auth_file: 'a.json', meter: { known: true, per_million: 3, from_previous: true } }] }), name).includes('3.0% (previous window)'))
+check('without an Ultra account there is no header line', meterLine(meterInfo({ meter: meterStatus.meter, accounts: [] }), name) === '')
+const tip = meterTip(m, 1_200_000)
+check('the tooltip says it is an estimate learned from the account\'s own meter, and names the basis', tip.includes('estimate') && tip.includes('own meter') && tip.includes('input + output + cache writes + 1.5% of cache reads'))
+check('the tooltip says what is left out', tip.includes('Advisor calls are not counted') && tip.includes('On Pro: 1.2M tokens') && tip.includes('Window: 168 h'))
+check('no Pro tokens, no mention of them', !meterTip(m, 0).includes('tokens (not in this percent)'))
+check('the page never says week or Max 20x', !/week|Max 20x/i.test(tip + meterLine(m, name)))
+
+const planWin = {
+  total: t(10, 1000), other: { sessions: 0, total: t(0, 0) },
+  sessions: [{ ...session(A, t(5, 100), [{ id: A + '/ab12', parent: A, last: '2026-11-15T10:00:00Z', own: t(2, 40), total: t(2, 40), accounts: { 'a.json': t(2, 40) }, models: {}, planShare5h: 1, planShare7d: 2.5, elsewhere5h: 0, elsewhere7d: 0, model_lines: [] }]),
+    planShare5h: 3.24, planShare7d: 12, elsewhere5h: 1_200_000, elsewhere7d: 1_200_000,
+    model_lines: [{ model: 'fable-1', first: '2026-11-15T09:00:00Z', last: '2026-11-15T10:00:00Z', own: t(1, 5000), subagents: t(1, 2500) }] },
+    { ...session(B, t(5, 100)), planShare5h: null, planShare7d: null, elsewhere5h: 0, elsewhere7d: 0 }],
+}
+const planAff = { session_projects: { [A]: '-work-alpha', [B]: '-work-alpha' }, projects: [{ project: '-work-alpha', five_hour: { requests: 10, tokens: 200, models: [] }, week: { requests: 10, tokens: 200 },
+  planShare5h: 4.24, planShare7d: 14.5, elsewhere5h: 1_200_000, elsewhere7d: 1_200_000 }], homes: [], folder_pins: [], session_pins: [], sessions: {} }
+const planGroups = projectGroups(sessionsView(planWin, planAff.sessions), planAff, 'five_hour')
+check('a project carries its figure for the window in view and the other beside it', planGroups[0].plan.share === 4.24 && planGroups[0].plan.alt === 14.5 && planGroups[0].plan.altLabel === '7 d')
+check('in the 7-day view it is the other way round', projectGroups(sessionsView(planWin, planAff.sessions), planAff, 'week')[0].plan.share === 14.5)
+const planShown = groupRowsHtml(planGroups, new Set(['p:-work-alpha', 's:' + A]), planAff, name, accounts, m)
+check('the project, the session and the subagent rows each have the cell', planShown.includes('~4.2%') && planShown.includes('~3.2%') && planShown.includes('~1.0%'))
+check('the other window is beside it', planShown.includes('· 7 d ~14.5%') && planShown.includes('· 7 d ~12.0%'))
+check('a session that cannot be priced shows a dash', planShown.includes('— <span class="faint">· 7 d —</span>'))
+check('the cell has the tooltip, with the tokens on the Pro account', /<td title="[^"]*On Pro: 1\.2M tokens[^"]*">~3\.2%/.test(planShown))
+const cells = html => html.split('</tr>').filter(r => r.includes('<tr')).map(r => (r.match(/<td/g) || []).length)
+check('every row has as many cells as the header has columns after the first', cells(planShown).every(n => n === 7))
+check('the row of smaller sessions has the cell too', cells(groupRowsHtml(planGroups.map(g => ({ ...g, unlisted: 5 })), new Set(['p:-work-alpha']), planAff, name, accounts, m)).every(n => n === 7))
+check('without a status the cell is still there, with a dash', groupRowsHtml(projectGroups(sessionsView(win), undefined, 'week'), new Set(), undefined, name, accounts).includes('— <span class="faint">· 5 h —</span>'))
+
+const lines = modelLinesHtml([{ model: 'm-1', first: '2026-11-15T09:00:00Z', last: '2026-11-15T10:00:00Z', own: t(1, 5000), subagents: t(1, 2500) }, { model: '', first: '2026-11-15T10:00:00Z', last: '2026-11-15T11:00:00Z', own: t(1, 9), subagents: t(0, 0) }], ['m-1'])
+check('model lines give first and last seen and tokens, the subagents\' apart', lines.includes('7.5k (2.5k in subagents)') && lines.includes('· 9') && lines.includes('no model name'))
+check('a model of the Fable limit is marked, another is not', (lines.match(/Fable limit/g) || []).length === 1)
+check('no lines, no markup', modelLinesHtml([], []) === '' && modelLinesHtml(undefined, []) === '')
+check('the lines are in the session row and the project row', planShown.includes('class="mlines"'))
+const evilLines = modelLinesHtml([{ model: hostile, first: hostile, last: hostile, own: t(1, 1), subagents: t(0, 0) }], [hostile])
+check('a hostile model name is escaped', !evilLines.includes('<img') && evilLines.includes('&lt;img'))
+const evilMeter = meterInfo({ meter: { label: hostile, basis: hostile, fable_models: [] }, accounts: [{ auth_file: 'a.json', meter: { known: true, per_million: 1, window_hours: 168 } }] })
+const evilCell = groupRowsHtml(planGroups, new Set(), planAff, name, accounts, evilMeter)
+check('a hostile plan name cannot leave the tooltip', !evilCell.includes('<img') && evilCell.includes('&lt;img') && !/title="[^"]*"[^>]*onerror/.test(evilCell))
 
 // rebalance
 const plan = { applied: false, pinned: 1, plan: [{ project: '-work-a', from: 'a.json', to: 'b.json' }, { project: '-work-b', from: 'a.json', to: 'a.json' }] }
