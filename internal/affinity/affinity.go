@@ -19,9 +19,9 @@ const (
 	agentHeader   = "X-Claude-Code-Agent-Id"
 	mainAgent     = "main"
 
-	missTTL   = 30 * time.Second // a session's transcript file appears after its first request
-	maxCached = 1000             // sessions remembered, hits and misses each
-	maxName   = 255              // the longest file name
+	missTTL   = 5 * time.Second // a new session's transcript file appears after its first request; short, so its project home applies within seconds
+	maxCached = 1000            // sessions remembered, hits and misses each
+	maxName   = 255             // the longest file name
 )
 
 // header is the first non-empty value of a header, whatever the case of its name.
