@@ -106,20 +106,21 @@ check('an unknown share, and anything that is not a plain number, is a dash', [n
 const meterStatus = {
   meter: { label: 'Ultra', basis: 'input + output + cache writes + 1.5% of cache reads', fable_models: ['fable-1'] },
   accounts: [
-    { auth_file: 'a.json', plan_label: 'Ultra', meter: { known: true, per_million: 4.04, from_previous: false, window_hours: 168 } },
+    { auth_file: 'a.json', plan_label: 'Ultra', meter: { known: true, per_million: 0.226, from_previous: false, window_hours: 168, outside: 6.4 } },
     { auth_file: 'b.json', plan_label: 'Ultra', meter: { known: false, per_million: 0, from_previous: false } },
     { auth_file: 'c.json', plan_label: 'Pro' },
   ],
 }
 const m = meterInfo(meterStatus)
 check('no meter in the status, no meter info', meterInfo({}) === null && meterInfo(undefined) === null)
-check('the header line gives each Ultra account its own figure, never a mean', meterLine(m, name) === 'Ultra: 1M units of use ≈ first 4.0% · second not learned yet of a limit window · window 168 h')
-check('a figure taken from the previous window says so', meterLine(meterInfo({ ...meterStatus, accounts: [{ auth_file: 'a.json', meter: { known: true, per_million: 3, from_previous: true } }] }), name).includes('3.0% (previous window)'))
+check('the header line gives each Ultra account its own figure, never a mean', meterLine(m, name) === 'Ultra: 1M units of use ≈ first 0.23% · second not learned yet of a limit window · window 168 h · outside the proxy: 6 points of first (in no row)')
+check('a figure taken from the previous window says so', meterLine(meterInfo({ ...meterStatus, accounts: [{ auth_file: 'a.json', meter: { known: true, per_million: 3, from_previous: true } }] }), name).includes('3.00% (previous window)'))
 check('without an Ultra account there is no header line', meterLine(meterInfo({ meter: meterStatus.meter, accounts: [] }), name) === '')
 const tip = meterTip(m, 1_200_000)
 check('the tooltip says it is an estimate learned from the account\'s own meter, and names the basis', tip.includes('estimate') && tip.includes('own meter') && tip.includes('input + output + cache writes + 1.5% of cache reads'))
-check('the tooltip says what is left out', tip.includes('Advisor calls are not counted') && tip.includes('On Pro: 1.2M tokens') && tip.includes('Window: 168 h'))
+check('the tooltip says what is left out', tip.includes('Advisor calls are not counted') && tip.includes('per-model weights are not learned yet') && tip.includes('On Pro: 1.2M tokens') && tip.includes('Window: 168 h'))
 check('no Pro tokens, no mention of them', !meterTip(m, 0).includes('tokens (not in this percent)'))
+check('a status with nothing outside the proxy says nothing of it', !meterLine(meterInfo({ ...meterStatus, accounts: [{ auth_file: 'a.json', meter: { known: true, per_million: 1, outside: 0 } }] }), name).includes('outside'))
 check('the page never says week or Max 20x', !/week|Max 20x/i.test(tip + meterLine(m, name)))
 
 const planWin = {
@@ -146,6 +147,7 @@ check('without a status the cell is still there, with a dash', groupRowsHtml(pro
 
 const lines = modelLinesHtml([{ model: 'm-1', first: '2026-11-15T09:00:00Z', last: '2026-11-15T10:00:00Z', own: t(1, 5000), subagents: t(1, 2500) }, { model: '', first: '2026-11-15T10:00:00Z', last: '2026-11-15T11:00:00Z', own: t(1, 9), subagents: t(0, 0) }], ['m-1'])
 check('model lines give first and last seen and tokens, the subagents\' apart', lines.includes('7.5k (2.5k in subagents)') && lines.includes('· 9') && lines.includes('no model name'))
+check('each line says its share of the row', lines.includes('100% of the row') && lines.includes('0% of the row'))
 check('a model of the Fable limit is marked, another is not', (lines.match(/Fable limit/g) || []).length === 1)
 check('no lines, no markup', modelLinesHtml([], []) === '' && modelLinesHtml(undefined, []) === '')
 check('the lines are in the session row and the project row', planShown.includes('class="mlines"'))

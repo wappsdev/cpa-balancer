@@ -49,6 +49,7 @@ type AccountMeter struct {
 	PerMillion   float64 `json:"per_million"`
 	FromPrevious bool    `json:"from_previous"`          // the current window shows too little: the previous window's figure
 	WindowHours  float64 `json:"window_hours,omitempty"` // the time between two resets, measured; 0 until two have been seen
+	Outside      float64 `json:"outside,omitempty"`      // points of the meter now that rose with no use of the proxy near them: in no row
 }
 
 // MeterView says what the percent of the Sessions card means.

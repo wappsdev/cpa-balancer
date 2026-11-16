@@ -128,6 +128,18 @@ func TestAProjectListsTheModelsOfItsSessionsAndTheyAddUpToItsTokens(t *testing.T
 	t.Fatal("no project")
 }
 
+func TestWhatRoseOutsideTheProxyIsReportedWithTheAccountAndInNoRow(t *testing.T) {
+	w, _ := balanced(t)
+	w.e.st.Account(W).Plan = probe.Plan{Name: "max_20x", Weight: 10}
+	v := w.e.Status()
+	w.e.AddSessions(&v, history.Sessions{Calibrations: map[string]history.Calibration{W: {Known: true, PerMillion: 4, Outside: 6, Length: 168 * time.Hour}}})
+	for _, a := range v.Accounts {
+		if a.AuthFile == W && (a.Meter == nil || a.Meter.Outside != 6 || a.Meter.WindowHours != 168) {
+			t.Fatalf("%+v", a.Meter)
+		}
+	}
+}
+
 func TestWithoutAnyHistoryNothingIsMeteredAndEveryShareIsUnknownOrZero(t *testing.T) {
 	w, _ := balanced(t)
 	w.e.st.Account(W).Plan = probe.Plan{Name: "max_20x", Weight: 10}

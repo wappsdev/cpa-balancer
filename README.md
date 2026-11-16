@@ -130,13 +130,15 @@ it, such as `~3.2% · 7 d ~12.0%`. It is an estimate, and it is learned, not ass
 
 - **Each Ultra account is its own meter.** An Ultra account reports one `main` limit with a
   `resets_at`, and no 5-hour limit. Its utilization opens each window at zero. The balancer
-  reads that utilization from the history, finds each window where the utilization falls by 5
-  points or more, and divides what the meter shows by what the account served since its window
+  reads that utilization from the history, finds each window where the utilization falls by 3
+  points or more (a reading corrects itself by a point at most in the history), and divides what the meter shows by what the account served since its window
   opened. That is the account's factor (percent per one million units of use). A row's share is
   its use on each Ultra account times that account's factor. Nothing is averaged across
   accounts, and no constant is built in.
 - **The rows add up to the meter.** For each Ultra account, every session, subagent and the
-  requests without a session add up to the account's utilization in the current window.
+  requests without a session add up to the account's utilization in the current window, less
+  what rose outside the proxy (below). Checked on the real history: 29.00 of 29.0 and 89.00 of
+  89.0 points on the two Ultra accounts.
 - **One unit of use** is input tokens + output tokens + cache writes + 1.5% of cache reads. The
   basis was chosen on the history of two Ultra accounts: the factors of their spans spread by
   15% (standard deviation over the mean) on input and output alone, by 8.7% with cache writes
@@ -154,24 +156,33 @@ it, such as `~3.2% · 7 d ~12.0%`. It is an estimate, and it is learned, not ass
 - **Other plans stay apart.** An account on any other plan (for example Pro) learns nothing and
   is not in the percent. Its tokens are listed in the cell's tooltip (`On Pro: 1.2M tokens`).
 - **Models.** Every model draws on the same meter, and the balancer does not weight models
-  apart: a per-model fit over the intervals between readings (opus and sonnet, whose mix
-  varied from 1% to 72% of the use) did not beat a single factor on windows held out. Fable use
-  also counts toward the same meter, so it is inside the percent; its models are marked
-  `Fable limit` on the model lines. Too little Fable use was seen to fit it apart.
+  apart. Per-model weights are not learned yet: a per-model fit over the intervals between
+  readings (opus and sonnet, whose mix varied from 1% to 72% of the use) did not beat a single
+  factor on windows held out (an error of 0.62 points per interval against 0.61), and the two
+  weights it found were close (0.26 and 0.23 points per million units). Nothing is built in
+  between models. Fable use also counts toward the same meter, so it is inside the percent; its
+  models are marked `Fable limit` on the model lines. Only one interval had Fable use, too
+  little to fit it apart. The fit grouped the models by family, which is coarser than the
+  folding of the model lines below.
 - **Model lines.** A project or session row lists each model it used, by first seen, with first
-  and last seen (to the 5-minute slot) and its tokens (input, output, cache writes), the
+  and last seen (to the 5-minute slot) its tokens (input, output, cache writes) and its share of the row, the
   subagents' use apart (`2.5k in subagents`), so a session whose subagents run another model has
   not switched. Variants of one model, a context size (`name[1m]`) or a date (`name-20251001`,
   `name@20251001`), fold into one line; the row's `models` keeps the names as stored, and the
   lines add up to the row's `total`. A name that is not plain stays under `(other)`.
-- **Not outside the proxy.** The meter counts all use of the account, including use that never
-  went through the proxy. The balancer cannot see that use, so it ends up inside the factor
-  (it makes a unit look dearer). On the history measured (two Ultra accounts, 44 days), steps
-  of the meter with no proxy traffic within an hour made up 0 of 704 points on one account and
-  23 of 683 on the other, none since the cache fields began, so no remainder is shown.
+- **Outside the proxy.** The meter counts all use of the account, including use that never went
+  through the proxy, which the balancer cannot see. A rise of the meter between two readings one
+  slot apart, with no use of the proxy in the hour either side, is counted as outside the proxy:
+  it is taken off the meter before the factor is worked out, so it does not make the sessions
+  look dearer, and it is shown apart in the header line (`outside the proxy: 6 points of
+  <account>`), in no row. Readings with a gap between them are not counted (the balancer may
+  not have been running). Use outside the proxy that happens next to proxy use cannot be told
+  apart, and stays in the factor. On the history measured (two Ultra accounts, 44 days) one
+  account had no such rise; the other had 23 of 683 points, one run of four hourly steps (8
+  points) and single points besides, none since 2026-11-03.
 
 `/status` carries `meter` (the plan label, the unit, the models of the Fable limit), for each
-Ultra account `accounts[].meter` (`known`, `per_million`, `from_previous`, `window_hours`) and
+Ultra account `accounts[].meter` (`known`, `per_million`, `from_previous`, `window_hours`, `outside`) and
 `plan_label`, and on every project (`affinity.projects[]`) and every session row (the
 `sessions` rows and their `subagents`) `planShare5h` and `planShare7d` (percent of one account's
 limit window, `null` when it cannot be priced) and `elsewhere5h` and `elsewhere7d` (tokens on

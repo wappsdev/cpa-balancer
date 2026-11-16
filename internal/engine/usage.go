@@ -104,7 +104,7 @@ func (e *Engine) AddSessions(v *View, s history.Sessions) {
 			continue
 		}
 		c := s.Calibrations[v.Accounts[i].AuthFile] // an account with no history yet has no figure
-		v.Accounts[i].Meter = &AccountMeter{Known: c.Known, PerMillion: c.PerMillion, FromPrevious: c.FromPrevious, WindowHours: c.Length.Hours()}
+		v.Accounts[i].Meter = &AccountMeter{Known: c.Known, PerMillion: c.PerMillion, FromPrevious: c.FromPrevious, WindowHours: c.Length.Hours(), Outside: c.Outside}
 	}
 	if v.Affinity == nil {
 		return

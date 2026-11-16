@@ -385,9 +385,11 @@ function meterInfo(v) {
 function meterLine(m, name) {
   if (!m || !m.accounts.length) return "";
   const parts = m.accounts.map(a => a.meter.known
-    ? `${name(a.auth_file)} ${a.meter.per_million.toFixed(1)}%${a.meter.from_previous ? " (previous window)" : ""}`
+    ? `${name(a.auth_file)} ${a.meter.per_million.toFixed(2)}%${a.meter.from_previous ? " (previous window)" : ""}`
     : `${name(a.auth_file)} not learned yet`);
-  return `${m.label}: 1M units of use ≈ ${parts.join(" · ")} of a limit window${m.hours.length ? ` · window ${m.hours.join(" / ")} h` : ""}`;
+  // a rise of the meter with no use of the proxy near it: shown apart, and not in any row
+  const outside = m.accounts.filter(a => a.meter.outside > 0).map(a => `${Math.round(a.meter.outside)} points of ${name(a.auth_file)}`);
+  return `${m.label}: 1M units of use ≈ ${parts.join(" · ")} of a limit window${m.hours.length ? ` · window ${m.hours.join(" / ")} h` : ""}${outside.length ? ` · outside the proxy: ${outside.join(", ")} (in no row)` : ""}`;
 }
 
 // The tooltip of the "~% Ultra" cells: it is an estimate, where it comes from, and what it leaves out.
@@ -397,7 +399,7 @@ function meterTip(m, elsewhere) {
     `An estimate of how much of one ${m.label} account's limit window this used.`,
     `Learned from each ${m.label} account's own meter: its percent so far over what it has served since its window opened, so the rows add up to the meter. One unit of use = ${m.basis}. Accounts are not mixed: a row is priced at the factor of the account that served it.`,
     "A window with under 5 points on the meter takes the previous window's factor; with none, the figure is —.",
-    "Models are not weighted apart: the fit found no difference between them.",
+    "Models are not weighted apart: per-model weights are not learned yet.",
     "Advisor calls are not counted.",
   ];
   if (m.hours.length) parts.push(`Window: ${m.hours.join(" / ")} h, measured between resets.`);
@@ -415,9 +417,10 @@ function planCellHtml(plan = { share: null, alt: null, altLabel: "7 d", elsewher
 function modelLinesHtml(lines, fable) {
   if (!lines?.length) return "";
   const tokens = t => (t?.input_tokens || 0) + (t?.output_tokens || 0) + (t?.cache_creation_tokens || 0);
+  const whole = lines.reduce((n, l) => n + tokens(l.own) + tokens(l.subagents), 0);
   return `<div class="mlines">${lines.map(l => {
-    const sub = tokens(l.subagents);
-    return `<div class="mline"><span class="mname" title="${esc(l.model)}">${esc(l.model || "no model name")}</span>${(fable || []).includes(l.model) ? ' <span class="chip">Fable limit</span>' : ""} <span class="faint">${when(l.first)} – ${when(l.last)} · ${num(tokens(l.own) + sub)}${sub ? ` (${num(sub)} in subagents)` : ""}</span></div>`;
+    const sub = tokens(l.subagents), all = tokens(l.own) + sub;
+    return `<div class="mline"><span class="mname" title="${esc(l.model)}">${esc(l.model || "no model name")}</span>${(fable || []).includes(l.model) ? ' <span class="chip">Fable limit</span>' : ""} <span class="faint">${when(l.first)} – ${when(l.last)} · ${num(all)}${sub ? ` (${num(sub)} in subagents)` : ""} · ${whole ? Math.round(all * 100 / whole) : 0}% of the row</span></div>`;
   }).join("")}</div>`;
 }
 
