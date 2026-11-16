@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/wappsdev/cpa-balancer/internal/config"
 	"github.com/wappsdev/cpa-balancer/internal/history"
+	"github.com/wappsdev/cpa-balancer/internal/probe"
 	"github.com/wappsdev/cpa-balancer/internal/state"
 )
 
@@ -203,7 +206,7 @@ func TestARebalanceWeighsProjectsByTheirUse(t *testing.T) {
 		w.folder(p, i+1)
 		w.homed(W, p)
 	}
-	w.spent(rec, 1, 9000) // one project as heavy as the other three together
+	w.spent(rec, 1, 90000) // one project far heavier than the other three together
 	w.spent(rec, 2, 3000)
 	w.spent(rec, 3, 3000)
 	w.spent(rec, 4, 3000)
@@ -255,6 +258,76 @@ func TestARebalanceNeverMovesAProjectOntoAnAccountThatCannotTakeRequestsNow(t *t
 	w.e.Rebalance(true)
 	if got := w.homesOn(); got[W] != 2 || got[X] != 2 {
 		t.Fatalf("W takes its share once it can: %v", got)
+	}
+}
+
+// threeAccounts is the owner's live mix: a Max 20x account with most of its week left (W, 21% of
+// cap 100), a Max 20x one nearly used (X, 73% of cap 90) and a Pro with little room (Y, 2% of cap 45).
+func threeAccounts(t *testing.T) (*world, *history.Recorder) {
+	t.Helper()
+	const Y = "claude-y.json"
+	w := newWorld(t, W, X, Y)
+	w.cfg.Thresholds.FinalCap = 100
+	for i := range w.cfg.Accounts {
+		switch w.cfg.Accounts[i].AuthFile {
+		case X:
+			w.cfg.Accounts[i].Reserve, w.cfg.Accounts[i].ReserveSteps = config.ReserveCustom, []config.ReserveStep{{Cap: 90, Hours: 0}}
+		case Y:
+			w.cfg.Accounts[i].Reserve, w.cfg.Accounts[i].ReserveSteps = config.ReserveCustom, []config.ReserveStep{{Cap: 45, Hours: 0}}
+		}
+	}
+	rec := history.NewRecorder(t.TempDir())
+	w.e = New(w.cfg, newHost(), w.clock.now, rec)
+	w.e.st.Account(W).Plan = probe.Plan{Name: "max_20x", Weight: 10}
+	w.e.st.Account(X).Plan = probe.Plan{Name: "max_20x", Weight: 10}
+	w.e.st.Account(Y).Plan = probe.Plan{Name: "pro", Weight: 1}
+	w.use(W, 21, 100, 0)
+	w.use(X, 73, 40, 0)
+	w.use(Y, 2, 40, 0)
+	return w, rec
+}
+
+func TestARebalanceSpreadsTwoHeavyAndSixteenLightProjectsByHeadroom(t *testing.T) {
+	w, rec := threeAccounts(t)
+	for i := 1; i <= 18; i++ {
+		p := fmt.Sprintf("-work-%02d", i)
+		w.folder(p, i)
+		w.homed(W, p) // every project starts on the account with the most room, as the old rule put them
+		tokens := int64(40000)
+		if i <= 2 {
+			tokens = 4000000
+		}
+		w.spent(rec, i, tokens)
+	}
+	plan := w.e.Rebalance(true)
+	got := w.homesOn()
+	for _, a := range plan.Accounts {
+		t.Logf("plan: %s %s share %.2f projects %d", a.Account, a.State, a.Share, a.Projects)
+	}
+	if got[X] == 0 || got["claude-y.json"] == 0 || got[W] == 18 {
+		t.Fatalf("the load is spread over the accounts by their room: %v", got)
+	}
+	if len(plan.Accounts) != 3 || plan.Accounts[0].Projects != got[W] || plan.Accounts[1].State != "usable" || plan.Accounts[0].Share < 0.78 || plan.Accounts[0].Share > 0.8 {
+		t.Fatalf("the plan says how each account took part: %+v", plan.Accounts)
+	}
+	if got[W] < got[X] || got[X] < got["claude-y.json"] {
+		t.Fatalf("the counts follow the room: %v", got)
+	}
+	if w.home("-work-01") != W || w.home("-work-02") != W {
+		t.Fatalf("the heavy projects go where the room is: %v %v", w.home("-work-01"), w.home("-work-02"))
+	}
+}
+
+func TestAPlanThatMovesNothingBecauseTheOtherAccountsAreInADetourSaysSo(t *testing.T) {
+	w, _ := threeAccounts(t)
+	for i := 1; i <= 6; i++ {
+		w.homed(W, fmt.Sprintf("-work-%02d", i))
+	}
+	w.use(X, 73, 40, 99.5) // both other accounts are over their 5-hour cap
+	w.use("claude-y.json", 2, 40, 99.5)
+	plan := w.e.Rebalance(false)
+	if moves(plan) != 0 || plan.Accounts[1].State != "detour" || plan.Accounts[2].State != "detour" || plan.Accounts[0].Projects != 6 {
+		t.Fatalf("%+v", plan)
 	}
 }
 

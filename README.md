@@ -146,10 +146,11 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   the cap in percent, times the plan's size (a plan not read yet counts as one Pro), as a part of the
   usable accounts' total. Its share of the load is the weight of the projects homed there, plus the
   new one, as a part of the total. The score is the first minus the second, so equal accounts split
-  three new projects 2 and 1, and a Max account takes more than a Pro one. A project's weight is its
-  tokens of the last 7 days (input, output and cache writes, read from the history and refreshed
-  every 5 minutes); a project that has used nothing yet weighs what the average project does (1 when
-  none has used anything), so it is never free. A folder-pinned project counts on its pin's account.
+  three new projects 2 and 1, and a Max account takes more than a Pro one. A project's weight is half a unit
+  for being a project plus up to as much again by its tokens of the last 7 days (input, output and
+  cache writes, read from the history and refreshed every 5 minutes) relative to the average used
+  project; one that has used nothing yet weighs 1. Tokens alone would make many small projects
+  weigh nothing next to two big ones, and every one of them would stay where the room is. A folder-pinned project counts on its pin's account.
   A tie goes to CPA's existing order. If no account is usable the project keeps its home and CPA's
   existing order decides (it releases reserves and uses credits as before). A project that has room
   never moves only to balance; "Rebalance" below is the owner's action for that.
@@ -307,7 +308,7 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 | POST | `/run` | one balancer tick now |
 | POST | `/recheck?auth_file=…` | probe one account (or every account) now |
 | POST | `/pin` | body `{"kind": "folder"\|"session", "key": …, "account": …}` pins a folder or a main session to an account; an empty `account` removes a pin set on the page. The names are in the body, never in the URL. Answers with the status |
-| POST | `/rebalance` | body `{"apply": false}` (the default) answers with the plan, `{"apply": true}` carries it out: `{"applied", "pinned", "plan": [{"project", "from", "to"}]}`, every project without a folder pin, `from == to` for one that stays |
+| POST | `/rebalance` | body `{"apply": false}` (the default) answers with the plan, `{"apply": true}` carries it out: `{"applied", "pinned", "plan": [{"project", "from", "to"}], "accounts": [{"account", "state", "share", "projects"}]}`: every project without a folder pin, `from == to` for one that stays; `accounts` says how each account took part (`usable`, `detour` or `full`, its share of the room, the projects left on it) |
 | GET | `/credentials` | the Claude credentials CPA lists |
 
 ## License

@@ -58,8 +58,8 @@ type tenant struct {
 
 // tenants are the projects with a home and the folder-pinned projects with recent use (a pinned
 // project gets no home while its pin has room), each on the account that carries it. A project's
-// weight is its tokens over the last 7 days; one with none recorded weighs what the average used
-// project does, or 1 when no project has used anything, so a project just placed is not free.
+// weight comes from its tokens over the last 7 days, see weightOf; mean is the average tokens of
+// the projects that have used any.
 // Callers hold e.mu. skip names a project to leave out, the one being placed.
 func (e *Engine) tenants(skip string) (out []tenant, mean float64) {
 	a := &e.st.Affinity
@@ -90,7 +90,6 @@ func (e *Engine) tenants(skip string) (out []tenant, mean float64) {
 			used++
 		}
 	}
-	mean = 1
 	if used > 0 {
 		mean = sum / float64(used)
 	}
@@ -101,11 +100,16 @@ func (e *Engine) tenants(skip string) (out []tenant, mean float64) {
 	return out, mean
 }
 
-func (e *Engine) weightOf(project string, mean float64) float64 {
-	if tokens := e.loads[project]; tokens > 0 {
-		return float64(tokens)
+// weightOf is what a project counts for as load. Every project counts for half a unit as itself (a
+// session, a prompt cache, work that has not shown in the history yet) and for up to as much again
+// by its use, relative to the average used project; so one with no recorded use, or when nothing
+// has been used, weighs 1. Tokens alone would make a hundred small projects weigh nothing next to
+// two big ones, and they would all stay where the room is.
+func (e *Engine) weightOf(project string, meanTokens float64) float64 {
+	if tokens := e.loads[project]; tokens > 0 && meanTokens > 0 {
+		return 0.5 + 0.5*float64(tokens)/meanTokens
 	}
-	return mean
+	return 1
 }
 
 // balancer scores accounts for a project about to be placed. An account's score is its share of the
@@ -197,6 +201,17 @@ type RebalanceResult struct {
 	Applied bool   `json:"applied"`
 	Plan    []Move `json:"plan"`   // every project without a folder pin, the heaviest first
 	Pinned  int    `json:"pinned"` // projects left alone because their folder is pinned
+	// Accounts says how each configured account took part, so a plan that moves nothing can be
+	// explained: its standing, its share of the room and how many projects the plan leaves on it.
+	Accounts []PlanAccount `json:"accounts"`
+}
+
+// PlanAccount is one account in a rebalance plan.
+type PlanAccount struct {
+	Account  string  `json:"account"`
+	State    string  `json:"state"`    // usable, detour (keeps its projects, takes none) or full (takes none)
+	Share    float64 `json:"share"`    // its part of the room under the caps of the accounts that are not full
+	Projects int     `json:"projects"` // projects on it after the plan, the pinned ones included
 }
 
 // Rebalance plans, and with apply carries out, a fresh placement of every project that has no
@@ -234,38 +249,53 @@ func (e *Engine) Rebalance(apply bool) RebalanceResult {
 }
 
 // plan is the rebalance; callers hold e.mu.
-func (e *Engine) plan(now time.Time) RebalanceResult {
-	res := RebalanceResult{Plan: []Move{}}
+func (e *Engine) plan(now time.Time) (res RebalanceResult) {
+	res = RebalanceResult{Plan: []Move{}, Accounts: []PlanAccount{}}
 	// Every account that is not full has a share and keeps its projects, but a project moves only
 	// onto a usable one: a detour account (5-hour cap, cooldown, disabled) would turn every request
 	// of the project into a fallback.
 	var candidates []string
 	closed := map[string]bool{}
+	state := map[string]string{}
 	for _, a := range e.cfg.Accounts {
 		switch e.standing(a.AuthFile, quota.Main, now) {
 		case policy.Usable:
 			candidates = append(candidates, a.AuthFile)
+			state[a.AuthFile] = "usable"
 		case policy.Detour:
 			candidates = append(candidates, a.AuthFile)
 			closed[a.AuthFile] = true
+			state[a.AuthFile] = "detour"
+		default:
+			state[a.AuthFile] = "full"
 		}
 	}
 	ts, _ := e.tenants("")
 	var free []tenant
+	count := map[string]int{}
 	for _, t := range ts {
 		if t.pinned {
 			res.Pinned++
+			count[t.account]++
 		} else {
 			free = append(free, t)
 		}
 	}
+	b := e.newBalancer(candidates, now)
+	defer func() {
+		for _, m := range res.Plan {
+			count[m.To]++
+		}
+		for _, a := range e.cfg.Accounts {
+			res.Accounts = append(res.Accounts, PlanAccount{Account: a.AuthFile, State: state[a.AuthFile], Share: b.share[a.AuthFile], Projects: count[a.AuthFile]})
+		}
+	}()
 	if len(candidates) == 0 {
 		for _, t := range free {
 			res.Plan = append(res.Plan, Move{t.project, t.account, t.account})
 		}
 		return res
 	}
-	b := e.newBalancer(candidates, now)
 	b.closed = closed
 	var total float64
 	for _, t := range ts {
