@@ -1,15 +1,10 @@
 // The panel's own sessionsView() on what the balancer answers: rows, shares, nesting and escaping.
-import { readFileSync } from 'node:fs'
-const src = readFileSync(new URL("assets/app.js", import.meta.url), "utf8")
-const esc = src.match(/const esc = [^\n]+\n/)[0]
-const depthLimit = src.match(/const MAX_SESSION_DEPTH = [^\n]+\n/)[0]
-const fn = src.match(/function sessionsView\(w, picks\) \{[\s\S]*?\n\}\n/)[0]
-const placement = src.match(/function placementHtml\(r, name, accounts\) \{[\s\S]*?\n\}\n/)[0]
-const reasons = src.match(/const REASONS = \{[\s\S]*?\n\};\nconst reasonText = [^\n]+\n/)[0]
-const rowHtml = src.match(/function sessionRowHtml\(r, name, accounts\) \{[\s\S]*?\n\}\n/)[0]
-const num = src.match(/const num = [^\n]+\n/)[0]
+import { load } from './extract.mjs'
 const when = 'const when = t => `<span class="when">${esc(t)}</span>`;'
-const { sessionsView, sessionRowHtml } = new Function(`${esc}; ${num}; ${when}; ${depthLimit}; ${reasons}; ${fn}; ${placement}; ${rowHtml}; return { sessionsView, sessionRowHtml }`)()
+const { sessionsView, sessionRowHtml } = load({
+  consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText'], extra: when,
+  fns: ['sessionsView', 'toggleHtml', 'pinSelectHtml', 'placementText', 'sessionRowHtml'], returns: ['sessionsView', 'sessionRowHtml'],
+})
 const fails = []
 const check = (name, ok) => { if (!ok) fails.push(name) }
 
@@ -49,8 +44,8 @@ check('depth is bounded', sessionsView({ total: t(10, 10, 0), sessions: [chain(0
 const hostile = '"><img src=x onerror=alert(1)>'
 const bad = sessionsView({ total: t(1, 1, 1), accounts: {}, other: { sessions: 0, total: t(0, 0, 0) },
   sessions: [{ id: hostile, last: hostile, own: t(1, 1, 1), total: t(1, 1, 1), accounts: { [hostile]: t(1, 1, 1) }, models: {} }] })
-const html = sessionRowHtml(bad.rows[0], k => k)
-check('hostile text is escaped in the row', !html.includes('<img') && html.includes('&lt;img') && html.split('&lt;img').length - 1 === 4)
+const html = sessionRowHtml({ row: bad.rows[0], subs: [] }, false, undefined, k => k, [])
+check('hostile text is escaped in the row', !html.includes('<img') && html.includes('&lt;img') && !html.includes('"><img'))
 check('the full id is escaped into the title', html.includes('title="&quot;&gt;&lt;img'))
 
 if (fails.length) { console.log('FAIL: ' + fails.join('; ')); process.exit(1) }

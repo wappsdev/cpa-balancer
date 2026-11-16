@@ -111,6 +111,7 @@ function renderStatus(v) {
   }
   $("run").disabled = false;
   $("recheck-all").disabled = false;
+  $("rebalance").disabled = false;
 
   const choice = (label, c, order) => `<div class="card choice">
     <div class="eyebrow">${label}</div>
@@ -340,54 +341,188 @@ const REASONS = {
 };
 const reasonText = r => REASONS[r] || r;
 
-// Where a session went and the controls to pin it. A subagent follows its parent, so only a main
-// session is pinned; its folder can be pinned when the balancer found one. Every value is escaped:
-// a folder name is user data.
-function placementHtml(r, name, accounts) {
-  if (!r.pick) return "—";
-  const p = r.pick;
-  const project = p.project ? ` <span class="stitle faint" title="${esc(p.project)}">${esc(p.project)}</span>` : "";
-  const text = `<span class="chip${/fallback/.test(p.reason) ? " warn" : ""}">${esc(name(p.account))}</span> <span class="faint">${esc(reasonText(p.reason))}</span>${project}`;
-  if (r.depth || !r.id) return text;
-  const options = (accounts || []).map(a => `<option value="${esc(a.auth_file)}"${a.auth_file === p.account ? " selected" : ""}>${esc(a.name)}</option>`).join("");
-  return `${text}<div class="pin-controls"><select class="select small" data-pin-choice="${esc(r.id)}" aria-label="Account to pin to">${options}</select>
-    ${p.project ? `<button type="button" class="button" data-pin="folder" data-key="${esc(p.project)}" data-for="${esc(r.id)}">Pin folder</button>` : ""}
-    <button type="button" class="button" data-pin="session" data-key="${esc(r.id)}" data-for="${esc(r.id)}">Pin session</button></div>`;
+// The card has three levels, all closed when the page opens: a project (a folder, or the group of
+// sessions with none), its sessions, and each session's subagents. The open ones are remembered
+// in localStorage under their keys: "p:<folder>", "n:" for no project, "s:<session id>".
+const OPEN_KEY = "cpa-balancer.sessions-open";
+const MAX_OPEN = 200;
+function readOpen() {
+  try {
+    const keys = JSON.parse(localStorage.getItem(OPEN_KEY));
+    return new Set(Array.isArray(keys) ? keys.filter(k => typeof k === "string").slice(-MAX_OPEN) : []);
+  } catch { return new Set(); }
+}
+function writeOpen(open) {
+  try { localStorage.setItem(OPEN_KEY, JSON.stringify([...open].slice(-MAX_OPEN))); } catch { /* storage can be blocked: the state then lasts until the next reload */ }
 }
 
-function sessionRowHtml(r, name, accounts) {
-  const used = r.accounts.map(a => esc(name(a.key)) + (r.accounts.length > 1 ? ` <span class="faint">${a.share}%</span>` : "")).join(" · ") || "—";
-  const detail = `${r.depth ? "" : `own ${num(r.ownTokens)} · `}cache reads ${num(r.cacheRead)}`;
-  return `<tr class="${r.depth ? "sub" : ""}${r.none ? " none" : ""}">
-    <th scope="row" title="${esc(r.id)}">${r.depth ? '<span class="faint">↳ </span>' : ""}<span class="sid">${esc(r.label)}</span></th>
-    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td>
-    <td>${r.share}%</td><td class="left">${used}</td><td class="left placement">${placementHtml(r, name, accounts)}</td></tr>`;
+// The rows of sessionsView, grouped by project folder and sorted by use, the largest first. A
+// project's totals are the balancer's own (summed from every session, so the week's cut list does
+// not make them short); what the listed sessions leave out is `unlisted`. Pure, so it is tested.
+function projectGroups(v, aff, span) {
+  const percent = (n, of) => of ? Math.round(n * 100 / of) : 0;
+  const groups = new Map();
+  const group = project => {
+    if (!groups.has(project)) groups.set(project, { project, sessions: [] });
+    return groups.get(project);
+  };
+  let family = null;
+  for (const r of v.rows) {
+    if (r.depth === 0) {
+      family = { row: r, subs: [] };
+      group(aff?.session_projects?.[r.id] ?? r.pick?.project ?? "").sessions.push(family);
+    } else if (family) family.subs.push(r);
+  }
+  const used = new Map();
+  for (const p of aff?.projects || []) {
+    const u = p[span];
+    if (u && (u.tokens || u.requests)) { group(p.project); used.set(p.project, u); }
+  }
+  return [...groups.values()].map(g => {
+    g.sessions.sort((a, b) => b.row.tokens - a.row.tokens || (a.row.id < b.row.id ? -1 : 1));
+    const listed = { requests: 0, tokens: 0, last: "" };
+    for (const { row } of g.sessions) {
+      listed.requests += row.requests;
+      listed.tokens += row.tokens;
+      if (row.last && (!listed.last || Date.parse(row.last) > Date.parse(listed.last))) listed.last = row.last;
+    }
+    const u = used.get(g.project) || listed;
+    return {
+      key: g.project === "" ? "n:" : "p:" + g.project, project: g.project, none: g.project === "", sessions: g.sessions,
+      requests: u.requests, tokens: u.tokens, last: u.last || "", share: percent(u.tokens, v.total.tokens), unlisted: Math.max(0, u.tokens - listed.tokens),
+    };
+  }).sort((a, b) => b.tokens - a.tokens || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
 }
 
-// The pins and project homes under the sessions table. A pin set in the config is read only here.
-// A pin or a home whose account is full is said so: the project falls back until it has room again.
-const LISTED = 20;
-function pinsHtml(aff, name) {
+// A project's pin and home, as the balancer reports them.
+function homeInfo(project, aff) {
+  return {
+    pin: (aff?.folder_pins || []).find(p => p.key === project) || null,
+    home: (aff?.homes || []).find(h => h.project === project) || null,
+  };
+}
+
+function toggleHtml(key, open) {
+  return `<button type="button" class="toggle" data-toggle="${esc(key)}" aria-expanded="${open}" aria-label="${open ? "Hide" : "Show"} contents">${open ? "▾" : "▸"}</button>`;
+}
+
+// The account choice of a project or a session: "no pin", or one account. Choosing sets the pin at
+// once; "no pin" clears it. A pin set in the config is shown and cannot be changed here.
+function pinSelectHtml(kind, key, pin, accounts, name) {
+  const list = [...accounts];
+  if (pin && !list.some(a => a.auth_file === pin.account)) list.push({ auth_file: pin.account, name: name(pin.account) });
+  const options = list.map(a => `<option value="${esc(a.auth_file)}"${pin?.account === a.auth_file ? " selected" : ""}>${esc(a.name)}</option>`).join("");
+  const locked = pin?.source === "config";
+  return `<select class="select small" data-pin-select="${kind}" data-key="${esc(key)}" aria-label="Pin to an account"${locked ? ' disabled title="set in the config"' : ""}>
+    <option value=""${pin ? "" : " selected"}>no pin</option>${options}</select>${locked ? ' <span class="faint">config</span>' : ""}`;
+}
+
+// Where a session's last request went and why.
+function placementText(pick, name) {
+  if (!pick) return '<span class="faint">—</span>';
+  return `<span class="chip${/fallback/.test(pick.reason) ? " warn" : ""}">${esc(name(pick.account))}</span> <span class="faint">${esc(reasonText(pick.reason))}</span>`;
+}
+
+// A project's account and why: its folder pin when there is one, else its home.
+function homeText(project, aff, name) {
+  const { pin, home } = homeInfo(project, aff);
+  if (pin) {
+    return `<span class="chip accent">${esc(name(pin.account))}</span> <span class="faint">folder pin</span>${pin.full ? ' <span class="chip warn">account full: falling back</span>' : ""}`;
+  }
+  if (home) {
+    return `<span class="chip">${esc(name(home.account))}</span> <span class="faint">project home</span>${home.full ? ' <span class="chip warn">full: moves on the next request</span>' : ""}`;
+  }
+  return '<span class="faint">no home yet</span>';
+}
+
+function projectRowHtml(g, open, aff, name, accounts) {
+  const label = g.none ? '<span class="stitle none">no project</span>' : `<span class="stitle" title="${esc(g.project)}">${esc(g.project)}</span>`;
+  const count = g.sessions.length;
+  const pin = homeInfo(g.project, aff).pin;
+  return `<tr class="project">
+    <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${g.unlisted > 0 ? "+" : ""} session${count === 1 && !g.unlisted ? "" : "s"}</span></th>
+    <td>${g.last ? when(g.last) : "—"}</td><td>${g.requests}</td><td>${num(g.tokens)}</td><td>${g.share}%</td>
+    <td class="left">${g.none ? '<span class="faint">CPA\'s own order</span>' : homeText(g.project, aff, name)}</td>
+    <td class="left">${g.none ? "" : pinSelectHtml("folder", g.project, pin, accounts, name)}</td></tr>`;
+}
+
+function sessionRowHtml(f, open, aff, name, accounts) {
+  const r = f.row;
+  const used = r.accounts.map(a => name(a.key) + (r.accounts.length > 1 ? ` ${a.share}%` : "")).join(" · ");
+  const detail = [`own ${num(r.ownTokens)}`, `cache reads ${num(r.cacheRead)}`, used && `accounts ${used}`].filter(Boolean).join(" · ");
+  const pin = (aff?.session_pins || []).find(p => p.key === r.id) || null;
+  const subs = f.subs.length;
+  return `<tr class="session${r.none ? " none" : ""}">
+    <th scope="row" title="${esc(r.id)}">${subs ? toggleHtml("s:" + r.id, open) : '<span class="toggle-space"></span>'}<span class="sid">${esc(r.label)}</span>${subs ? ` <span class="faint">${subs} subagent${subs === 1 ? "" : "s"}</span>` : ""}</th>
+    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td><td>${r.share}%</td>
+    <td class="left">${placementText(r.pick, name)}</td>
+    <td class="left">${r.id ? pinSelectHtml("session", r.id, pin, accounts, name) : ""}</td></tr>`;
+}
+
+function subRowHtml(r, name) {
+  return `<tr class="sub">
+    <th scope="row" title="${esc(r.id)}" style="padding-left: ${28 + r.depth * 14}px"><span class="faint">↳ </span><span class="sid">${esc(r.label)}</span></th>
+    <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(`cache reads ${num(r.cacheRead)}`)}">${num(r.tokens)}</td><td>${r.share}%</td>
+    <td class="left">${placementText(r.pick, name)}</td><td></td></tr>`;
+}
+
+// The table body: every project, and below an open one its sessions, and below an open session its subagents.
+function groupRowsHtml(groups, open, aff, name, accounts) {
+  const rows = [];
+  for (const g of groups) {
+    const isOpen = open.has(g.key);
+    rows.push(projectRowHtml(g, isOpen, aff, name, accounts));
+    if (!isOpen) continue;
+    for (const f of g.sessions) {
+      const sessionOpen = open.has("s:" + f.row.id);
+      rows.push(sessionRowHtml(f, sessionOpen, aff, name, accounts));
+      if (sessionOpen) for (const s of f.subs) rows.push(subRowHtml(s, name));
+    }
+    if (g.unlisted > 0) {
+      rows.push(`<tr class="sub"><th scope="row" class="faint" style="padding-left: 28px">smaller sessions not listed</th><td></td><td></td><td>${num(g.unlisted)}</td><td></td><td></td><td></td></tr>`);
+    }
+  }
+  return rows.join("");
+}
+
+// A pin names a folder or a session the window may not show; it is listed here so it can still be
+// removed. A pin set in the config is read only. Pure, so it is tested.
+function strayPinsHtml(aff, groups, name) {
   if (!aff) return "";
-  const pinItem = (kind, p) => {
+  const projects = new Set(groups.map(g => g.project));
+  const sessions = new Set(groups.flatMap(g => g.sessions.map(f => f.row.id)));
+  const item = (kind, p) => {
     const label = kind === "session" ? p.key.slice(0, 8) : p.key;
     return `<li><span class="chip">${kind}</span> <span class="${kind === "session" ? "sid" : "stitle"}" title="${esc(p.key)}">${esc(label)}</span> → <strong>${esc(name(p.account))}</strong>
       ${p.full ? '<span class="chip warn">account full: falling back</span>' : ""}
       ${p.source === "ui" ? `<button type="button" class="button" data-unpin="${kind}" data-key="${esc(p.key)}">Unpin</button>` : '<span class="faint">set in the config</span>'}</li>`;
   };
-  const pins = [...(aff.folder_pins || []).map(p => pinItem("folder", p)), ...(aff.session_pins || []).map(p => pinItem("session", p))];
-  const homes = (aff.homes || []).slice(0, LISTED).map(h => `<li><span class="stitle" title="${esc(h.project)}">${esc(h.project)}</span> → <strong>${esc(name(h.account))}</strong>
-      ${h.full ? '<span class="chip warn">full: moves on the next request</span>' : ""}</li>`);
-  const more = (aff.homes || []).length - homes.length;
-  if (!pins.length && !homes.length) return "";
-  return `<div class="affinity">
-    ${pins.length ? `<h3>Pins</h3><ul class="pins">${pins.join("")}</ul>` : ""}
-    ${homes.length ? `<h3>Project homes</h3><ul class="pins">${homes.join("")}</ul>${more > 0 ? `<p class="hint">and ${more} more</p>` : ""}` : ""}
-  </div>`;
+  const items = [
+    ...(aff.folder_pins || []).filter(p => !projects.has(p.key)).map(p => item("folder", p)),
+    ...(aff.session_pins || []).filter(p => !sessions.has(p.key)).map(p => item("session", p)),
+  ];
+  return items.length ? `<div class="affinity"><h3>Pins outside this window</h3><ul class="pins">${items.join("")}</ul></div>` : "";
+}
+
+// The rebalance plan, or its result once applied: the projects that move, from → to. A project
+// that stays is only counted. Folder and account names are escaped.
+function rebalanceHtml(res, name) {
+  const moves = (res.plan || []).filter(m => m.from !== m.to);
+  const stay = (res.plan || []).length - moves.length;
+  const list = moves.map(m => `<li><span class="stitle" title="${esc(m.project)}">${esc(m.project)}</span> ${esc(name(m.from))} → <strong>${esc(name(m.to))}</strong></li>`).join("");
+  const counts = `${stay} stay${res.pinned ? ` · ${res.pinned} pinned, left alone` : ""}`;
+  const close = '<button type="button" class="button" data-rebalance="close">Close</button>';
+  if (res.applied) {
+    return `<p>${moves.length ? `Moved ${moves.length} project${moves.length === 1 ? "" : "s"}.` : "Nothing to move."} <span class="faint">${counts}</span></p>${moves.length ? `<ul class="pins">${list}</ul>` : ""}<div class="actions">${close}</div>`;
+  }
+  if (!moves.length) return `<p>Already balanced: no project moves. <span class="faint">${counts}</span></p><div class="actions">${close}</div>`;
+  return `<p>${moves.length} project${moves.length === 1 ? "" : "s"} would move. <span class="faint">${counts}</span></p><ul class="pins">${list}</ul>
+    <div class="actions"><button type="button" class="button primary" data-rebalance="apply">Apply</button><button type="button" class="button" data-rebalance="close">Cancel</button></div>`;
 }
 
 let sessionSpan = "five_hour";
 let sessionData = null;
+const openGroups = readOpen();
 
 function renderSessions(s) {
   sessionData = s || null; // a status without sessions clears the card
@@ -398,41 +533,71 @@ function drawSessions() {
   const w = sessionData?.[sessionSpan];
   const card = $("sessions");
   if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; return; }
-  const v = sessionsView(w, view?.affinity?.sessions);
+  // a refresh must not close the account list the owner has open
+  if (card.contains(document.activeElement) && document.activeElement.matches("select")) return;
+  const aff = view?.affinity;
+  const v = sessionsView(w, aff?.sessions);
+  const groups = projectGroups(v, aff, sessionSpan);
   $("sessions-hint").textContent = `${sessionSpan === "week" ? "last 7 days" : "last 5 hours"} · ${v.total.requests} requests · ${num(v.total.tokens)} tokens (input, output, cache writes)`;
-  card.innerHTML = v.rows.length ? `<table class="sessions-table">
-      <thead><tr><th>Session</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Accounts</th><th class="left">Placement</th></tr></thead>
-      <tbody>${v.rows.map(r => sessionRowHtml(r, short, pinAccounts())).join("")}</tbody>
-    </table>${v.other.sessions ? `<p class="hint">${v.other.sessions} smaller sessions not listed: ${num(v.other.tokens)} tokens.</p>` : ""}`
+  card.innerHTML = groups.length ? `<table class="sessions-table">
+      <thead><tr><th>Project</th><th>Last seen</th><th>Requests</th><th>Tokens</th><th>Share</th><th class="left">Account</th><th class="left">Pin</th></tr></thead>
+      <tbody>${groupRowsHtml(groups, openGroups, aff, short, pinAccounts())}</tbody>
+    </table>`
     : '<p class="empty">No requests in this window.</p>';
-  card.innerHTML += pinsHtml(view?.affinity, short);
-  for (const select of card.querySelectorAll("[data-pin-choice]")) { // a refresh keeps the account being chosen
-    if (pinChoice[select.dataset.pinChoice]) select.value = pinChoice[select.dataset.pinChoice];
-  }
+  card.innerHTML += strayPinsHtml(aff, groups, short);
 }
 
 const pinAccounts = () => (view?.accounts || []).map(a => ({ auth_file: a.auth_file, name: a.name }));
-const pinChoice = {}; // session id -> the account picked in its row, kept across refreshes
 
 async function setPin(kind, key, account) {
   try { renderStatus(await api("POST", ROUTES + "/pin", { kind, key, account })); showError(null); }
-  catch (err) { showError(err); }
+  catch (err) { showError(err); drawSessions(); }
 }
 
-$("sessions").addEventListener("change", e => {
-  const select = e.target.closest("[data-pin-choice]");
-  if (select) pinChoice[select.dataset.pinChoice] = select.value;
+$("sessions").addEventListener("change", async e => {
+  const select = e.target.closest("[data-pin-select]");
+  if (!select) return;
+  select.blur(); // so the redraw that follows is not held back by the focus
+  select.disabled = true;
+  await setPin(select.dataset.pinSelect, select.dataset.key, select.value);
 });
 $("sessions").addEventListener("click", async e => {
-  const pin = e.target.closest("[data-pin]"), unpin = e.target.closest("[data-unpin]");
-  if (pin) {
-    const select = [...$("sessions").querySelectorAll("[data-pin-choice]")].find(s => s.dataset.pinChoice === pin.dataset.for);
-    pin.disabled = true;
-    await setPin(pin.dataset.pin, pin.dataset.key, select?.value || "");
+  const toggle = e.target.closest("[data-toggle]"), unpin = e.target.closest("[data-unpin]");
+  if (toggle) {
+    const key = toggle.dataset.toggle;
+    if (!openGroups.delete(key)) openGroups.add(key);
+    writeOpen(openGroups);
+    drawSessions();
+    [...$("sessions").querySelectorAll("[data-toggle]")].find(b => b.dataset.toggle === key)?.focus(); // a redraw keeps the keyboard where it was
   } else if (unpin) {
     unpin.disabled = true;
     await setPin(unpin.dataset.unpin, unpin.dataset.key, "");
   }
+});
+
+// "Dengele": place every project without a folder pin again, balanced. The plan is shown first;
+// nothing changes until it is applied.
+async function rebalance(apply) {
+  const panel = $("rebalance-plan");
+  try {
+    const res = await api("POST", ROUTES + "/rebalance", { apply });
+    panel.innerHTML = rebalanceHtml(res, short);
+    panel.hidden = false;
+    showError(null);
+    if (apply) await refreshStatus();
+  } catch (err) { showError(err); }
+}
+$("rebalance").addEventListener("click", async e => {
+  const button = e.currentTarget;
+  button.disabled = true;
+  try { await rebalance(false); } finally { button.disabled = false; }
+});
+$("rebalance-plan").addEventListener("click", async e => {
+  const choice = e.target.closest("[data-rebalance]");
+  if (!choice) return;
+  if (choice.dataset.rebalance === "close") { $("rebalance-plan").hidden = true; return; }
+  choice.disabled = true;
+  try { await rebalance(true); } finally { choice.disabled = false; }
 });
 
 for (const b of $("session-span").querySelectorAll("button")) {
