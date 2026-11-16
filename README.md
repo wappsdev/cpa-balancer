@@ -119,7 +119,64 @@ client cannot grow the history without bound. Slots written before sessions were
 as `no session`.
 
 Advisor models' calls are not seen live: CPA reports only the top-level `usage` of a response,
-which leaves the advisor iterations out. Claude Code's transcripts hold them; see the next section.
+which leaves the advisor iterations out. Claude Code's transcripts hold them; see the transcript
+section. The percent below does not count them either.
+
+### Use of an Ultra account's limit window (`~% Ultra`)
+
+Every project, session and subagent row shows what it used of **one Ultra account's limit window**
+(plan `max_20x`, which the page calls Ultra) in the window in view, with the other window beside
+it, such as `~3.2% · 7 d ~12.0%`. It is an estimate, and it is learned, not assumed.
+
+- **Each Ultra account is its own meter.** An Ultra account reports one `main` limit with a
+  `resets_at`, and no 5-hour limit. Its utilization opens each window at zero. The balancer
+  reads that utilization from the history, finds each window where the utilization falls by 5
+  points or more, and divides what the meter shows by what the account served since its window
+  opened. That is the account's factor (percent per one million units of use). A row's share is
+  its use on each Ultra account times that account's factor. Nothing is averaged across
+  accounts, and no constant is built in.
+- **The rows add up to the meter.** For each Ultra account, every session, subagent and the
+  requests without a session add up to the account's utilization in the current window.
+- **One unit of use** is input tokens + output tokens + cache writes + 1.5% of cache reads. The
+  basis was chosen on the history of two Ultra accounts: the factors of their spans spread by
+  15% (standard deviation over the mean) on input and output alone, by 8.7% with cache writes
+  added, and by 5.5% with the cache-read fraction on top (the fraction was fitted; the spread
+  is flat between 1% and 2%). Cache writes were recorded from 2026-11-01 on, so a window opened
+  before that is not a valid sample.
+- **Windows.** The window length is measured from the gaps between the resets seen in the
+  history (the median), and shown in the tooltip; nothing assumes it. A window needs 5 points on
+  the meter to give a factor, because the meter moves in whole points; below that, the previous
+  window's factor is used, and when there is none, or the account's window was already running
+  when the history began, the row shows `—`. A rolling 7-day figure crosses resets: each slot of
+  use is priced with the factor of the window it fell in, so the part before a reset uses the
+  previous window's factor. The history is read back 15 days for this, so the previous window
+  is there.
+- **Other plans stay apart.** An account on any other plan (for example Pro) learns nothing and
+  is not in the percent. Its tokens are listed in the cell's tooltip (`On Pro: 1.2M tokens`).
+- **Models.** Every model draws on the same meter, and the balancer does not weight models
+  apart: a per-model fit over the intervals between readings (opus and sonnet, whose mix
+  varied from 1% to 72% of the use) did not beat a single factor on windows held out. Fable use
+  also counts toward the same meter, so it is inside the percent; its models are marked
+  `Fable limit` on the model lines. Too little Fable use was seen to fit it apart.
+- **Model lines.** A project or session row lists each model it used, by first seen, with first
+  and last seen (to the 5-minute slot) and its tokens (input, output, cache writes), the
+  subagents' use apart (`2.5k in subagents`), so a session whose subagents run another model has
+  not switched. Variants of one model, a context size (`name[1m]`) or a date (`name-20251001`,
+  `name@20251001`), fold into one line; the row's `models` keeps the names as stored, and the
+  lines add up to the row's `total`. A name that is not plain stays under `(other)`.
+- **Not outside the proxy.** The meter counts all use of the account, including use that never
+  went through the proxy. The balancer cannot see that use, so it ends up inside the factor
+  (it makes a unit look dearer). On the history measured (two Ultra accounts, 44 days), steps
+  of the meter with no proxy traffic within an hour made up 0 of 704 points on one account and
+  23 of 683 on the other, none since the cache fields began, so no remainder is shown.
+
+`/status` carries `meter` (the plan label, the unit, the models of the Fable limit), for each
+Ultra account `accounts[].meter` (`known`, `per_million`, `from_previous`, `window_hours`) and
+`plan_label`, and on every project (`affinity.projects[]`) and every session row (the
+`sessions` rows and their `subagents`) `planShare5h` and `planShare7d` (percent of one account's
+limit window, `null` when it cannot be priced) and `elsewhere5h` and `elsewhere7d` (tokens on
+accounts with no meter). Rows also carry `model_lines`; projects carry them as `models` in each of
+their two windows.
 
 ## Project affinity
 
