@@ -243,6 +243,21 @@ func TestARebalanceDoesNotEmptyAnAccountThatIsOnlyInADetour(t *testing.T) {
 	}
 }
 
+func TestARebalanceNeverMovesAProjectOntoAnAccountThatCannotTakeRequestsNow(t *testing.T) {
+	w, _ := balanced(t)
+	w.homed(X, "-work-a", "-work-b", "-work-c", "-work-d")
+	w.use(W, 10, 140, 99.5) // W is in a 5-hour detour: not full, but every request to it would be a fallback
+	plan := w.e.Rebalance(true)
+	if got := w.homesOn(); got[X] != 4 || got[W] != 0 || moves(plan) != 0 {
+		t.Fatalf("W has the room but cannot take a project now: %v %+v", got, plan)
+	}
+	w.use(W, 10, 140, 0) // the detour ends
+	w.e.Rebalance(true)
+	if got := w.homesOn(); got[W] != 2 || got[X] != 2 {
+		t.Fatalf("W takes its share once it can: %v", got)
+	}
+}
+
 func TestARebalanceMovesProjectsOffAnAccountThatIsFull(t *testing.T) {
 	w, _ := balanced(t)
 	w.homed(W, "-work-a", "-work-b")

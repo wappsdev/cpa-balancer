@@ -117,10 +117,13 @@ type balancer struct {
 	share    map[string]float64
 	load     map[string]float64
 	rank     func(string) int
+	// closed holds the accounts that cannot take a project now (in a detour): they keep a project
+	// they already have, and count in the shares, but pick never moves one onto them.
+	closed map[string]bool
 }
 
 func (e *Engine) newBalancer(accounts []string, now time.Time) *balancer {
-	b := &balancer{accounts: accounts, share: map[string]float64{}, load: map[string]float64{}, rank: e.ranker(quota.Main)}
+	b := &balancer{accounts: accounts, share: map[string]float64{}, load: map[string]float64{}, rank: e.ranker(quota.Main), closed: map[string]bool{}}
 	var room float64
 	for _, a := range accounts {
 		room += e.headroom(a, quota.Main, now)
@@ -140,6 +143,9 @@ func (e *Engine) newBalancer(accounts []string, now time.Time) *balancer {
 func (b *balancer) pick(weight, total float64, prefer string) string {
 	best, bestScore := "", 0.0
 	for _, a := range b.accounts {
+		if b.closed[a] && a != prefer {
+			continue
+		}
 		score := b.share[a] - (b.load[a]+weight)/total
 		switch {
 		case best == "" || score > bestScore+tie:
@@ -230,10 +236,18 @@ func (e *Engine) Rebalance(apply bool) RebalanceResult {
 // plan is the rebalance; callers hold e.mu.
 func (e *Engine) plan(now time.Time) RebalanceResult {
 	res := RebalanceResult{Plan: []Move{}}
+	// Every account that is not full has a share and keeps its projects, but a project moves only
+	// onto a usable one: a detour account (5-hour cap, cooldown, disabled) would turn every request
+	// of the project into a fallback.
 	var candidates []string
+	closed := map[string]bool{}
 	for _, a := range e.cfg.Accounts {
-		if e.standing(a.AuthFile, quota.Main, now) != policy.Full {
+		switch e.standing(a.AuthFile, quota.Main, now) {
+		case policy.Usable:
 			candidates = append(candidates, a.AuthFile)
+		case policy.Detour:
+			candidates = append(candidates, a.AuthFile)
+			closed[a.AuthFile] = true
 		}
 	}
 	ts, _ := e.tenants("")
@@ -252,6 +266,7 @@ func (e *Engine) plan(now time.Time) RebalanceResult {
 		return res
 	}
 	b := e.newBalancer(candidates, now)
+	b.closed = closed
 	var total float64
 	for _, t := range ts {
 		if _, ok := b.share[t.account]; t.pinned && ok {
@@ -265,6 +280,9 @@ func (e *Engine) plan(now time.Time) RebalanceResult {
 	sort.SliceStable(free, func(i, j int) bool { return free[i].weight > free[j].weight }) // ties stay by name
 	for _, t := range free {
 		to := b.pick(t.weight, total, t.account)
+		if to == "" { // only accounts that cannot take it, and its own is full
+			to = t.account
+		}
 		b.load[to] += t.weight
 		res.Plan = append(res.Plan, Move{t.project, t.account, to})
 	}

@@ -75,7 +75,7 @@ Management Center → **Account Balancer** (sign in with "Remember password"):
 
 
 - header: balancing On / Paused, mode apply / shadow, Run now
-- Overview: chosen account per bucket with the reason, accounts, sessions grouped by project (with pins and Rebalance), recent changes
+- Overview: chosen account per bucket with the reason, accounts, sessions grouped by project (with pins and the Dengele rebalance), recent changes
 - History: 24h · 7d · 30d · 90d of weekly and 5-hour utilization, active account and tokens
 - Settings: accounts, thresholds, buckets and anchoring, saved through CPA after a review
 
@@ -92,8 +92,9 @@ into its parent. Requests without a session id are counted as `no session`.
 
 The Overview shows them for the last 5 hours and the last 7 days (rolling windows, not an
 account's own quota window), grouped by project folder (see "Project affinity"). When the page
-opens, it shows one row per project, the largest first, all closed: requests, tokens (input,
-output and cache writes), its share of the window and its account. Open a project to see its
+opens, it shows one row per project, the largest first, all closed: requests and tokens (input,
+output and cache writes) of the window in view with the other window beside them (`5 h` or `7 d`),
+its share of the window in view and its account. Open a project to see its
 sessions, and a session to see its subagents; the open ones are remembered in the browser. A session
 row has its id (first 8 characters; the full id is in the tooltip), when it was last seen, requests,
 tokens (cache reads and the accounts it used are in the tooltip) and its share of the window.
@@ -152,14 +153,16 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   A tie goes to CPA's existing order. If no account is usable the project keeps its home and CPA's
   existing order decides (it releases reserves and uses credits as before). A project that has room
   never moves only to balance; "Rebalance" below is the owner's action for that.
-- **Rebalance.** The Rebalance button on the Sessions card (`Dengele`) places every project without a
+- **Rebalance.** The `Dengele` button on the Sessions card (rebalance now) places every project without a
   folder pin again by the same score. It shows the plan first (project, from, to) and changes nothing
   until Apply. Projects with a folder pin stay, and count as load on their account. The plan starts
   from nothing, with the heaviest project first, so it does not depend on where projects are now:
-  applying it twice changes nothing the second time, and a project whose account ties keeps it. Every
-  account that is not full takes part: an account in a detour (5-hour cap, CPA cooldown) is not
-  emptied, but one with no fresh weekly reading counts as having no room. With no account to go to,
-  the projects stay. The log says how many moved, never which.
+  applying it twice changes nothing the second time, and a project whose account ties keeps it. A
+  project may stay on any account that is not full, but it moves only onto a usable one: an account
+  in a detour (5-hour cap, CPA cooldown, disabled) keeps its projects and is never filled, since
+  every request of a project placed there would be a fallback. An account with no fresh weekly
+  reading counts as having no room. With no account to go to, the projects stay. The log says how
+  many moved, never which.
 - **Pins.** A folder pin and a session pin (a main session's id; its subagents follow it) hold until the
   pinned account is full or held back. Then the request falls back like any other, and the page says
   so; the pin returns when the account has room. A session pin outranks a folder pin, and either outranks

@@ -373,7 +373,8 @@ function projectGroups(v, aff, span) {
       group(aff?.session_projects?.[r.id] ?? r.pick?.project ?? "").sessions.push(family);
     } else if (family) family.subs.push(r);
   }
-  const used = new Map();
+  const used = new Map(), usage = new Map((aff?.projects || []).map(p => [p.project, p]));
+  const other = span === "week" ? "five_hour" : "week";
   for (const p of aff?.projects || []) {
     const u = p[span];
     if (u && (u.tokens || u.requests)) { group(p.project); used.set(p.project, u); }
@@ -387,7 +388,9 @@ function projectGroups(v, aff, span) {
       if (row.last && (!listed.last || Date.parse(row.last) > Date.parse(listed.last))) listed.last = row.last;
     }
     const u = used.get(g.project) || listed;
+    const o = usage.get(g.project)?.[other]; // the other window, shown beside the one in view
     return {
+      alt: o ? { label: other === "week" ? "7 d" : "5 h", requests: o.requests || 0, tokens: o.tokens || 0 } : null,
       key: g.project === "" ? "n:" : "p:" + g.project, project: g.project, none: g.project === "", sessions: g.sessions,
       requests: u.requests, tokens: u.tokens, last: u.last || "", share: percent(u.tokens, v.total.tokens), unlisted: Math.max(0, u.tokens - listed.tokens),
     };
@@ -439,9 +442,10 @@ function projectRowHtml(g, open, aff, name, accounts) {
   const label = g.none ? '<span class="stitle none">no project</span>' : `<span class="stitle" title="${esc(g.project)}">${esc(g.project)}</span>`;
   const count = g.sessions.length;
   const pin = homeInfo(g.project, aff).pin;
+  const alt = n => g.alt ? ` <span class="faint">· ${g.alt.label} ${n(g.alt)}</span>` : "";
   return `<tr class="project">
     <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${g.unlisted > 0 ? "+" : ""} session${count === 1 && !g.unlisted ? "" : "s"}</span></th>
-    <td>${g.last ? when(g.last) : "—"}</td><td>${g.requests}</td><td>${num(g.tokens)}</td><td>${g.share}%</td>
+    <td>${g.last ? when(g.last) : "—"}</td><td>${g.requests}${alt(a => a.requests)}</td><td>${num(g.tokens)}${alt(a => num(a.tokens))}</td><td>${g.share}%</td>
     <td class="left">${g.none ? '<span class="faint">CPA\'s own order</span>' : homeText(g.project, aff, name)}</td>
     <td class="left">${g.none ? "" : pinSelectHtml("folder", g.project, pin, accounts, name)}</td></tr>`;
 }
@@ -554,12 +558,20 @@ async function setPin(kind, key, account) {
   catch (err) { showError(err); drawSessions(); }
 }
 
-$("sessions").addEventListener("change", async e => {
+// Some browsers fire "change" on every arrow key of a closed list, so a choice is set once it has
+// stopped changing, not on each key press.
+const pinTimers = new Map();
+$("sessions").addEventListener("change", e => {
   const select = e.target.closest("[data-pin-select]");
   if (!select) return;
-  select.blur(); // so the redraw that follows is not held back by the focus
-  select.disabled = true;
-  await setPin(select.dataset.pinSelect, select.dataset.key, select.value);
+  const kind = select.dataset.pinSelect, key = select.dataset.key, id = kind + ":" + key;
+  clearTimeout(pinTimers.get(id));
+  pinTimers.set(id, setTimeout(async () => {
+    pinTimers.delete(id);
+    select.blur(); // so the redraw that follows is not held back by the focus
+    select.disabled = true;
+    await setPin(kind, key, select.value);
+  }, 500));
 });
 $("sessions").addEventListener("click", async e => {
   const toggle = e.target.closest("[data-toggle]"), unpin = e.target.closest("[data-unpin]");
