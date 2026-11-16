@@ -75,7 +75,7 @@ Management Center → **Account Balancer** (sign in with "Remember password"):
 
 
 - header: balancing On / Paused, mode apply / shadow, Run now
-- Overview: chosen account per bucket with the reason, accounts, sessions, recent changes
+- Overview: chosen account per bucket with the reason, accounts, sessions grouped by project (with pins and Rebalance), recent changes
 - History: 24h · 7d · 30d · 90d of weekly and 5-hour utilization, active account and tokens
 - Settings: accounts, thresholds, buckets and anchoring, saved through CPA after a review
 
@@ -91,9 +91,16 @@ model, in the same 5-minute slots as the rest of the history, with a subagent's 
 into its parent. Requests without a session id are counted as `no session`.
 
 The Overview shows them for the last 5 hours and the last 7 days (rolling windows, not an
-account's own quota window): the session id (first 8 characters; the full id is in the tooltip),
-when it was last seen, requests, tokens (input, output and cache writes; cache reads are in the
-tooltip), its share of the window and the accounts it used. Subagents are nested under their parent. `/status` carries the same data as `sessions.five_hour` and `sessions.week`:
+account's own quota window), grouped by project folder (see "Project affinity"). When the page
+opens, it shows one row per project, the largest first, all closed: requests, tokens (input,
+output and cache writes), its share of the window and its account. Open a project to see its
+sessions, and a session to see its subagents; the open ones are remembered in the browser. A session
+row has its id (first 8 characters; the full id is in the tooltip), when it was last seen, requests,
+tokens (cache reads and the accounts it used are in the tooltip) and its share of the window.
+Sessions with no known folder, and requests without a session id, are one group, `no project`. A
+project's totals are summed from every session of the window, so they are complete even when the
+week lists only its 30 largest sessions; what the list leaves out is one line under the project.
+`/status` carries the same data as `sessions.five_hour` and `sessions.week`:
 `total` and `accounts` are the window's own counts, each row has `own` (itself alone) and `total`
 (with its subagents), and the listed root sessions' `total` plus `other.total` always equal the
 window's `total`. The week lists its 30 largest roots; the 5 hours are not cut.
@@ -124,7 +131,7 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   `X-Claude-Code-Agent-Id`, and builds the same key the history uses (`<sid>`, or `<sid>/<agentId>` for a
   subagent). A session's folder is the directory under `affinity.projects_dir` that holds
   `<sid>.jsonl`; a subagent uses its parent's folder. The balancer lists directory names and checks that
-  the file exists. It never opens a transcript. The lookup is cached (a miss for 30 seconds, because
+  the file exists. It never opens a transcript. The lookup is cached (a miss for 5 seconds, because
   Claude Code writes the transcript after the first request). A session with no header, no folder yet or
   an id that is not a plain one has no project: its pick is CPA's, as before.
 - **Stay until full.** A project stays on its home account until that account reaches its weekly cap,
@@ -133,11 +140,26 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   or an account CPA does not offer for a request is a detour for that request: the project keeps its
   home and the request goes to another account (reason `fallback`). When the home is full the project
   moves to another account and stays there. A project never moves only to balance.
-- **Balance over time.** A new project, and a project that moves, takes the account with the most weekly
-  headroom: room under the cap in percent, times the plan's size (a plan not read yet counts as one
-  Pro), so the load evens out over the week. A tie goes to CPA's existing order. If no account is usable
-  the project keeps its home and CPA's existing order decides (it releases reserves and uses credits as
-  before).
+- **Balanced start.** A new project, and a project that moves, goes to the usable account that is
+  furthest below its fair share. An account's share of the room is its weekly headroom: room under
+  the cap in percent, times the plan's size (a plan not read yet counts as one Pro), as a part of the
+  usable accounts' total. Its share of the load is the weight of the projects homed there, plus the
+  new one, as a part of the total. The score is the first minus the second, so equal accounts split
+  three new projects 2 and 1, and a Max account takes more than a Pro one. A project's weight is its
+  tokens of the last 7 days (input, output and cache writes, read from the history and refreshed
+  every 5 minutes); a project that has used nothing yet weighs what the average project does (1 when
+  none has used anything), so it is never free. A folder-pinned project counts on its pin's account.
+  A tie goes to CPA's existing order. If no account is usable the project keeps its home and CPA's
+  existing order decides (it releases reserves and uses credits as before). A project that has room
+  never moves only to balance; "Rebalance" below is the owner's action for that.
+- **Rebalance.** The Rebalance button on the Sessions card (`Dengele`) places every project without a
+  folder pin again by the same score. It shows the plan first (project, from, to) and changes nothing
+  until Apply. Projects with a folder pin stay, and count as load on their account. The plan starts
+  from nothing, with the heaviest project first, so it does not depend on where projects are now:
+  applying it twice changes nothing the second time, and a project whose account ties keeps it. Every
+  account that is not full takes part: an account in a detour (5-hour cap, CPA cooldown) is not
+  emptied, but one with no fresh weekly reading counts as having no room. With no account to go to,
+  the projects stay. The log says how many moved, never which.
 - **Pins.** A folder pin and a session pin (a main session's id; its subagents follow it) hold until the
   pinned account is full or held back. Then the request falls back like any other, and the page says
   so; the pin returns when the account has room. A session pin outranks a folder pin, and either outranks
@@ -147,12 +169,19 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
 - **Fable.** A project moves only when its all-models week is full. A full Fable week alone sends that
   Fable request to another account and leaves the project where it is.
 
-The Sessions card shows each session's account and why: `project home`, `folder pin`, `session pin`,
-`fallback after cap`, `folder pin: account full, fallback`, `session pin: account full, fallback` or
-`no project`. Under the table are the pins (with "Unpin" for the ones set on the page) and the project
-homes. A folder name is user data, so the page escapes it and the plugin keeps it out of its log, its
-recent changes and its history. The picks behind the card are kept in memory (500 sessions); homes and
-pins are in the state file, which is written at once when a pin changes.
+The Sessions card shows a project's account and why (its `folder pin`, else its `project home`, and
+whether that account is full), and a session's account and why: `project home`, `folder pin`,
+`session pin`, `fallback after cap`, `folder pin: account full, fallback`, `session pin: account
+full, fallback` or `no project`. Each project row and each main-session row has an account choice:
+`no pin` or one account. Choosing an account sets the folder pin or the session pin (the `/pin`
+route) at once, and `no pin` clears it, so the choice always shows which pin is active. A pin set in
+the config is shown and cannot be changed there. A pin on a folder or a session the window does not
+show is listed under the table ("Pins outside this window"), with "Unpin". A folder name is user
+data, so the page escapes it and the plugin keeps it out of its log, its recent changes and its
+history. The picks behind the card are kept in memory (500 sessions); homes and pins are in the
+state file, which is written at once when a pin or a rebalance changes it. The page finds a session's
+folder through `affinity.session_projects` and a project's use through `affinity.projects` in
+`/status`, both read from the history and the folder names, so they survive a restart.
 
 ## Transcript history
 
@@ -268,13 +297,14 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 
 | Method | Path | |
 |---|---|---|
-| GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes, the sessions of the last 5 hours and 7 days, and `affinity`: the project homes, the pins and each recent session's account and reason, by session key |
+| GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes, the sessions of the last 5 hours and 7 days, and `affinity`: the project homes, the pins, each recent session's account and reason by session key, each project's use in both windows (`projects`) and the folder of each listed root session (`session_projects`) |
 | GET | `/history?range=24h\|7d\|30d\|90d` | utilization, active account and tokens over time |
 | GET | `/transcripts?range=7d\|30d` | the transcript store over the window: root sessions with their subagents, tokens by model and advisor tokens; no account, never part of `/status` or `/history` |
 | GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), the same at each method's pace (`week.by_method`), and the measured work pace |
 | POST | `/run` | one balancer tick now |
 | POST | `/recheck?auth_file=…` | probe one account (or every account) now |
 | POST | `/pin` | body `{"kind": "folder"\|"session", "key": …, "account": …}` pins a folder or a main session to an account; an empty `account` removes a pin set on the page. The names are in the body, never in the URL. Answers with the status |
+| POST | `/rebalance` | body `{"apply": false}` (the default) answers with the plan, `{"apply": true}` carries it out: `{"applied", "pinned", "plan": [{"project", "from", "to"}]}`, every project without a folder pin, `from == to` for one that stays |
 | GET | `/credentials` | the Claude credentials CPA lists |
 
 ## License
