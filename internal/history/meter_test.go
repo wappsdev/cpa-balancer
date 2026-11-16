@@ -262,6 +262,16 @@ func TestTheWindowLengthIsTheMedianGapBetweenResets(t *testing.T) {
 	}
 }
 
+func TestARequestThatCostNothingNeedsNoFactor(t *testing.T) {
+	r := NewRecorder(t.TempDir())
+	level(r, 0, "u", 10)
+	spend(r, 1, "u", "s", Traffic{Requests: 1}) // in a window nobody saw open
+	s := r.SessionsFor(at(1), ultra)
+	if got := row(t, s, "s"); got.PlanShare7d == nil || *got.PlanShare7d != 0 {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestNoMeteredAccountsIsTheCheapPath(t *testing.T) {
 	r := NewRecorder(t.TempDir())
 	opened(r)

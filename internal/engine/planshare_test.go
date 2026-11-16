@@ -99,6 +99,35 @@ func TestTheProjectsAndTheRequestsWithoutOneAddUpToTheMeterAndTheProAccountStays
 	}
 }
 
+func TestAProjectListsTheModelsOfItsSessionsAndTheyAddUpToItsTokens(t *testing.T) {
+	w, rec := balanced(t)
+	w.folder("-work-a", 1, 2)
+	add := func(n int, model string, session int, in int64) {
+		rec.AddTraffic(w.clock.t.Add(time.Duration(n)*history.SlotLength), history.Source{Account: W, Model: model, Session: sidN(session)}, history.Traffic{Requests: 1, InputTokens: in})
+	}
+	add(1, "m-one", 1, 100)
+	add(2, "m-two", 2, 30)
+	add(3, "m-one[1m]", 2, 5)
+	v := w.e.Status()
+	w.e.AddSessions(&v, rec.Sessions(w.clock.t.Add(time.Hour)))
+	for _, p := range v.Affinity.Projects {
+		if p.Project != "-work-a" {
+			continue
+		}
+		var sum int64
+		order := ""
+		for _, l := range p.Week.Models {
+			sum += l.Own.Tokens() + l.Subagents.Tokens()
+			order += l.Model + " "
+		}
+		if sum != p.Week.Tokens || p.Week.Tokens != 135 || order != "m-one m-two " {
+			t.Fatalf("%+v", p.Week)
+		}
+		return
+	}
+	t.Fatal("no project")
+}
+
 func TestWithoutAnyHistoryNothingIsMeteredAndEveryShareIsUnknownOrZero(t *testing.T) {
 	w, _ := balanced(t)
 	w.e.st.Account(W).Plan = probe.Plan{Name: "max_20x", Weight: 10}

@@ -13,6 +13,8 @@ type Use struct {
 	Requests int64     `json:"requests"`
 	Tokens   int64     `json:"tokens"` // input, output and cache writes
 	Last     time.Time `json:"last,omitzero"`
+	// Models is each model the project's sessions used, by first seen; their tokens add up to Tokens.
+	Models []history.ModelLine `json:"models"`
 }
 
 // ProjectUsage is one project's use in the status's two windows. The project "" holds what has no
@@ -79,6 +81,7 @@ func (e *Engine) byProject(roots []history.RootUse) map[string]Use {
 		u := out[folder]
 		u.Requests += root.Total.Requests
 		u.Tokens += root.Total.Tokens()
+		u.Models = history.MergeLines(u.Models, root.Lines)
 		if root.Last.After(u.Last) {
 			u.Last = root.Last
 		}

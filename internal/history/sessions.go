@@ -187,6 +187,9 @@ type SessionUsage struct {
 	Elsewhere5h int64    `json:"elsewhere5h"`
 	Elsewhere7d int64    `json:"elsewhere7d"`
 	share       Share    // in this window alone
+	// ModelLines is each model the family used, by first seen (see ModelLine). Their tokens add up
+	// to Total.
+	ModelLines []ModelLine `json:"model_lines"`
 }
 
 func (u SessionUsage) weight() int64 { return u.Total.Tokens() }
@@ -221,6 +224,7 @@ type RootUse struct {
 	Last  time.Time
 	Total Traffic
 	Share Share
+	Lines []ModelLine
 }
 
 // Sessions is what the status page shows: the last five hours and the last seven days.
@@ -293,9 +297,41 @@ type node struct {
 	first, last time.Time
 	own         Traffic
 	accounts    map[string]Traffic
-	models      map[string]Traffic
+	models      map[string]Traffic // as the history stored the names
+	folded      map[string]Traffic // by folded model name, see FoldModel
+	seen        map[string][2]time.Time
 	children    []*node
 	share       Share
+}
+
+// addModels counts a session's models in the node, as stored and under their folded names, and
+// when each folded one was seen.
+func (n *node) addModels(models map[string]Traffic, first, last time.Time) {
+	mergeInto(&n.models, models)
+	for model, t := range models {
+		key := FoldModel(model)
+		if n.folded == nil {
+			n.folded = map[string]Traffic{}
+		}
+		x := n.folded[key]
+		x.Add(t)
+		n.folded[key] = x
+		n.see(key, first, last)
+	}
+}
+
+func (n *node) see(model string, first, last time.Time) {
+	if n.seen == nil {
+		n.seen = map[string][2]time.Time{}
+	}
+	s := n.seen[model]
+	if !first.IsZero() && (s[0].IsZero() || first.Before(s[0])) {
+		s[0] = first
+	}
+	if last.After(s[1]) {
+		s[1] = last
+	}
+	n.seen[model] = s
 }
 
 func mergeInto(dst *map[string]Traffic, src map[string]Traffic) {
@@ -365,7 +401,7 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int, ms *Meters) Sessi
 			n.own.Add(sum(ss.Accounts))
 			n.share.add(ms.shareOf(s.T, ss.Accounts))
 			mergeInto(&n.accounts, ss.Accounts)
-			mergeInto(&n.models, ss.Models)
+			n.addModels(ss.Models, ss.First, ss.Last)
 		}
 	}
 	for _, n := range slices.Collect(maps.Values(nodes)) {
@@ -411,7 +447,7 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int, ms *Meters) Sessi
 	index(rows)
 	listed := 0
 	for _, row := range rows {
-		w.AllRoots = append(w.AllRoots, RootUse{ID: row.ID, Last: row.Last, Total: row.Total, Share: row.share})
+		w.AllRoots = append(w.AllRoots, RootUse{ID: row.ID, Last: row.Last, Total: row.Total, Share: row.share, Lines: row.ModelLines})
 		if row.ID != "" && limit > 0 && listed >= limit {
 			w.Other.Sessions++
 			w.Other.Total.Add(row.Total)
@@ -443,6 +479,10 @@ func (n *node) absorb(c *node) {
 	n.share.add(c.share)
 	mergeInto(&n.accounts, c.accounts)
 	mergeInto(&n.models, c.models)
+	mergeInto(&n.folded, c.folded)
+	for model, s := range c.seen {
+		n.see(model, s[0], s[1])
+	}
 }
 
 // foldDescendants absorbs every session below n into it and leaves it without children. Cycles
@@ -467,6 +507,11 @@ func (n *node) usage(depth int) SessionUsage {
 		Accounts: map[string]Traffic{}, Models: map[string]Traffic{}, share: n.share}
 	mergeInto(&u.Accounts, n.accounts)
 	mergeInto(&u.Models, n.models)
+	own := make([]ModelLine, 0, len(n.folded))
+	for model, t := range n.folded {
+		own = append(own, ModelLine{Model: model, First: n.seen[model][0], Last: n.seen[model][1], Own: t})
+	}
+	lines := [][]ModelLine{own}
 	for _, c := range n.children {
 		cu := c.usage(depth + 1)
 		u.Subagents = append(u.Subagents, cu)
@@ -474,6 +519,13 @@ func (n *node) usage(depth int) SessionUsage {
 		u.share.add(cu.share)
 		mergeInto(&u.Accounts, cu.Accounts)
 		mergeInto(&u.Models, cu.Models)
+		sub := make([]ModelLine, len(cu.ModelLines)) // its own use and its subagents' alike are subagent use here
+		for i, l := range cu.ModelLines {
+			l.Subagents.Add(l.Own)
+			l.Own = Traffic{}
+			sub[i] = l
+		}
+		lines = append(lines, sub)
 		if !cu.First.IsZero() && (u.First.IsZero() || cu.First.Before(u.First)) {
 			u.First = cu.First
 		}
@@ -482,5 +534,6 @@ func (n *node) usage(depth int) SessionUsage {
 		}
 	}
 	sortRows(u.Subagents)
+	u.ModelLines = MergeLines(lines...)
 	return u
 }
