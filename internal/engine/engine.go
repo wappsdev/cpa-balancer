@@ -65,6 +65,7 @@ func New(cfg config.Config, host Host, now func() time.Time, rec *history.Record
 		st = state.New()
 	}
 	e := &Engine{cfg: cfg, host: host, now: now, rec: rec, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}, projects: affinity.NewProjects(cfg.Affinity.ProjectsDir, now), repos: affinity.NewRepos(now)}
+	e.repos.Restore(st.Affinity.Links)
 	e.mu.Lock()
 	e.recompute(now())
 	e.mu.Unlock()
@@ -384,6 +385,10 @@ func (e *Engine) anchorIdle(now time.Time) {
 func (e *Engine) save() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if links, changed := e.repos.Take(); changed {
+		e.st.Affinity.Links = links
+		e.dirty = true
+	}
 	if !e.dirty {
 		return
 	}

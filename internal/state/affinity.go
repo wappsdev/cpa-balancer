@@ -31,6 +31,29 @@ type Affinity struct {
 	Homes       map[string]*Home  `json:"homes,omitempty"`
 	FolderPins  map[string]string `json:"folder_pins,omitempty"`
 	SessionPins map[string]string `json:"session_pins,omitempty"`
+	// Links are the worktree folders found so far and their main repositories, the least recently used
+	// first, so that a worktree removed from the disk still joins its repository (see affinity.Repos).
+	Links []affinity.Link `json:"links,omitempty"`
+}
+
+// cleanLinks drops the links with an invalid name and the repeats (the later one stays), and keeps
+// the most recent affinity.MaxLinks.
+func cleanLinks(links []affinity.Link) []affinity.Link {
+	seen := map[string]bool{}
+	var out []affinity.Link
+	for i := len(links) - 1; i >= 0; i-- {
+		l := links[i]
+		if seen[l.Folder] || !affinity.ValidProject(l.Folder) || !affinity.ValidProject(l.Project) || l.Folder == l.Project {
+			continue
+		}
+		seen[l.Folder] = true
+		out = append(out, l)
+	}
+	if len(out) > affinity.MaxLinks {
+		out = out[:affinity.MaxLinks]
+	}
+	slices.Reverse(out)
+	return out
 }
 
 func (a *Affinity) pins(kind string) (pins *map[string]string, limit int, valid func(string) bool, ok bool) {
@@ -119,6 +142,7 @@ func compareStrings(a, b string) int {
 // version: invalid names, empty accounts, and anything past the limits (the most recently used
 // homes and the first pins by name stay).
 func (a *Affinity) normalize() {
+	a.Links = cleanLinks(a.Links)
 	for project, h := range a.Homes {
 		if h == nil || h.Account == "" || !affinity.ValidProject(project) {
 			delete(a.Homes, project)

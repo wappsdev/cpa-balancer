@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wappsdev/cpa-balancer/internal/affinity"
 	"github.com/wappsdev/cpa-balancer/internal/config"
 )
 
@@ -33,6 +34,29 @@ func TestHomesAndPinsSurviveARestart(t *testing.T) {
 	}
 	if got.Affinity.FolderPins["-work-beta"] != "b.json" || got.Affinity.SessionPins["11111111-2222-3333-4444-555555555555"] != "a.json" {
 		t.Fatalf("pins: %+v", got.Affinity)
+	}
+}
+
+func TestWorktreeLinksSurviveARestartAndNormalizeDropsWhatTheBoundsForbid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s := New()
+	s.Affinity.Links = []affinity.Link{{Folder: "-x-w-1", Project: "-x-repo"}, {Folder: "a/b", Project: "-x-repo"}, {Folder: "-x-w-2", Project: ""}}
+	for i := 0; i < affinity.MaxLinks; i++ {
+		s.Affinity.Links = append(s.Affinity.Links, affinity.Link{Folder: fmt.Sprintf("-x-n-%d", i), Project: "-x-repo"})
+	}
+	if err := s.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := got.Affinity.Links
+	if len(links) != affinity.MaxLinks || links[len(links)-1].Folder != fmt.Sprintf("-x-n-%d", affinity.MaxLinks-1) {
+		t.Fatalf("invalid links dropped, the oldest ones past the bound too: %d", len(links))
+	}
+	if links[0].Folder == "-x-w-1" || links[0].Folder == "a/b" {
+		t.Fatalf("%+v", links[0])
 	}
 }
 

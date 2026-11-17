@@ -59,6 +59,7 @@ type Repos struct {
 
 	mu    sync.Mutex
 	cache map[string]repoHit
+	links links // the worktrees found, kept in the state file; see Take and Restore
 }
 
 type repoHit struct {
@@ -72,7 +73,8 @@ func NewRepos(now func() time.Time) *Repos {
 
 // Of is the place of a folder. An answer is kept for repoTTL, then checked again; a check that does
 // not find the directory (a worktree removed since) keeps the earlier answer, as the sessions of
-// a removed worktree stay in the history for a week. A folder that is not found, or is not a path,
+// a removed worktree stay in the history for a week. A worktree found is also remembered in the
+// links, which the state file keeps: a folder never seen in this run, and gone, gets its stored answer. A folder that is not found, or is not a path,
 // is its own project.
 func (r *Repos) Of(folder string) Place {
 	if folder == "" || !ValidProject(folder) {
@@ -89,8 +91,15 @@ func (r *Repos) Of(folder string) Place {
 	place, found := locate(folder) // reads the disk, outside the lock
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !found && hadHit {
+	switch {
+	case found && place.Worktree:
+		r.links.remember(folder, place.Project)
+	case !found && hadHit:
 		place = prev.place
+	case !found:
+		if project, ok := r.links.lookup(folder); ok {
+			place = Place{Project: project, Worktree: true}
+		}
 	}
 	if len(r.cache) >= maxRepoCache {
 		if _, ok := r.cache[folder]; !ok {

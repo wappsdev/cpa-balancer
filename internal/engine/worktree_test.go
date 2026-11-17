@@ -221,6 +221,29 @@ func TestTheStatusAddsUpAProjectFromItsOwnSessionsAndItsWorktrees(t *testing.T) 
 	}
 }
 
+func TestARemovedWorktreeStillJoinsItsRepositoryAfterARestart(t *testing.T) {
+	w := newWorld(t, W, G)
+	g := newGitTree(t)
+	g.folders(w)
+	w.start()
+	for _, f := range []string{g.a, g.b} {
+		w.e.repos.Of(f)
+	}
+	w.e.Tick() // saves the state
+	if err := os.RemoveAll(g.siblings); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(g.inside); err != nil {
+		t.Fatal(err)
+	}
+	w.start() // a restart: the engine knows the folders only from the state file
+	for _, f := range []string{g.a, g.b} {
+		if got := w.e.repos.Of(f); got.Project != g.main || !got.Worktree {
+			t.Fatalf("%s: %+v", f, got)
+		}
+	}
+}
+
 func TestTheUltraPercentOfAProjectIncludesItsWorktrees(t *testing.T) {
 	w, rec := balanced(t)
 	g := newGitTree(t)
