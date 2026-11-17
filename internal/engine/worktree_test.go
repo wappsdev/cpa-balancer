@@ -244,6 +244,39 @@ func TestARemovedWorktreeStillJoinsItsRepositoryAfterARestart(t *testing.T) {
 	}
 }
 
+func TestTheStatusMarksAGoneFolderPutWithARepositoryByItsContainer(t *testing.T) {
+	w, rec := balanced(t)
+	g := newGitTree(t)
+	g.folders(w)
+	gone := affinity.EncodePath(filepath.Join(filepath.Dir(g.siblings), "feature-z")) // beside feature-a; not on the disk
+	removed := affinity.EncodePath(filepath.Join(t.TempDir(), "elsewhere"))
+	w.folder(gone, 5)
+	w.folder(removed, 6)
+	for _, n := range []int{1, 2, 3, 5, 6} {
+		rec.AddTraffic(w.clock.t, history.Source{Account: W, Model: Opus, Session: sidN(n)}, history.Traffic{Requests: 1, InputTokens: 10})
+	}
+	v := w.e.Status()
+	w.e.AddSessions(&v, rec.Sessions(w.clock.t))
+	aff := v.Affinity
+	if aff.ProjectOf[gone] != g.main || !aff.ProjectInferred[gone] {
+		t.Fatalf("the gone folder joins the repository and is marked: %v %v", aff.ProjectOf, aff.ProjectInferred)
+	}
+	if aff.ProjectInferred[g.a] || aff.ProjectInferred[g.main] || aff.ProjectInferred[removed] || aff.ProjectOf[removed] != removed {
+		t.Fatalf("a folder that was found, or has no container, is not inferred: %v", aff.ProjectInferred)
+	}
+	var names []string
+	for _, p := range aff.Projects {
+		if p.Project == g.main {
+			for _, wt := range p.Worktrees {
+				names = append(names, wt.Name)
+			}
+		}
+	}
+	if len(names) != 3 || names[0] != "feature-a" || names[1] != "feature-b" || names[2] != "feature-z" {
+		t.Fatalf("an inferred worktree has a name from its folder: %v", names)
+	}
+}
+
 func TestTheUltraPercentOfAProjectIncludesItsWorktrees(t *testing.T) {
 	w, rec := balanced(t)
 	g := newGitTree(t)

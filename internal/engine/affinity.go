@@ -72,6 +72,9 @@ type AffinityView struct {
 	// worktree, the main repository's folder. Homes and folder pins are keyed by the project (a pin on
 	// a worktree's own folder holds for it alone); sessions are listed with their own folder.
 	ProjectOf map[string]string `json:"project_of"`
+	// ProjectInferred marks the folders in ProjectOf that are gone and were never found: they were put
+	// with a repository only because their worktree container holds that repository's worktrees only.
+	ProjectInferred map[string]bool `json:"project_inferred"`
 }
 
 // standing is an account's standing for a request in a bucket. An account that is not configured

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/wappsdev/cpa-balancer/internal/affinity"
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/probe"
 )
@@ -200,7 +201,10 @@ func (e *Engine) AddSessions(v *View, s history.Sessions) {
 	for folder, row := range own {
 		if place := e.repos.Of(folder); place.Worktree && projects[place.Project] != nil {
 			wt := *row
-			wt.Name, wt.Path = filepath.Base(place.Path), place.Path
+			wt.Name, wt.Path = affinity.WorktreeName(folder), place.Path
+			if place.Path != "" {
+				wt.Name = filepath.Base(place.Path)
+			}
 			projects[place.Project].Worktrees = append(projects[place.Project].Worktrees, wt)
 		}
 	}
@@ -221,10 +225,14 @@ func (e *Engine) AddSessions(v *View, s history.Sessions) {
 			}
 		}
 	}
-	v.Affinity.ProjectOf = map[string]string{}
+	v.Affinity.ProjectOf, v.Affinity.ProjectInferred = map[string]string{}, map[string]bool{}
 	for _, folder := range v.Affinity.folders() {
 		if folder != "" {
-			v.Affinity.ProjectOf[folder] = e.repos.Of(folder).Project
+			place := e.repos.Of(folder)
+			v.Affinity.ProjectOf[folder] = place.Project
+			if place.Inferred {
+				v.Affinity.ProjectInferred[folder] = true
+			}
 		}
 	}
 	v.Affinity.nameFolders(userHome())
