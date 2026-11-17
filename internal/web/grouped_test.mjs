@@ -7,13 +7,13 @@ const lib = (params = {}) => load({
   consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText', 'OPEN_KEY', 'MAX_OPEN'],
   fns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'homeInfo', 'toggleHtml', 'pinSelectHtml', 'placementText', 'homeText',
     'projectRowHtml', 'sessionRowHtml', 'subRowHtml', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
-    'planShareText', 'ultraShareOf', 'meterInfo', 'meterLine', 'meterTip', 'planCellHtml', 'modelLinesHtml'],
+    'planShareText', 'ultraShareOf', 'meterInfo', 'meterLine', 'ultraBasisLine', 'meterTip', 'planCellHtml', 'modelLinesHtml'],
   extra: when, params,
   returns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
-    'planShareText', 'meterInfo', 'meterLine', 'meterTip', 'modelLinesHtml'],
+    'planShareText', 'meterInfo', 'meterLine', 'ultraBasisLine', 'meterTip', 'modelLinesHtml'],
 })
 const { sessionsView, readOpen, writeOpen, projectGroups, groupRowsHtml, strayPinsHtml, rebalanceHtml,
-  planShareText, meterInfo, meterLine, meterTip, modelLinesHtml } = lib({ localStorage: {} })
+  planShareText, meterInfo, meterLine, ultraBasisLine, meterTip, modelLinesHtml } = lib({ localStorage: {} })
 
 const fails = []
 const check = (name, ok) => { if (!ok) fails.push(name) }
@@ -122,6 +122,14 @@ check('the tooltip says what is left out', tip.includes('Advisor calls are not c
 check('no Pro tokens, no mention of them', !meterTip(m, 0).includes('tokens (not in this percent)'))
 check('a status with nothing outside the proxy says nothing of it', !meterLine(meterInfo({ ...meterStatus, accounts: [{ auth_file: 'a.json', meter: { known: true, per_million: 1, outside: 0 } }] }), name).includes('outside'))
 check('the page never says week or Max 20x', !/week|Max 20x/i.test(tip + meterLine(m, name)))
+
+// the line under the Sessions header says what the percent is based on, from what the status serves
+const basisLine = ultraBasisLine(m)
+check('the basis line names the percent, the account, the window and the basis', basisLine === "~% Ultra: share of one Ultra account's 7-day limit, learned from each account's own meter (input + output + cache writes + 1.5% of cache reads; advisor calls not counted)")
+check('the window length is the served one, in hours when it is not whole days', ultraBasisLine(meterInfo({ ...meterStatus, accounts: [{ auth_file: 'a.json', meter: { known: true, per_million: 1, window_hours: 5 } }] })).includes("account's 5-hour limit"))
+check('with no window measured yet the line says limit window', ultraBasisLine(meterInfo({ ...meterStatus, accounts: [{ auth_file: 'b.json', meter: { known: false, per_million: 0 } }] })).includes("account's limit window,"))
+check('the basis is the one the status serves, not a copy', ultraBasisLine(meterInfo({ ...meterStatus, meter: { ...meterStatus.meter, basis: 'a different unit' } })).includes('(a different unit; '))
+check('no meter, no basis line', ultraBasisLine(null) === '' && ultraBasisLine(meterInfo({})) === '')
 
 const planWin = {
   total: t(10, 1000), other: { sessions: 0, total: t(0, 0) },

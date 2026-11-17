@@ -392,6 +392,14 @@ function meterLine(m, name) {
   return `${m.label}: 1M units of use ≈ ${parts.join(" · ")} of a limit window${m.hours.length ? ` · window ${m.hours.join(" / ")} h` : ""}${outside.length ? ` · outside the proxy: ${outside.join(", ")} (in no row)` : ""}`;
 }
 
+// The line under the Sessions header: what the "~% Ultra" column is based on, in words. The window
+// length and the unit are the ones the status serves; with no window measured yet it says only "limit window".
+function ultraBasisLine(m) {
+  if (!m) return "";
+  const length = m.hours.length === 1 ? `${m.hours[0] % 24 === 0 ? `${m.hours[0] / 24}-day` : `${m.hours[0]}-hour`} limit` : "limit window";
+  return `~% ${m.label}: share of one ${m.label} account's ${length}, learned from each account's own meter (${m.basis}; advisor calls not counted)`;
+}
+
 // The tooltip of the "~% Ultra" cells: it is an estimate, where it comes from, and what it leaves out.
 function meterTip(m, elsewhere) {
   if (!m) return "";
@@ -607,7 +615,7 @@ function renderSessions(s) {
 function drawSessions() {
   const w = sessionData?.[sessionSpan];
   const card = $("sessions");
-  if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; $("sessions-meter").hidden = true; return; }
+  if (!w) { card.innerHTML = '<p class="empty">No session data yet.</p>'; $("sessions-meter").hidden = true; $("sessions-basis").hidden = true; return; }
   // a refresh must not close the account list the owner has open
   if (card.contains(document.activeElement) && document.activeElement.matches("select")) return;
   const aff = view?.affinity;
@@ -625,6 +633,9 @@ function drawSessions() {
   line.textContent = meterLine(meter, short);
   line.title = meter ? `One unit of use = ${meter.basis}.` : "";
   line.hidden = !line.textContent;
+  const basis = $("sessions-basis");
+  basis.textContent = ultraBasisLine(meter);
+  basis.hidden = !basis.textContent;
 }
 
 const pinAccounts = () => (view?.accounts || []).map(a => ({ auth_file: a.auth_file, name: a.name }));
