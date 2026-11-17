@@ -65,6 +65,9 @@ type AffinityView struct {
 	// project used, and the folder of each listed root session, found by name.
 	Projects        []ProjectUsage    `json:"projects"`
 	SessionProjects map[string]string `json:"session_projects"`
+	// Names is the short name the page shows for each folder (see FolderNames). The folder stays the
+	// key of pins and homes; a folder with no entry is shown as it is.
+	Names map[string]string `json:"names"`
 }
 
 // standing is an account's standing for a request in a bucket. An account that is not configured
@@ -318,5 +321,6 @@ func (e *Engine) affinityView(now time.Time) *AffinityView {
 	for id, p := range e.picks {
 		v.Sessions[id] = p
 	}
+	v.nameFolders(userHome())
 	return v
 }

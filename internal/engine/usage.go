@@ -149,4 +149,5 @@ func (e *Engine) AddSessions(v *View, s history.Sessions) {
 			}
 		}
 	}
+	v.Affinity.nameFolders(userHome())
 }

@@ -476,6 +476,9 @@ function projectGroups(v, aff, span) {
   }).sort((a, b) => b.tokens - a.tokens || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
 }
 
+// A folder's short name from the balancer (the folder itself when it has none); the full folder goes in the title.
+const folderLabel = (aff, key) => aff?.names?.[key] || key;
+
 // A project's pin and home, as the balancer reports them.
 function homeInfo(project, aff) {
   return {
@@ -518,7 +521,7 @@ function homeText(project, aff, name) {
 }
 
 function projectRowHtml(g, open, aff, name, accounts, m = null, fable = []) {
-  const label = g.none ? '<span class="stitle none">no project</span>' : `<span class="stitle" title="${esc(g.project)}">${esc(g.project)}</span>`;
+  const label = g.none ? '<span class="stitle none">no project</span>' : `<span class="stitle" title="${esc(g.project)}">${esc(folderLabel(aff, g.project))}</span>`;
   const count = g.sessions.length;
   const pin = homeInfo(g.project, aff).pin;
   const alt = n => g.alt ? ` <span class="faint">· ${g.alt.label} ${n(g.alt)}</span>` : "";
@@ -576,7 +579,7 @@ function strayPinsHtml(aff, groups, name) {
   const projects = new Set(groups.map(g => g.project));
   const sessions = new Set(groups.flatMap(g => g.sessions.map(f => f.row.id)));
   const item = (kind, p) => {
-    const label = kind === "session" ? p.key.slice(0, 8) : p.key;
+    const label = kind === "session" ? p.key.slice(0, 8) : folderLabel(aff, p.key);
     return `<li><span class="chip">${kind}</span> <span class="${kind === "session" ? "sid" : "stitle"}" title="${esc(p.key)}">${esc(label)}</span> → <strong>${esc(name(p.account))}</strong>
       ${p.full ? '<span class="chip warn">account full: falling back</span>' : ""}
       ${p.source === "ui" ? `<button type="button" class="button" data-unpin="${kind}" data-key="${esc(p.key)}">Unpin</button>` : '<span class="faint">set in the config</span>'}</li>`;
@@ -590,10 +593,10 @@ function strayPinsHtml(aff, groups, name) {
 
 // The rebalance plan, or its result once applied: the projects that move, from → to. A project
 // that stays is only counted. Folder and account names are escaped.
-function rebalanceHtml(res, name) {
+function rebalanceHtml(res, name, names = {}) {
   const moves = (res.plan || []).filter(m => m.from !== m.to);
   const stay = (res.plan || []).length - moves.length;
-  const list = moves.map(m => `<li><span class="stitle" title="${esc(m.project)}">${esc(m.project)}</span> ${esc(name(m.from))} → <strong>${esc(name(m.to))}</strong></li>`).join("");
+  const list = moves.map(m => `<li><span class="stitle" title="${esc(m.project)}">${esc(names[m.project] || m.project)}</span> ${esc(name(m.from))} → <strong>${esc(name(m.to))}</strong></li>`).join("");
   const counts = `${stay} stay${res.pinned ? ` · ${res.pinned} pinned, left alone` : ""}`;
   const close = '<button type="button" class="button" data-rebalance="close">Close</button>';
   if (res.applied) {
@@ -681,7 +684,7 @@ async function rebalance(apply) {
   const panel = $("rebalance-plan");
   try {
     const res = await api("POST", ROUTES + "/rebalance", { apply });
-    panel.innerHTML = rebalanceHtml(res, short);
+    panel.innerHTML = rebalanceHtml(res, short, view?.affinity?.names);
     panel.hidden = false;
     showError(null);
     if (apply) await refreshStatus();

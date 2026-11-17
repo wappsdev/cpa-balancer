@@ -4,7 +4,7 @@ import { load } from './extract.mjs'
 
 const when = 'const when = t => `<span class="when">${esc(t)}</span>`;'
 const lib = (params = {}) => load({
-  consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText', 'OPEN_KEY', 'MAX_OPEN'],
+  consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText', 'OPEN_KEY', 'MAX_OPEN', 'folderLabel'],
   fns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'homeInfo', 'toggleHtml', 'pinSelectHtml', 'placementText', 'homeText',
     'projectRowHtml', 'sessionRowHtml', 'subRowHtml', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
     'planShareText', 'ultraShareOf', 'meterInfo', 'meterLine', 'ultraBasisLine', 'meterTip', 'planCellHtml', 'modelLinesHtml'],
@@ -207,6 +207,23 @@ check('only strings are kept', [...withStore(store(JSON.stringify(['p:x', 3, nul
 check('writing to blocked storage does not throw', (() => { try { withStore(store(undefined, true)).writeOpen(new Set(['p:x'])); return true } catch { return false } })())
 const many = Array.from({ length: 250 }, (_, i) => 'p:' + i)
 check('the remembered set is bounded, the newest kept', (() => { const r = [...withStore(store(JSON.stringify(many))).readOpen()]; return r.length === 200 && r[199] === 'p:249' })())
+
+// Short folder names: the row shows the name from the balancer, the title keeps the full folder.
+const shop = '-Users-alice-Documents-Projects-shop', quote = '-Users-alice-Documents-Projects-quote"<b>'
+const namedAff = { ...aff, names: { [shop]: 'shop', [quote]: 'quote"<b>' }, homes: [], folder_pins: [{ key: shop, account: 'a.json', source: 'ui', full: false }], session_projects: {},
+  projects: [{ project: shop, five_hour: { requests: 1, tokens: 10, last: '2026-11-15T10:00:00Z' }, week: { requests: 1, tokens: 10, last: '2026-11-15T10:00:00Z' } }] }
+const namedGroups = [{ project: shop, none: false, key: 'p:' + shop, sessions: [], tokens: 10, requests: 1, last: '2026-11-15T10:00:00Z' }]
+const namedRow = groupRowsHtml(namedGroups, new Set(), namedAff, name, [{ auth_file: 'a.json', name: 'a' }], null)
+check('a project row shows the short name and keeps the folder in the title', namedRow.includes(`<span class="stitle" title="${shop}">shop</span>`))
+check('the pin and the toggle still key by the folder', namedRow.includes(`data-key="${shop}"`) && namedRow.includes(`data-toggle="p:${shop}"`))
+check('a folder with no name is shown as it is', groupRowsHtml([{ ...namedGroups[0], project: '-work-x', key: 'p:-work-x' }], new Set(), { ...namedAff, names: {} }, name, [], null).includes('title="-work-x">-work-x</span>'))
+const namedStray = strayPinsHtml(namedAff, [], name)
+check('a stray pin shows the short name, the title keeps the folder', namedStray.includes(`title="${shop}">shop</span>`) && namedStray.includes(`data-key="${shop}"`))
+const namedPlan = rebalanceHtml({ applied: false, pinned: 0, plan: [{ project: shop, from: 'a.json', to: 'b.json' }] }, name, namedAff.names)
+check('the rebalance plan shows the short name', namedPlan.includes(`title="${shop}">shop</span>`))
+const hostileName = rebalanceHtml({ applied: false, pinned: 0, plan: [{ project: quote, from: 'a.json', to: 'b.json' }] }, name, namedAff.names)
+check('a hostile short name and folder are escaped', !hostileName.includes('<b>') && hostileName.includes('quote&quot;&lt;b&gt;'))
+check('the plan works with no names', rebalanceHtml({ applied: false, pinned: 0, plan: [{ project: '-work-x', from: 'a.json', to: 'b.json' }] }, name).includes('>-work-x</span>'))
 
 if (fails.length) { console.log('FAIL: ' + fails.join('; ')); process.exit(1) }
 console.log('PASS')
