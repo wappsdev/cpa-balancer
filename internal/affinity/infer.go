@@ -23,13 +23,26 @@ func containerOf(key string) (container string, ok bool) {
 	return key[:end], true
 }
 
-// WorktreeName is the worktree's own name in a folder key: what follows the container, or the whole
-// key when it has no container. It is for a worktree whose directory is gone.
+// WorktreeName is the worktree's own name in a folder key: what follows the container, or "" when
+// it has no container. It is for a worktree whose directory is gone.
 func WorktreeName(key string) string {
 	if container, ok := containerOf(key); ok {
 		return key[len(container):]
 	}
-	return key
+	return ""
+}
+
+// fromMemory is the place of a folder that was never found on the disk: its stored link, else the
+// repository its container's worktrees belong to, else the folder itself. It reads no disk; the
+// caller holds the lock.
+func (r *Repos) fromMemory(folder string) Place {
+	if project, ok := r.links.lookup(folder); ok {
+		return Place{Project: project, Worktree: true}
+	}
+	if project, ok := r.infer(folder); ok {
+		return Place{Project: project, Worktree: true, Inferred: true}
+	}
+	return Place{Project: folder}
 }
 
 // infer maps a folder that is gone, and was never resolved, to the repository of the worktrees that

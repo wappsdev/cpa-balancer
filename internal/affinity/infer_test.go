@@ -29,6 +29,39 @@ func TestAGoneFolderInTheContainerOfAResolvedWorktreeJoinsItsRepository(t *testi
 	}
 }
 
+func TestAGoneFolderAskedBeforeItsSiblingIsResolvedIsInferredAfterTheTTL(t *testing.T) {
+	tr := newTree(t)
+	repo := tr.repo("shop")
+	sibling := tr.worktree(repo, "shop-work", "a")
+	gone := EncodePath(tr.path("shop-work", "b"))
+	clock := time.Now()
+	r := NewRepos(func() time.Time { return clock })
+	if got := r.Of(gone); got.Worktree {
+		t.Fatalf("nothing is known yet: %+v", got)
+	}
+	r.Of(EncodePath(sibling))
+	clock = clock.Add(repoTTL + time.Second)
+	if got := r.Of(gone); got.Project != EncodePath(repo) || !got.Inferred {
+		t.Fatalf("a check after the TTL re-runs the inference, with no disk read: %+v", got)
+	}
+}
+
+func TestAnInferredAnswerIsDroppedWhenTheContainerBecomesAmbiguous(t *testing.T) {
+	clock := time.Now()
+	r := NewRepos(func() time.Time { return clock })
+	r.Restore([]Link{{Folder: "-x-scratch-work-a", Project: "-x-shop"}})
+	if got := r.Of("-x-scratch-work-c"); !got.Inferred {
+		t.Fatalf("%+v", got)
+	}
+	r.mu.Lock()
+	r.links.remember("-x-scratch-work-b", "-x-blog")
+	r.mu.Unlock()
+	clock = clock.Add(repoTTL + time.Second)
+	if got := r.Of("-x-scratch-work-c"); got.Worktree || got.Inferred {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestInferenceUsesTheStoredLinksAfterARestart(t *testing.T) {
 	r := NewRepos(time.Now)
 	r.Restore([]Link{{Folder: "-x-shop-work-a", Project: "-x-shop"}})

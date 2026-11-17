@@ -201,7 +201,7 @@ func (e *Engine) AddSessions(v *View, s history.Sessions) {
 	for folder, row := range own {
 		if place := e.repos.Of(folder); place.Worktree && projects[place.Project] != nil {
 			wt := *row
-			wt.Name, wt.Path = affinity.WorktreeName(folder), place.Path
+			wt.Name, wt.Path = affinity.WorktreeName(folder), place.Path // a directory that is gone: the name is cut from the key
 			if place.Path != "" {
 				wt.Name = filepath.Base(place.Path)
 			}

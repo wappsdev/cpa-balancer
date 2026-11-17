@@ -86,10 +86,15 @@ func (r *Repos) Of(folder string) Place {
 	now := r.now()
 	r.mu.Lock()
 	prev, hadHit := r.cache[folder]
-	r.mu.Unlock()
 	if hadHit && now.Sub(prev.at) < repoTTL {
+		if prev.place.Path == "" { // never found on the disk: what is known of its container may have changed
+			prev.place = r.fromMemory(folder)
+			r.cache[folder] = prev
+		}
+		defer r.mu.Unlock()
 		return prev.place
 	}
+	r.mu.Unlock()
 
 	place, found := locate(folder) // reads the disk, outside the lock
 	r.mu.Lock()
@@ -97,14 +102,10 @@ func (r *Repos) Of(folder string) Place {
 	switch {
 	case found && place.Worktree:
 		r.links.remember(folder, place.Project)
-	case !found && hadHit:
-		place = prev.place
+	case !found && hadHit && prev.place.Path != "":
+		place = prev.place // found on the disk before: the directory is gone since, the answer stays
 	case !found:
-		if project, ok := r.links.lookup(folder); ok {
-			place = Place{Project: project, Worktree: true}
-		} else if project, ok := r.infer(folder); ok {
-			place = Place{Project: project, Worktree: true, Inferred: true}
-		}
+		place = r.fromMemory(folder)
 	}
 	if len(r.cache) >= maxRepoCache {
 		if _, ok := r.cache[folder]; !ok {
