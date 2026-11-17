@@ -8,8 +8,9 @@ import (
 // containers are folder names that only hold projects; a display name leaves them out.
 var containers = []string{"Documents", "Projects", "Developer", "Desktop", "src", "code", "dev", "development", "work", "repos", "git"}
 
-// worktreeMarkers split a worktree's folder into the repository and the worktree's name.
-var worktreeMarkers = []string{"--claude-worktrees-", "-worktrees-"}
+// worktreeMarkers split a worktree's folder into the repository and the worktree's name. "-work-"
+// is a sibling folder that holds a repository's worktrees ("<repo>-work/<name>").
+var worktreeMarkers = []string{"--claude-worktrees-", "-worktrees-", "-work-"}
 
 // userHome is the home directory of the user CPA runs as; "" when unknown.
 func userHome() string {
@@ -61,14 +62,22 @@ func (f folderName) display() string {
 func parseFolder(key, home string) folderName {
 	f := folderName{key: key}
 	repo := key
+	eh := encodeHome(home)
 	for _, m := range worktreeMarkers {
-		if i := strings.Index(key, m); i > 0 && i+len(m) < len(key) {
-			repo, f.worktree = key[:i], key[i+len(m):]
-			break
+		i := strings.Index(key, m)
+		if i <= 0 || i+len(m) >= len(key) {
+			continue
 		}
+		// The part before the marker must name a repository: not the home itself, and not only
+		// container folders (a "work" folder that holds projects is a container, not a worktree's).
+		before := key[:i]
+		if before == eh || onlyContainers(strings.TrimPrefix(strings.TrimPrefix(before, eh), "-")) {
+			continue
+		}
+		repo, f.worktree = before, key[i+len(m):]
+		break
 	}
 	f.segs = strings.Split(strings.TrimPrefix(repo, "-"), "-")
-	eh := encodeHome(home)
 	switch {
 	case len(eh) > 1 && repo == eh:
 		f.fixed = true // the home itself
@@ -143,4 +152,18 @@ func (v *AffinityView) nameFolders(home string) {
 		folders = append(folders, pick.Project)
 	}
 	v.Names = FolderNames(folders, home)
+}
+
+// onlyContainers reports whether every segment of an encoded path is a container folder (or the
+// path is empty), so it names no repository.
+func onlyContainers(encoded string) bool {
+	if encoded == "" {
+		return true
+	}
+	for _, seg := range strings.Split(encoded, "-") {
+		if seg != "" && !isContainer(seg) {
+			return false
+		}
+	}
+	return true
 }
