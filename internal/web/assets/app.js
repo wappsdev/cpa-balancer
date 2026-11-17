@@ -367,7 +367,7 @@ function planShareText(p) {
 }
 
 // A row's figures for the window in view, and the other window beside it.
-function planOf(share5, share7, off5, off7, span) {
+function ultraShareOf(share5, share7, off5, off7, span) {
   const week = span === "week";
   return { share: week ? share7 : share5, alt: week ? share5 : share7, altLabel: week ? "5 h" : "7 d", elsewhere: week ? off7 : off5 };
 }
@@ -434,7 +434,7 @@ function projectGroups(v, aff, span) {
     if (!groups.has(project)) groups.set(project, { project, sessions: [] });
     return groups.get(project);
   };
-  const withPlan = r => ({ ...r, plan: planOf(r.share5, r.share7, r.off5, r.off7, span) });
+  const withPlan = r => ({ ...r, plan: ultraShareOf(r.share5, r.share7, r.off5, r.off7, span) });
   let family = null;
   for (const r of v.rows) {
     if (r.depth === 0) {
@@ -462,7 +462,7 @@ function projectGroups(v, aff, span) {
       alt: o ? { label: other === "week" ? "7 d" : "5 h", requests: o.requests || 0, tokens: o.tokens || 0 } : null,
       key: g.project === "" ? "n:" : "p:" + g.project, project: g.project, none: g.project === "", sessions: g.sessions,
       requests: u.requests, tokens: u.tokens, last: u.last || "", share: percent(u.tokens, v.total.tokens), unlisted: Math.max(0, u.tokens - listed.tokens),
-      plan: planOf(p?.planShare5h ?? null, p?.planShare7d ?? null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span), lines: u.models || [],
+      plan: ultraShareOf(p?.planShare5h ?? null, p?.planShare7d ?? null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span), lines: u.models || [],
     };
   }).sort((a, b) => b.tokens - a.tokens || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
 }

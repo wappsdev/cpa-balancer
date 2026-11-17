@@ -3,6 +3,7 @@ PLUGIN_DIR := $(HOME)/.cli-proxy-api/plugins/darwin/arm64
 .PHONY: test build build-import install
 
 test:
+	node --check internal/web/assets/app.js
 	go vet ./...
 	go test ./...
 	node internal/web/session_test.mjs
