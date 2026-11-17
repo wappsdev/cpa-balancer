@@ -288,5 +288,9 @@ const wtStray = strayPinsHtml(wtAff, wtGroups, name)
 check('a pin on a shown worktree is not stray, one on a folder outside the window is', !wtStray.includes('data-key="' + WA + '"') && wtStray.includes('-work-shop-work-gone'))
 check('the project row\'s account is the project\'s home, and its pin choice keys the project', wtClosed.includes('project home') && wtClosed.includes('data-key="' + R + '"'))
 
+const infAff = { ...wtAff, project_inferred: { [WB]: true } }
+const infOpen = groupRowsHtml(projectGroups(wtView, infAff, 'week'), new Set(['p:' + R]), infAff, name, accounts)
+check('a worktree grouped by inference carries an inferred mark, the others none', (infOpen.match(/>inferred<\/span>/g) || []).length === 1 && !wtOpen.includes('>inferred</span>'))
+
 if (fails.length) { console.log('FAIL: ' + fails.join('; ')); process.exit(1) }
 console.log('PASS')

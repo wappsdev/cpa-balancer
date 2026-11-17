@@ -537,7 +537,7 @@ function projectGroups(v, aff, span) {
       const figures = rowFigures(v, span, usedIn(w?.[span]) ? w[span] : null, listed, w);
       return {
         ...figures, key: "w:" + t.folder, folder: t.folder, name: w?.name || aff?.names?.[t.folder] || t.folder, path: w?.path || t.folder,
-        sessions: t.sessions, unlisted: Math.max(0, figures.tokens - listed.tokens),
+        inferred: aff?.project_inferred?.[t.folder] === true, sessions: t.sessions, unlisted: Math.max(0, figures.tokens - listed.tokens),
       };
     }).sort((a, b) => b.tokens - a.tokens || (a.folder < b.folder ? -1 : a.folder > b.folder ? 1 : 0));
     const figures = rowFigures(v, span, used.get(g.project) || null, listedUse([...g.sessions, ...subs.flatMap(w => w.sessions)]), usage.get(g.project));
@@ -615,7 +615,7 @@ function worktreeRowHtml(t, open, aff, name, accounts, m = null, fable = []) {
   const count = t.sessions.length;
   const alt = n => t.alt ? ` <span class="faint">· ${t.alt.label} ${n(t.alt)}</span>` : "";
   return `<tr class="worktree">
-    <th scope="row">${toggleHtml(t.key, open)}<span class="stitle" title="${esc(t.path)}">${esc(t.name)}</span> <span class="chip">worktree</span> <span class="faint">${count}${t.unlisted > 0 ? "+" : ""} session${count === 1 && !t.unlisted ? "" : "s"}</span>${modelLinesHtml(t.lines, fable)}${accountUseHtml(t.accounts, name, open)}</th>
+    <th scope="row">${toggleHtml(t.key, open)}<span class="stitle" title="${esc(t.path)}">${esc(t.name)}</span> <span class="chip">worktree</span>${t.inferred ? ' <span class="chip faint" title="Its folder is gone; it is grouped here because the other worktrees in the same folder belong to this repository.">inferred</span>' : ""} <span class="faint">${count}${t.unlisted > 0 ? "+" : ""} session${count === 1 && !t.unlisted ? "" : "s"}</span>${modelLinesHtml(t.lines, fable)}${accountUseHtml(t.accounts, name, open)}</th>
     <td>${t.last ? when(t.last) : "—"}</td><td>${t.requests}${alt(a => a.requests)}</td><td>${num(t.tokens)}${alt(a => num(a.tokens))}</td><td>${t.share}%</td>${planCellHtml(t.plan, m)}
     <td class="left">${pin ? homeText(t.folder, aff, name) : '<span class="faint">with the project</span>'}</td>
     <td class="left">${pinSelectHtml("folder", t.folder, pin, accounts, name)}</td></tr>`;
