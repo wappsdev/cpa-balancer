@@ -146,6 +146,9 @@ button, select, input { font: inherit; color: inherit; }
 .sessions-table tr.project th { font-weight: 600; }
 .sessions-table tr.project td { font-weight: 500; }
 .sessions-table tr.session th { padding-left: 26px; }
+.sessions-table tr.worktree th { padding-left: 26px; font-weight: 500; }
+.sessions-table tr.worktree td { font-weight: 400; }
+.sessions-table tr.session.deep th { padding-left: 52px; }
 .sessions-table .stitle.none { font-style: italic; color: var(--muted); }
 .sessions-table td .select { height: 28px; }
 .toggle {

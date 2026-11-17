@@ -6,7 +6,7 @@ const when = 'const when = t => `<span class="when">${esc(t)}</span>`;'
 const lib = (params = {}) => load({
   consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText', 'OPEN_KEY', 'MAX_OPEN', 'folderLabel'],
   fns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'homeInfo', 'toggleHtml', 'pinSelectHtml', 'placementText', 'homeText',
-    'projectRowHtml', 'sessionRowHtml', 'subRowHtml', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
+    'usedIn', 'listedUse', 'rowFigures', 'worktreeRowHtml', 'projectRowHtml', 'sessionRowHtml', 'subRowHtml', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
     'planShareText', 'ultraShareOf', 'meterInfo', 'meterLine', 'ultraBasisLine', 'meterTip', 'planCellHtml', 'modelLinesHtml'],
   extra: when, params,
   returns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
@@ -212,7 +212,7 @@ check('the remembered set is bounded, the newest kept', (() => { const r = [...w
 const shop = '-Users-alice-Documents-Projects-shop', quote = '-Users-alice-Documents-Projects-quote"<b>'
 const namedAff = { ...aff, names: { [shop]: 'shop', [quote]: 'quote"<b>' }, homes: [], folder_pins: [{ key: shop, account: 'a.json', source: 'ui', full: false }], session_projects: {},
   projects: [{ project: shop, five_hour: { requests: 1, tokens: 10, last: '2026-11-15T10:00:00Z' }, week: { requests: 1, tokens: 10, last: '2026-11-15T10:00:00Z' } }] }
-const namedGroups = [{ project: shop, none: false, key: 'p:' + shop, sessions: [], tokens: 10, requests: 1, last: '2026-11-15T10:00:00Z' }]
+const namedGroups = [{ project: shop, none: false, key: 'p:' + shop, sessions: [], trees: [], tokens: 10, requests: 1, last: '2026-11-15T10:00:00Z' }]
 const namedRow = groupRowsHtml(namedGroups, new Set(), namedAff, name, [{ auth_file: 'a.json', name: 'a' }], null)
 check('a project row shows the short name and keeps the folder in the title', namedRow.includes(`<span class="stitle" title="${shop}">shop</span>`))
 check('the pin and the toggle still key by the folder', namedRow.includes(`data-key="${shop}"`) && namedRow.includes(`data-toggle="p:${shop}"`))
@@ -224,6 +224,69 @@ check('the rebalance plan shows the short name', namedPlan.includes(`title="${sh
 const hostileName = rebalanceHtml({ applied: false, pinned: 0, plan: [{ project: quote, from: 'a.json', to: 'b.json' }] }, name, namedAff.names)
 check('a hostile short name and folder are escaped', !hostileName.includes('<b>') && hostileName.includes('quote&quot;&lt;b&gt;'))
 check('the plan works with no names', rebalanceHtml({ applied: false, pinned: 0, plan: [{ project: '-work-x', from: 'a.json', to: 'b.json' }] }, name).includes('>-work-x</span>'))
+
+// Git worktrees: one row per repository (the project); its worktrees are sub-rows under it.
+const R = '-work-shop', WA = '-work-shop-work-feature-a', WB = '-work-wt-b'
+const evilName = 'b"><i>'
+const wtWin = {
+  total: t(20, 1000), other: { sessions: 0, total: t(0, 0) },
+  sessions: [session(A, t(5, 100), [{ id: A + '/ab12', parent: A, last: '2026-11-15T10:00:00Z', own: t(2, 40), total: t(2, 40), accounts: { 'a.json': t(2, 40) }, models: {} }]),
+    session(B, t(6, 500)), session(C, t(4, 300)), session(D, t(2, 20)), session('', t(3, 80))],
+}
+const stamp = '2026-11-15T10:00:00Z'
+const wtAff = {
+  project_of: { [R]: R, [WA]: R, [WB]: R },
+  session_projects: { [A]: R, [B]: WA, [C]: WA, [D]: WB },
+  names: { [R]: 'shop' },
+  projects: [{
+    project: R, five_hour: { requests: 20, tokens: 1000, last: stamp }, week: { requests: 20, tokens: 1000, last: stamp },
+    planShare5h: 9, planShare7d: 12, elsewhere5h: 0, elsewhere7d: 0,
+    worktrees: [
+      { project: WA, name: 'feature-a', path: '/x/shop-work/feature-a', five_hour: { requests: 10, tokens: 820, last: stamp }, week: { requests: 10, tokens: 820, last: stamp }, planShare5h: 6, planShare7d: 8, elsewhere5h: 0, elsewhere7d: 0 },
+      { project: WB, name: evilName, path: '/x/wt/' + evilName, five_hour: { requests: 2, tokens: 30, last: stamp }, week: { requests: 2, tokens: 30, last: stamp }, planShare5h: 1, planShare7d: 1, elsewhere5h: 0, elsewhere7d: 0 },
+    ],
+  }],
+  homes: [{ project: R, account: 'a.json', full: false }],
+  folder_pins: [{ key: WA, account: 'b.json', source: 'ui', full: false }, { key: '-work-shop-work-gone', account: 'a.json', source: 'ui', full: false }],
+  session_pins: [], sessions: {},
+}
+const wtView = sessionsView(wtWin, wtAff.sessions)
+const wtGroups = projectGroups(wtView, wtAff, 'week')
+const [shopGroup] = wtGroups
+check('a worktree is no project of its own: one row for the repository, one for no project', wtGroups.map(g => g.project).join('|') === R + '|')
+check('the project row\'s totals and Ultra percent include its worktrees', shopGroup.tokens === 1000 && shopGroup.requests === 20 && shopGroup.plan.five === 9 && shopGroup.plan.week === 12)
+check('its own sessions are the ones of its own folder', shopGroup.sessions.map(f => f.row.id).join('|') === A)
+check('one sub-row per worktree, the largest first, with its own totals and percent', shopGroup.trees.map(w => w.folder).join('|') === WA + '|' + WB && shopGroup.trees[0].tokens === 820 && shopGroup.trees[0].plan.week === 8 && shopGroup.trees[1].tokens === 30)
+check('a worktree has the name and the path the balancer gives, and its sessions', shopGroup.trees[0].name === 'feature-a' && shopGroup.trees[0].path === '/x/shop-work/feature-a' && shopGroup.trees[0].sessions.map(f => f.row.id).join('|') === B + '|' + C)
+check('totals add up: the project\'s own use is what its worktrees leave', shopGroup.tokens - shopGroup.trees.reduce((n, w) => n + w.tokens, 0) === 150)
+check('what the listed sessions leave out is counted per row', shopGroup.unlisted === 50 && shopGroup.trees[0].unlisted === 20 && shopGroup.trees[1].unlisted === 10)
+check('a worktree shows the other window beside the one in view', shopGroup.trees[0].alt?.label === '5 h' && shopGroup.trees[0].alt.tokens === 820)
+check('the no-project group has no worktrees', wtGroups[1].none && wtGroups[1].trees.length === 0)
+check('without the folder map a session falls back to the project of its pick, through project_of', (() => {
+  const picks = { [B]: { account: 'a.json', reason: 'project_home', project: WA, at: 'x' } }
+  const g = projectGroups(sessionsView(wtWin, picks), { ...wtAff, session_projects: {}, sessions: picks }, 'week').find(x => x.project === R)
+  return g.trees.some(w => w.folder === WA && w.sessions.some(f => f.row.id === B))
+})())
+check('a worktree with sessions but no figures of its own is still a sub-row, sized by what is listed', (() => {
+  const g = projectGroups(wtView, { ...wtAff, projects: [{ ...wtAff.projects[0], worktrees: [] }] }, 'week').find(x => x.project === R)
+  return g.trees.length === 2 && g.trees.find(w => w.folder === WA).tokens === 800
+})())
+
+const wtClosed = groupRowsHtml(wtGroups, new Set(), wtAff, name, accounts)
+check('closed: one row per project, no worktree rows', (wtClosed.match(/<tr /g) || []).length === 2 && !wtClosed.includes('class="worktree"'))
+check('the project row counts all its sessions and says how many worktrees', wtClosed.includes('4+ sessions') && wtClosed.includes('2 worktrees'))
+const wtOpen = groupRowsHtml(wtGroups, new Set(['p:' + R]), wtAff, name, accounts)
+check('an open project lists its own sessions and a sub-row per worktree, their sessions still closed', (wtOpen.match(/class="worktree"/g) || []).length === 2 && wtOpen.includes('title="' + A + '"') && !wtOpen.includes('title="' + B + '"') && wtOpen.includes('data-toggle="w:' + WA + '"'))
+check('a worktree row shows its name, the path in the title and its own totals', wtOpen.includes('title="/x/shop-work/feature-a">feature-a</span>') && wtOpen.includes('<td>820 <span class="faint">· 5 h 820'))
+check('a worktree has its own pin choice, set to its pin, and says when it follows the project', new RegExp(`data-pin-select="folder" data-key="${WA}"[^>]*>\\s*<option value="">no pin</option><option value="a.json">first</option><option value="b.json" selected>`).test(wtOpen) && wtOpen.includes('with the project'))
+const wtDeep = groupRowsHtml(wtGroups, new Set(['p:' + R, 'w:' + WA]), wtAff, name, accounts)
+check('an open worktree lists its sessions, indented below it', wtDeep.includes('title="' + B + '"') && wtDeep.includes('title="' + C + '"') && /class="session deep"/.test(wtDeep) && wtDeep.includes('smaller sessions not listed'))
+check('the sessions of a worktree can open their subagents', groupRowsHtml(wtGroups, new Set(['p:' + R, 'w:' + WA, 's:' + B]), wtAff, name, accounts).includes('class="session deep"'))
+check('every row of the worktree view has as many cells as the header', cells(wtDeep).every(n => n === 7))
+check('a worktree name and path are escaped', !wtOpen.includes('<i>') && wtOpen.includes('b&quot;&gt;&lt;i&gt;'))
+const wtStray = strayPinsHtml(wtAff, wtGroups, name)
+check('a pin on a shown worktree is not stray, one on a folder outside the window is', !wtStray.includes('data-key="' + WA + '"') && wtStray.includes('-work-shop-work-gone'))
+check('the project row\'s account is the project\'s home, and its pin choice keys the project', wtClosed.includes('project home') && wtClosed.includes('data-key="' + R + '"'))
 
 if (fails.length) { console.log('FAIL: ' + fails.join('; ')); process.exit(1) }
 console.log('PASS')

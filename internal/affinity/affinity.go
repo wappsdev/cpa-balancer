@@ -1,5 +1,6 @@
-// Package affinity finds which project a Claude Code session belongs to. It reads names only:
-// the headers of a request and the names in Claude Code's projects directory, never a transcript.
+// Package affinity finds which project a Claude Code session belongs to. It reads names only: the
+// headers of a request, the names in Claude Code's projects directory, and a folder's small git
+// files (see Repos), never a transcript.
 package affinity
 
 import (

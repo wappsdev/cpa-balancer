@@ -344,9 +344,10 @@ const REASONS = {
 };
 const reasonText = r => REASONS[r] || r;
 
-// The card has three levels, all closed when the page opens: a project (a folder, or the group of
-// sessions with none), its sessions, and each session's subagents. The open ones are remembered
-// in localStorage under their keys: "p:<folder>", "n:" for no project, "s:<session id>".
+// The card has four levels, all closed when the page opens: a project (a repository, or the group
+// of sessions with none), its git worktrees, the sessions of the project and of each worktree, and
+// each session's subagents. The open ones are remembered in localStorage under their keys:
+// "p:<project folder>", "n:" for no project, "w:<worktree folder>", "s:<session id>".
 const OPEN_KEY = "cpa-balancer.sessions-open";
 const MAX_OPEN = 200;
 function readOpen() {
@@ -432,46 +433,90 @@ function modelLinesHtml(lines, fable) {
   }).join("")}</div>`;
 }
 
-// The rows of sessionsView, grouped by project folder and sorted by use, the largest first. A
-// project's totals are the balancer's own (summed from every session, so the week's cut list does
-// not make them short); what the listed sessions leave out is `unlisted`. Pure, so it is tested.
+// Whether a window's figure holds any use.
+function usedIn(u) {
+  return !!(u && (u.tokens || u.requests));
+}
+
+// What a list of session families (see projectGroups) adds up to.
+function listedUse(sessions) {
+  const listed = { requests: 0, tokens: 0, last: "" };
+  for (const { row } of sessions) {
+    listed.requests += row.requests;
+    listed.tokens += row.tokens;
+    if (row.last && (!listed.last || Date.parse(row.last) > Date.parse(listed.last))) listed.last = row.last;
+  }
+  return listed;
+}
+
+// The figures of a project row or a worktree row in the window in view: the balancer's own totals
+// for the window (`used`), or what the listed sessions add up to when it has none; the other window
+// beside it; and the Ultra percent of both windows (`p` is the balancer's entry for the row).
+function rowFigures(v, span, used, listed, p) {
+  const other = span === "week" ? "five_hour" : "week";
+  const u = used || listed, o = p?.[other];
+  return {
+    alt: o ? { label: other === "week" ? "7 d" : "5 h", requests: o.requests || 0, tokens: o.tokens || 0 } : null,
+    requests: u.requests, tokens: u.tokens, last: u.last || "", share: v.total.tokens ? Math.round(u.tokens * 100 / v.total.tokens) : 0,
+    // a row with no use in a window has no figure for it, like a session that is in one window only
+    plan: ultraShareOf(usedIn(p?.five_hour) ? p.planShare5h ?? null : null, usedIn(p?.week) ? p.planShare7d ?? null : null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span),
+    lines: u.models || [],
+  };
+}
+
+// The rows of sessionsView, grouped by project and sorted by use, the largest first. A project is a
+// repository: a git worktree's folder (aff.project_of) is a sub-row `trees` of its main repository's
+// project, which counts its use too. A project's totals are the balancer's own (summed from every
+// session, so the week's cut list does not make them short); what the listed sessions leave out is
+// `unlisted`, of the project's own folder (the worktrees' totals are not in it) or of a worktree.
+// Pure, so it is tested.
 function projectGroups(v, aff, span) {
-  const percent = (n, of) => of ? Math.round(n * 100 / of) : 0;
+  const projectOf = folder => aff?.project_of?.[folder] ?? folder;
   const groups = new Map();
   const group = project => {
-    if (!groups.has(project)) groups.set(project, { project, sessions: [] });
+    if (!groups.has(project)) groups.set(project, { project, sessions: [], trees: new Map() });
     return groups.get(project);
   };
+  const tree = (project, folder) => {
+    const g = group(project);
+    if (!g.trees.has(folder)) g.trees.set(folder, { folder, sessions: [] });
+    return g.trees.get(folder);
+  };
+  // the list a folder's sessions go in: its project's own, or its worktree's
+  const listOf = folder => projectOf(folder) === folder ? group(folder).sessions : tree(projectOf(folder), folder).sessions;
   const withPlan = r => ({ ...r, plan: ultraShareOf(r.share5, r.share7, r.off5, r.off7, span) });
   let family = null;
   for (const r of v.rows) {
     if (r.depth === 0) {
       family = { row: withPlan(r), subs: [] };
-      group(aff?.session_projects?.[r.id] ?? r.pick?.project ?? "").sessions.push(family);
+      listOf(aff?.session_projects?.[r.id] ?? r.pick?.project ?? "").push(family);
     } else if (family) family.subs.push(withPlan(r));
   }
-  const used = new Map(), usage = new Map((aff?.projects || []).map(p => [p.project, p]));
-  const other = span === "week" ? "five_hour" : "week";
-  const usedIn = u => !!(u && (u.tokens || u.requests));
+  const used = new Map(), usage = new Map((aff?.projects || []).map(p => [p.project, p])), worktrees = new Map();
   for (const p of aff?.projects || []) {
     if (usedIn(p[span])) { group(p.project); used.set(p.project, p[span]); }
-  }
-  return [...groups.values()].map(g => {
-    g.sessions.sort((a, b) => b.row.tokens - a.row.tokens || (a.row.id < b.row.id ? -1 : 1));
-    const listed = { requests: 0, tokens: 0, last: "" };
-    for (const { row } of g.sessions) {
-      listed.requests += row.requests;
-      listed.tokens += row.tokens;
-      if (row.last && (!listed.last || Date.parse(row.last) > Date.parse(listed.last))) listed.last = row.last;
+    for (const w of p.worktrees || []) {
+      worktrees.set(w.project, w);
+      if (usedIn(w[span])) tree(p.project, w.project);
     }
-    const u = used.get(g.project) || listed;
-    const p = usage.get(g.project), o = p?.[other]; // the other window, shown beside the one in view
+  }
+  const byUse = list => list.sort((a, b) => b.row.tokens - a.row.tokens || (a.row.id < b.row.id ? -1 : 1));
+  return [...groups.values()].map(g => {
+    byUse(g.sessions);
+    const subs = [...g.trees.values()].map(t => {
+      byUse(t.sessions);
+      const listed = listedUse(t.sessions), w = worktrees.get(t.folder);
+      const figures = rowFigures(v, span, usedIn(w?.[span]) ? w[span] : null, listed, w);
+      return {
+        ...figures, key: "w:" + t.folder, folder: t.folder, name: w?.name || aff?.names?.[t.folder] || t.folder, path: w?.path || t.folder,
+        sessions: t.sessions, unlisted: Math.max(0, figures.tokens - listed.tokens),
+      };
+    }).sort((a, b) => b.tokens - a.tokens || (a.folder < b.folder ? -1 : a.folder > b.folder ? 1 : 0));
+    const figures = rowFigures(v, span, used.get(g.project) || null, listedUse([...g.sessions, ...subs.flatMap(w => w.sessions)]), usage.get(g.project));
+    const inTrees = subs.reduce((n, w) => n + w.tokens, 0);
     return {
-      alt: o ? { label: other === "week" ? "7 d" : "5 h", requests: o.requests || 0, tokens: o.tokens || 0 } : null,
-      key: g.project === "" ? "n:" : "p:" + g.project, project: g.project, none: g.project === "", sessions: g.sessions,
-      requests: u.requests, tokens: u.tokens, last: u.last || "", share: percent(u.tokens, v.total.tokens), unlisted: Math.max(0, u.tokens - listed.tokens),
-      // a project with no use in a window has no figure for it, like a session that is in one window only
-      plan: ultraShareOf(usedIn(p?.five_hour) ? p.planShare5h ?? null : null, usedIn(p?.week) ? p.planShare7d ?? null : null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span), lines: u.models || [],
+      ...figures, key: g.project === "" ? "n:" : "p:" + g.project, project: g.project, none: g.project === "", sessions: g.sessions, trees: subs,
+      unlisted: Math.max(0, figures.tokens - inTrees - listedUse(g.sessions).tokens),
     };
   }).sort((a, b) => b.tokens - a.tokens || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
 }
@@ -522,51 +567,77 @@ function homeText(project, aff, name) {
 
 function projectRowHtml(g, open, aff, name, accounts, m = null, fable = []) {
   const label = g.none ? '<span class="stitle none">no project</span>' : `<span class="stitle" title="${esc(g.project)}">${esc(folderLabel(aff, g.project))}</span>`;
-  const count = g.sessions.length;
+  const count = g.sessions.length + g.trees.reduce((n, w) => n + w.sessions.length, 0);
+  const partial = g.unlisted > 0 || g.trees.some(w => w.unlisted > 0);
+  const trees = g.trees.length ? ` · ${g.trees.length} worktree${g.trees.length === 1 ? "" : "s"}` : "";
   const pin = homeInfo(g.project, aff).pin;
   const alt = n => g.alt ? ` <span class="faint">· ${g.alt.label} ${n(g.alt)}</span>` : "";
   return `<tr class="project">
-    <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${g.unlisted > 0 ? "+" : ""} session${count === 1 && !g.unlisted ? "" : "s"}</span>${modelLinesHtml(g.lines, fable)}</th>
+    <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${partial ? "+" : ""} session${count === 1 && !partial ? "" : "s"}${trees}</span>${modelLinesHtml(g.lines, fable)}</th>
     <td>${g.last ? when(g.last) : "—"}</td><td>${g.requests}${alt(a => a.requests)}</td><td>${num(g.tokens)}${alt(a => num(a.tokens))}</td><td>${g.share}%</td>${planCellHtml(g.plan, m)}
     <td class="left">${g.none ? '<span class="faint">CPA\'s own order</span>' : homeText(g.project, aff, name)}</td>
     <td class="left">${g.none ? "" : pinSelectHtml("folder", g.project, pin, accounts, name)}</td></tr>`;
 }
 
-function sessionRowHtml(f, open, aff, name, accounts, m = null, fable = []) {
+// A git worktree's sub-row under its project: its own totals, the account it has of its own pin
+// (else it follows the project), and the choice to pin this folder alone. The name is the folder's
+// last path segment; the full path is in the title.
+function worktreeRowHtml(t, open, aff, name, accounts, m = null, fable = []) {
+  const pin = homeInfo(t.folder, aff).pin;
+  const count = t.sessions.length;
+  const alt = n => t.alt ? ` <span class="faint">· ${t.alt.label} ${n(t.alt)}</span>` : "";
+  return `<tr class="worktree">
+    <th scope="row">${toggleHtml(t.key, open)}<span class="stitle" title="${esc(t.path)}">${esc(t.name)}</span> <span class="chip">worktree</span> <span class="faint">${count}${t.unlisted > 0 ? "+" : ""} session${count === 1 && !t.unlisted ? "" : "s"}</span>${modelLinesHtml(t.lines, fable)}</th>
+    <td>${t.last ? when(t.last) : "—"}</td><td>${t.requests}${alt(a => a.requests)}</td><td>${num(t.tokens)}${alt(a => num(a.tokens))}</td><td>${t.share}%</td>${planCellHtml(t.plan, m)}
+    <td class="left">${pin ? homeText(t.folder, aff, name) : '<span class="faint">with the project</span>'}</td>
+    <td class="left">${pinSelectHtml("folder", t.folder, pin, accounts, name)}</td></tr>`;
+}
+
+function sessionRowHtml(f, open, aff, name, accounts, m = null, fable = [], deep = false) {
   const r = f.row;
   const used = r.accounts.map(a => name(a.key) + (r.accounts.length > 1 ? ` ${a.share}%` : "")).join(" · ");
   const detail = [`own ${num(r.ownTokens)}`, `cache reads ${num(r.cacheRead)}`, used && `accounts ${used}`].filter(Boolean).join(" · ");
   const pin = (aff?.session_pins || []).find(p => p.key === r.id) || null;
   const subs = f.subs.length;
-  return `<tr class="session${r.none ? " none" : ""}">
+  return `<tr class="session${deep ? " deep" : ""}${r.none ? " none" : ""}">
     <th scope="row" title="${esc(r.id)}">${subs ? toggleHtml("s:" + r.id, open) : '<span class="toggle-space"></span>'}<span class="sid">${esc(r.label)}</span>${subs ? ` <span class="faint">${subs} subagent${subs === 1 ? "" : "s"}</span>` : ""}${modelLinesHtml(r.lines, fable)}</th>
     <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td><td>${r.share}%</td>${planCellHtml(r.plan, m)}
     <td class="left">${placementText(r.pick, name)}</td>
     <td class="left">${r.id ? pinSelectHtml("session", r.id, pin, accounts, name) : ""}</td></tr>`;
 }
 
-function subRowHtml(r, name, m = null, fable = []) {
+function subRowHtml(r, name, m = null, fable = [], extra = 0) {
   return `<tr class="sub">
-    <th scope="row" title="${esc(r.id)}" style="padding-left: ${28 + r.depth * 14}px"><span class="faint">↳ </span><span class="sid">${esc(r.label)}</span>${modelLinesHtml(r.lines, fable)}</th>
+    <th scope="row" title="${esc(r.id)}" style="padding-left: ${28 + extra + r.depth * 14}px"><span class="faint">↳ </span><span class="sid">${esc(r.label)}</span>${modelLinesHtml(r.lines, fable)}</th>
     <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(`cache reads ${num(r.cacheRead)}`)}">${num(r.tokens)}</td><td>${r.share}%</td>${planCellHtml(r.plan, m)}
     <td class="left">${placementText(r.pick, name)}</td><td></td></tr>`;
 }
 
-// The table body: every project, and below an open one its sessions, and below an open session its subagents.
+// The table body: every project, and below an open one its own sessions and a sub-row per worktree,
+// below an open worktree its sessions, and below an open session its subagents.
 function groupRowsHtml(groups, open, aff, name, accounts, m = null) {
   const rows = [];
   const fable = m?.fable || [];
+  const sessionRows = (sessions, deep) => {
+    for (const f of sessions) {
+      const sessionOpen = open.has("s:" + f.row.id);
+      rows.push(sessionRowHtml(f, sessionOpen, aff, name, accounts, m, fable, deep));
+      if (sessionOpen) for (const s of f.subs) rows.push(subRowHtml(s, name, m, fable, deep ? 26 : 0));
+    }
+  };
+  const unlistedRow = (tokens, pad) => rows.push(`<tr class="sub"><th scope="row" class="faint" style="padding-left: ${pad}px">smaller sessions not listed</th><td></td><td></td><td>${num(tokens)}</td><td></td><td></td><td></td><td></td></tr>`);
   for (const g of groups) {
     const isOpen = open.has(g.key);
     rows.push(projectRowHtml(g, isOpen, aff, name, accounts, m, fable));
     if (!isOpen) continue;
-    for (const f of g.sessions) {
-      const sessionOpen = open.has("s:" + f.row.id);
-      rows.push(sessionRowHtml(f, sessionOpen, aff, name, accounts, m, fable));
-      if (sessionOpen) for (const s of f.subs) rows.push(subRowHtml(s, name, m, fable));
-    }
-    if (g.unlisted > 0) {
-      rows.push(`<tr class="sub"><th scope="row" class="faint" style="padding-left: 28px">smaller sessions not listed</th><td></td><td></td><td>${num(g.unlisted)}</td><td></td><td></td><td></td><td></td></tr>`);
+    sessionRows(g.sessions, false);
+    if (g.unlisted > 0) unlistedRow(g.unlisted, 28);
+    for (const t of g.trees) {
+      const treeOpen = open.has(t.key);
+      rows.push(worktreeRowHtml(t, treeOpen, aff, name, accounts, m, fable));
+      if (!treeOpen) continue;
+      sessionRows(t.sessions, true);
+      if (t.unlisted > 0) unlistedRow(t.unlisted, 54);
     }
   }
   return rows.join("");
@@ -576,8 +647,8 @@ function groupRowsHtml(groups, open, aff, name, accounts, m = null) {
 // removed. A pin set in the config is read only. Pure, so it is tested.
 function strayPinsHtml(aff, groups, name) {
   if (!aff) return "";
-  const projects = new Set(groups.map(g => g.project));
-  const sessions = new Set(groups.flatMap(g => g.sessions.map(f => f.row.id)));
+  const projects = new Set(groups.flatMap(g => [g.project, ...g.trees.map(w => w.folder)]));
+  const sessions = new Set(groups.flatMap(g => [...g.sessions, ...g.trees.flatMap(w => w.sessions)].map(f => f.row.id)));
   const item = (kind, p) => {
     const label = kind === "session" ? p.key.slice(0, 8) : folderLabel(aff, p.key);
     return `<li><span class="chip">${kind}</span> <span class="${kind === "session" ? "sid" : "stitle"}" title="${esc(p.key)}">${esc(label)}</span> → <strong>${esc(name(p.account))}</strong>

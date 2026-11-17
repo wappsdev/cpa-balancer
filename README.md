@@ -94,8 +94,11 @@ The Overview shows them for the last 5 hours and the last 7 days (rolling window
 account's own quota window), grouped by project folder (see "Project affinity"). When the page
 opens, it shows one row per project, the largest first, all closed: requests and tokens (input,
 output and cache writes) of the window in view with the other window beside them (`5 h` or `7 d`),
-its share of the window in view and its account. Open a project to see its
-sessions, and a session to see its subagents; the open ones are remembered in the browser. A session
+its share of the window in view and its account. A project is a repository: its totals and its
+`~% Ultra` include its git worktrees. Open a project to see its own sessions and one sub-row per
+worktree (named by its directory, the full path in the tooltip, with its own totals and its own pin
+choice), a worktree to see its sessions, and a session to see its subagents; the open ones are
+remembered in the browser. A session
 row has its id (first 8 characters; the full id is in the tooltip), when it was last seen, requests,
 tokens (cache reads and the accounts it used are in the tooltip) and its share of the window.
 Sessions with no known folder, and requests without a session id, are one group, `no project`. A
@@ -207,6 +210,18 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   then looked up again; a miss for 5 seconds, because Claude Code writes the transcript after the
   first request). A session with no header, no folder yet or
   an id that is not a plain one has no project: its pick is CPA's, as before.
+- **Worktrees.** The git worktrees of one repository are one project. A folder name is a working
+  directory with every character that is not a letter or a digit written as `-`, so it is ambiguous.
+  The balancer finds the directory by walking the file system from `/` and matching the encoded names
+  (bounded work, cached for 10 minutes; a re-check that finds nothing keeps the earlier answer). There
+  it reads `.git` and nothing else: a directory means a main repository; a file `gitdir: <path>` that
+  names `<common>/worktrees/<name>` means a linked worktree, and the main repository is the directory
+  that holds the common git directory (`<gitdir>/commondir` says where it is, `../..` by default). It
+  never runs git. A submodule, a folder it cannot find, and a subdirectory of a repository stay
+  projects of their own. Homes, folder pins, balancing and a rebalance use the main repository's
+  folder as the project, so a folder pin on it holds for its worktrees; a folder pin on a worktree's
+  own folder holds for that worktree alone. Keys stay the folder names Claude Code made. A home stored
+  under a worktree's folder before this existed is ignored.
 - **Stay until full.** A project stays on its home account until that account reaches its weekly cap,
   the cap in force from `thresholds` and the account's reserve (the same cap the balancer switches on).
   Only a fresh weekly reading at or over the cap is "full". A 5-hour cap, a CPA cooldown, stale data
@@ -373,7 +388,7 @@ Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's
 
 | Method | Path | |
 |---|---|---|
-| GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes, the sessions of the last 5 hours and 7 days, and `affinity`: the project homes, the pins, each recent session's account and reason by session key, each project's use in both windows (`projects`) and the folder of each listed root session (`session_projects`) |
+| GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes, the sessions of the last 5 hours and 7 days, and `affinity`: the project homes, the pins, each recent session's account and reason by session key, each project's use in both windows (`projects`) and the folder of each listed root session (`session_projects`); `project_of` maps every listed folder to its project (a git worktree to its main repository's folder), and a project in `projects` carries its worktrees' own figures in `worktrees` |
 | GET | `/history?range=24h\|7d\|30d\|90d` | utilization, active account and tokens over time |
 | GET | `/transcripts?range=7d\|30d` | the transcript store over the window: root sessions with their subagents, tokens by model and advisor tokens; no account, never part of `/status` or `/history` |
 | GET | `/outlook` | the look-ahead for the weekly and 5-hour windows, each account's weekly handoff in the balancer's order (`week.accounts`), the same at each method's pace (`week.by_method`), and the measured work pace |
