@@ -201,9 +201,11 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   `claude:<sid>` ids (it makes those later). The balancer reads `X-Claude-Code-Session-Id` and
   `X-Claude-Code-Agent-Id`, and builds the same key the history uses (`<sid>`, or `<sid>/<agentId>` for a
   subagent). A session's folder is the directory under `affinity.projects_dir` that holds
-  `<sid>.jsonl`; a subagent uses its parent's folder. The balancer lists directory names and checks that
-  the file exists. It never opens a transcript. The lookup is cached (a miss for 5 seconds, because
-  Claude Code writes the transcript after the first request). A session with no header, no folder yet or
+  `<sid>.jsonl`; a subagent uses its parent's folder. When a resumed session has a file in two
+  folders, the one written last is its folder. The balancer lists directory names and stats the file
+  (its modification time). It never opens a transcript. The lookup is cached (a hit for 60 seconds,
+  then looked up again; a miss for 5 seconds, because Claude Code writes the transcript after the
+  first request). A session with no header, no folder yet or
   an id that is not a plain one has no project: its pick is CPA's, as before.
 - **Stay until full.** A project stays on its home account until that account reaches its weekly cap,
   the cap in force from `thresholds` and the account's reserve (the same cap the balancer switches on).
