@@ -2,6 +2,7 @@ package history
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"time"
 )
@@ -40,17 +41,79 @@ func basis(t Traffic) float64 {
 	return float64(t.InputTokens+t.OutputTokens+t.CacheCreationTokens) + CacheReadWeight*float64(t.CacheReadTokens)
 }
 
-// Share is what a set of requests used of the metered accounts' limit windows.
-type Share struct {
-	Points    float64 // percent of one account's limit window, summed over the accounts that served it
-	Unknown   bool    // some use on a metered account fell in a window with no factor, so Points falls short
-	Elsewhere int64   // tokens on accounts that have no meter: not in Points
+// AccountPart is what a set of requests used of one account.
+type AccountPart struct {
+	Units   float64 // use on the meter's basis (see BasisText)
+	Points  float64 // percent of that account's limit window, at the account's own factor
+	Unknown bool    // the account has a meter, but some of this use fell in a window with no factor
+	Priced  bool    // false: the account has no meter in the history, so there is no percent
 }
 
-func (s *Share) add(o Share) {
+// Share is what a set of requests used of the metered accounts' limit windows. Points, Unknown and
+// Elsewhere count the aggregate accounts alone (the Ultra accounts: one percent of one window);
+// ByAccount splits the use of every priced account.
+type Share struct {
+	Points    float64 // percent of one account's limit window, summed over the aggregate accounts that served it
+	Unknown   bool    // some use on an aggregate account fell in a window with no factor, so Points falls short
+	Elsewhere int64   // tokens on accounts outside the aggregate: not in Points
+	ByAccount map[string]AccountPart
+}
+
+// Add adds another share to this one. The map of accounts is rebuilt, never changed in place: a
+// Share is copied by value, and a copy must not see a later Add.
+func (s *Share) Add(o Share) {
 	s.Points += o.Points
 	s.Unknown = s.Unknown || o.Unknown
 	s.Elsewhere += o.Elsewhere
+	if len(o.ByAccount) == 0 {
+		return
+	}
+	merged := make(map[string]AccountPart, len(s.ByAccount)+len(o.ByAccount))
+	for name, p := range s.ByAccount {
+		merged[name] = p
+	}
+	for name, p := range o.ByAccount {
+		x := merged[name]
+		x.Units += p.Units
+		x.Points += p.Points
+		x.Unknown = x.Unknown || p.Unknown
+		x.Priced = x.Priced || p.Priced
+		merged[name] = x
+	}
+	s.ByAccount = merged
+}
+
+// AccountUse is what a row used of one account in both windows, for the page: the tokens on the
+// meter's basis, and the percent of that account's own limit window (nil: it cannot be priced).
+type AccountUse struct {
+	Tokens5h int64    `json:"tokens5h"`
+	Tokens7d int64    `json:"tokens7d"`
+	Share5h  *float64 `json:"share5h"`
+	Share7d  *float64 `json:"share7d"`
+}
+
+// AccountUses is the figures of a row for each account that served it in either window.
+func AccountUses(five, week Share) map[string]AccountUse {
+	out := map[string]AccountUse{}
+	for name, p := range five.ByAccount {
+		u := out[name]
+		u.Tokens5h, u.Share5h = int64(math.Round(p.Units)), p.percent()
+		out[name] = u
+	}
+	for name, p := range week.ByAccount {
+		u := out[name]
+		u.Tokens7d, u.Share7d = int64(math.Round(p.Units)), p.percent()
+		out[name] = u
+	}
+	return out
+}
+
+func (p AccountPart) percent() *float64 {
+	if !p.Priced || p.Unknown {
+		return nil
+	}
+	v := p.Points
+	return &v
 }
 
 // Percent is the share, or nil when it is not known.
@@ -100,10 +163,12 @@ func factor(ws []meterWindow, i int) (f float64, previous, ok bool) {
 	return 0, false, false
 }
 
-// Meters holds the windows of the accounts that have a meter.
+// Meters holds the windows of the accounts that have a meter. aggregate, a subset of metered, are
+// the accounts whose use adds up in Share.Points.
 type Meters struct {
-	metered map[string]bool
-	windows map[string][]meterWindow
+	metered   map[string]bool
+	aggregate map[string]bool
+	windows   map[string][]meterWindow
 }
 
 // reading is a meter reading, with the window it fell in.
@@ -117,8 +182,8 @@ type reading struct {
 // fall belongs to the new window, as the meter was at zero when it began. A rise of the meter
 // between two readings a slot apart, with no use of the proxy in the hour either side, is use
 // outside the proxy: it is counted apart and is not part of the factor.
-func buildMeters(slots []*Slot, metered map[string]bool) *Meters {
-	ms := &Meters{metered: metered, windows: map[string][]meterWindow{}}
+func buildMeters(slots []*Slot, aggregate, metered map[string]bool) *Meters {
+	ms := &Meters{metered: metered, aggregate: aggregate, windows: map[string][]meterWindow{}}
 	last := map[string]float64{}
 	reads := map[string][]reading{}
 	served := map[string][]time.Time{} // when each account served anything, oldest first
@@ -178,29 +243,37 @@ func (ms *Meters) shareOf(at time.Time, accounts map[string]Traffic) (sh Share) 
 		return sh
 	}
 	for name, t := range accounts {
-		if !ms.metered[name] {
+		part := AccountPart{Units: basis(t), Priced: ms.metered[name]}
+		if part.Priced && part.Units > 0 { // a request that cost nothing needs no factor
+			part.Points, part.Unknown = ms.price(name, at, part.Units)
+		}
+		if sh.ByAccount == nil {
+			sh.ByAccount = map[string]AccountPart{}
+		}
+		sh.ByAccount[name] = part
+		if !ms.aggregate[name] {
 			sh.Elsewhere += t.Tokens()
 			continue
 		}
-		if basis(t) == 0 {
-			continue // a request that cost nothing needs no factor
-		}
-		ws := ms.windows[name]
-		i := len(ws) - 1
-		for i >= 0 && ws[i].start.After(at) {
-			i--
-		}
-		if i < 0 {
-			sh.Unknown = true
-			continue
-		}
-		if f, _, ok := factor(ws, i); ok {
-			sh.Points += f * basis(t)
-		} else {
-			sh.Unknown = true
-		}
+		sh.Points += part.Points
+		sh.Unknown = sh.Unknown || part.Unknown
 	}
 	return sh
+}
+
+// price is units of use on one account at a time, in percent of the account's limit window at the
+// factor of the window the time falls in; unknown when that window has no factor.
+func (ms *Meters) price(name string, at time.Time, units float64) (points float64, unknown bool) {
+	ws := ms.windows[name]
+	i := len(ws) - 1
+	for i >= 0 && ws[i].start.After(at) {
+		i--
+	}
+	if i < 0 {
+		return 0, true
+	}
+	f, _, ok := factor(ws, i)
+	return f * units, !ok
 }
 
 // calibrations is each metered account's current factor.

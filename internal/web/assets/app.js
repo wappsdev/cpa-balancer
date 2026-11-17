@@ -168,6 +168,7 @@ function accountCard(a, v) {
       ${a.listed ? "" : '<span class="chip bad">not listed by CPA</span>'}
     </div>
     ${rows}
+    ${accountProjectsHtml(a, v.affinity)}
     <div class="account-foot">
       <span>${a.last_anchor ? `Last anchor ${when(a.last_anchor)} · <code>${esc(a.anchor_model)}</code>` : "No anchor yet"}</span>
       <span>${sources ? `source: ${esc(sources)}` : ""}</span>
@@ -326,6 +327,8 @@ function sessionsView(w, picks) {
       // use of the Ultra accounts' limit windows in the 5 hours and the 7 days (null: not known), and tokens on
       // accounts with no meter, which those figures leave out; and each model the family used, by first seen
       share5: s.planShare5h ?? null, share7: s.planShare7d ?? null, off5: s.elsewhere5h || 0, off7: s.elsewhere7d || 0, lines: s.model_lines || [],
+      // what it used of each account in both windows: tokens and the percent of that account's own limit window
+      byAccount: s.by_account || {},
       // where its last request went and why (the balancer keeps it in memory only); a subagent the balancer
       // saw no request of, such as one CPA names from the request body, shows its main session's
       pick: picks?.[s.id] ?? picks?.[s.id.split("/")[0]] ?? null,
@@ -421,6 +424,31 @@ function planCellHtml(plan = { five: null, week: null, elsewhere: 0 }, m = null)
   return `<td title="${esc(meterTip(m, plan.elsewhere))}">${esc(`5h ${planShareText(plan.five)} · 7d ${planShareText(plan.week)}`)}</td>`;
 }
 
+// What a row used of each account, in both windows, as a compact line under the row's name:
+// "wapps 5h ~2.1% · 7d ~3.4% · gmail 7d ~0.6%". An open row adds the tokens (on the meter's basis)
+// of each window: "wapps 5h 18k tok ~2.1% · …". The percent is of that account's own limit window
+// ("—": the account has no factor yet). `uses` is the status's by-account map; an account that
+// served nothing in either window has no entry. Account names are escaped. Pure, so it is tested.
+function accountUseHtml(uses, name, open = false) {
+  const entries = Object.entries(uses || {}).filter(([, u]) => u && (u.tokens5h > 0 || u.tokens7d > 0))
+    .sort(([ka, a], [kb, b]) => (b.tokens7d || 0) - (a.tokens7d || 0) || (b.tokens5h || 0) - (a.tokens5h || 0) || (ka < kb ? -1 : ka > kb ? 1 : 0));
+  if (!entries.length) return "";
+  const windows = u => [["5h", u.tokens5h, u.share5h], ["7d", u.tokens7d, u.share7d]].filter(([, tokens]) => tokens > 0)
+    .map(([label, tokens, share]) => `${label} ${open ? `${num(tokens)} tok ` : ""}${esc(planShareText(share))}`).join(" · ");
+  const items = entries.map(([account, u]) => `<span class="acct-item"><span class="acct-name">${esc(name(account))}</span> ${windows(u)}</span>`);
+  return `<div class="acct-use faint">${items.join(" · ")}</div>`;
+}
+
+// The account card's list of the projects that used the account most in the last 7 days, with the
+// tokens and the percent of this account's own limit window. The balancer sums it from every project.
+// The project "" is what has no project; folder labels are escaped. Pure, so it is tested.
+function accountProjectsHtml(a, aff) {
+  if (!a?.by_project?.length) return "";
+  const items = a.by_project.map(p => `<li><span class="stitle${p.project === "" ? " none" : ""}" title="${esc(p.project)}">${p.project === "" ? "no project" : esc(folderLabel(aff, p.project))}</span> <span class="faint">${num(p.tokens7d)} tok · ${esc(planShareText(p.share7d))}</span></li>`);
+  const more = a.more_projects > 0 ? `<li class="faint">+${a.more_projects} more</li>` : "";
+  return `<div class="acct-projects"><div class="eyebrow">By project · 7 days</div><ul>${items.join("")}${more}</ul></div>`;
+}
+
 // Each model a project or session used, by first seen: when it was first and last seen, and its
 // tokens, with what its subagents ran apart. Models of the Fable limit are marked.
 function modelLinesHtml(lines, fable) {
@@ -460,7 +488,7 @@ function rowFigures(v, span, used, listed, p) {
     requests: u.requests, tokens: u.tokens, last: u.last || "", share: v.total.tokens ? Math.round(u.tokens * 100 / v.total.tokens) : 0,
     // a row with no use in a window has no figure for it, like a session that is in one window only
     plan: ultraShareOf(usedIn(p?.five_hour) ? p.planShare5h ?? null : null, usedIn(p?.week) ? p.planShare7d ?? null : null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span),
-    lines: u.models || [],
+    lines: u.models || [], accounts: p?.accounts || {},
   };
 }
 
@@ -573,7 +601,7 @@ function projectRowHtml(g, open, aff, name, accounts, m = null, fable = []) {
   const pin = homeInfo(g.project, aff).pin;
   const alt = n => g.alt ? ` <span class="faint">· ${g.alt.label} ${n(g.alt)}</span>` : "";
   return `<tr class="project">
-    <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${partial ? "+" : ""} session${count === 1 && !partial ? "" : "s"}${trees}</span>${modelLinesHtml(g.lines, fable)}</th>
+    <th scope="row">${toggleHtml(g.key, open)}${label} <span class="faint">${count}${partial ? "+" : ""} session${count === 1 && !partial ? "" : "s"}${trees}</span>${modelLinesHtml(g.lines, fable)}${accountUseHtml(g.accounts, name, open)}</th>
     <td>${g.last ? when(g.last) : "—"}</td><td>${g.requests}${alt(a => a.requests)}</td><td>${num(g.tokens)}${alt(a => num(a.tokens))}</td><td>${g.share}%</td>${planCellHtml(g.plan, m)}
     <td class="left">${g.none ? '<span class="faint">CPA\'s own order</span>' : homeText(g.project, aff, name)}</td>
     <td class="left">${g.none ? "" : pinSelectHtml("folder", g.project, pin, accounts, name)}</td></tr>`;
@@ -587,7 +615,7 @@ function worktreeRowHtml(t, open, aff, name, accounts, m = null, fable = []) {
   const count = t.sessions.length;
   const alt = n => t.alt ? ` <span class="faint">· ${t.alt.label} ${n(t.alt)}</span>` : "";
   return `<tr class="worktree">
-    <th scope="row">${toggleHtml(t.key, open)}<span class="stitle" title="${esc(t.path)}">${esc(t.name)}</span> <span class="chip">worktree</span> <span class="faint">${count}${t.unlisted > 0 ? "+" : ""} session${count === 1 && !t.unlisted ? "" : "s"}</span>${modelLinesHtml(t.lines, fable)}</th>
+    <th scope="row">${toggleHtml(t.key, open)}<span class="stitle" title="${esc(t.path)}">${esc(t.name)}</span> <span class="chip">worktree</span> <span class="faint">${count}${t.unlisted > 0 ? "+" : ""} session${count === 1 && !t.unlisted ? "" : "s"}</span>${modelLinesHtml(t.lines, fable)}${accountUseHtml(t.accounts, name, open)}</th>
     <td>${t.last ? when(t.last) : "—"}</td><td>${t.requests}${alt(a => a.requests)}</td><td>${num(t.tokens)}${alt(a => num(a.tokens))}</td><td>${t.share}%</td>${planCellHtml(t.plan, m)}
     <td class="left">${pin ? homeText(t.folder, aff, name) : '<span class="faint">with the project</span>'}</td>
     <td class="left">${pinSelectHtml("folder", t.folder, pin, accounts, name)}</td></tr>`;
@@ -600,7 +628,7 @@ function sessionRowHtml(f, open, aff, name, accounts, m = null, fable = [], deep
   const pin = (aff?.session_pins || []).find(p => p.key === r.id) || null;
   const subs = f.subs.length;
   return `<tr class="session${deep ? " deep" : ""}${r.none ? " none" : ""}">
-    <th scope="row" title="${esc(r.id)}">${subs ? toggleHtml("s:" + r.id, open) : '<span class="toggle-space"></span>'}<span class="sid">${esc(r.label)}</span>${subs ? ` <span class="faint">${subs} subagent${subs === 1 ? "" : "s"}</span>` : ""}${modelLinesHtml(r.lines, fable)}</th>
+    <th scope="row" title="${esc(r.id)}">${subs ? toggleHtml("s:" + r.id, open) : '<span class="toggle-space"></span>'}<span class="sid">${esc(r.label)}</span>${subs ? ` <span class="faint">${subs} subagent${subs === 1 ? "" : "s"}</span>` : ""}${modelLinesHtml(r.lines, fable)}${accountUseHtml(r.byAccount, name, open || !subs)}</th>
     <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(detail)}">${num(r.tokens)}</td><td>${r.share}%</td>${planCellHtml(r.plan, m)}
     <td class="left">${placementText(r.pick, name)}</td>
     <td class="left">${r.id ? pinSelectHtml("session", r.id, pin, accounts, name) : ""}</td></tr>`;
@@ -608,7 +636,7 @@ function sessionRowHtml(f, open, aff, name, accounts, m = null, fable = [], deep
 
 function subRowHtml(r, name, m = null, fable = [], extra = 0) {
   return `<tr class="sub">
-    <th scope="row" title="${esc(r.id)}" style="padding-left: ${28 + extra + r.depth * 14}px"><span class="faint">↳ </span><span class="sid">${esc(r.label)}</span>${modelLinesHtml(r.lines, fable)}</th>
+    <th scope="row" title="${esc(r.id)}" style="padding-left: ${28 + extra + r.depth * 14}px"><span class="faint">↳ </span><span class="sid">${esc(r.label)}</span>${modelLinesHtml(r.lines, fable)}${accountUseHtml(r.byAccount, name, true)}</th>
     <td>${r.last ? when(r.last) : "—"}</td><td>${r.requests}</td><td title="${esc(`cache reads ${num(r.cacheRead)}`)}">${num(r.tokens)}</td><td>${r.share}%</td>${planCellHtml(r.plan, m)}
     <td class="left">${placementText(r.pick, name)}</td><td></td></tr>`;
 }

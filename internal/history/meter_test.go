@@ -59,7 +59,7 @@ func TestAWindowOpensWhereTheMeterFallsAndItsFactorIsTheMeterOverWhatWasUsedSinc
 	spend(r, 3, "u", "s2", input(3*mil))
 	level(r, 3, "u", 8)
 
-	s := r.SessionsFor(at(3), ultra)
+	s := r.SessionsFor(at(3), ultra, ultra)
 	// 8 points over 4M: 2 points per million
 	if c := s.Calibrations["u"]; !c.Known || c.FromPrevious || !near(c.PerMillion, 2) {
 		t.Fatalf("%+v", c)
@@ -78,7 +78,7 @@ func TestUseInAWindowNobodySawOpenCannotBePriced(t *testing.T) {
 	spend(r, 1, "u", "s1", input(1*mil)) // the first window began before the history did
 	level(r, 1, "u", 60)
 
-	s := r.SessionsFor(at(1), ultra)
+	s := r.SessionsFor(at(1), ultra, ultra)
 	if s.Calibrations["u"].Known {
 		t.Fatalf("%+v", s.Calibrations["u"])
 	}
@@ -99,7 +99,7 @@ func TestEachSlotIsPricedByTheFactorOfItsOwnWindowAcrossAReset(t *testing.T) {
 	spend(r, 5, "u", "s", input(1*mil))
 	level(r, 5, "u", 12) // window 2: 12 points over 2M = 6 per million
 
-	s := r.SessionsFor(at(5), ultra)
+	s := r.SessionsFor(at(5), ultra, ultra)
 	if got := pct(row(t, s, "s").PlanShare7d); !near(got, 5*10+2*6) {
 		t.Fatalf("the part before the reset at 10, the part after at 6: %v", got)
 	}
@@ -115,7 +115,7 @@ func TestAWindowWithFewerThanFivePointsUsesThePreviousWindowsFactor(t *testing.T
 	level(r, 2, "u", 50) // 10 per million
 	spend(r, 3, "u", "new", input(1*mil))
 	level(r, 3, "u", 4) // the new window: 4 points, too few: whole points are too coarse
-	s := r.SessionsFor(at(3), ultra)
+	s := r.SessionsFor(at(3), ultra, ultra)
 	if c := s.Calibrations["u"]; !c.Known || !c.FromPrevious || !near(c.PerMillion, 10) {
 		t.Fatalf("%+v", c)
 	}
@@ -129,7 +129,7 @@ func TestWithNoWindowToFallBackOnTheFactorIsUnknown(t *testing.T) {
 	opened(r)
 	spend(r, 2, "u", "s", input(1*mil))
 	level(r, 2, "u", 4)
-	s := r.SessionsFor(at(2), ultra)
+	s := r.SessionsFor(at(2), ultra, ultra)
 	if s.Calibrations["u"].Known || row(t, s, "s").PlanShare7d != nil {
 		t.Fatalf("%+v", s.Calibrations)
 	}
@@ -151,7 +151,7 @@ func TestTheSessionsAndTheRequestsWithoutOneAddUpToTheMeterOfEveryAccount(t *tes
 	spend(r, 3, "v", "s2", input(1*mil))
 	meters(3, 17, 41)
 
-	s := r.SessionsFor(at(3), both)
+	s := r.SessionsFor(at(3), both, both)
 	var sum float64
 	for _, root := range s.Week.AllRoots {
 		if root.Share.Unknown {
@@ -176,7 +176,7 @@ func TestTheSharesOfTheLastFiveHoursAndOfTheDaysAreEachCountedInTheirOwnWindow(t
 	spend(r, int(now/SlotLength), "u", "s", input(1*mil))
 	level(r, int(now/SlotLength), "u", 10)
 
-	s := r.SessionsFor(at(int(now/SlotLength)), ultra)
+	s := r.SessionsFor(at(int(now/SlotLength)), ultra, ultra)
 	if got := pct(row(t, s, "s").PlanShare7d); !near(got, 10) {
 		t.Fatalf("%v", got)
 	}
@@ -194,7 +194,7 @@ func TestASessionThatIsOnlyInOneWindowHasNoFigureForTheOther(t *testing.T) {
 	spend(r, now, "u", "new", input(1*mil)) // both windows
 	level(r, now, "u", 10)
 
-	s := r.SessionsFor(at(now), ultra)
+	s := r.SessionsFor(at(now), ultra, ultra)
 	if old := row(t, s, "old"); old.PlanShare5h != nil || pct(old.PlanShare7d) <= 0 {
 		t.Fatalf("a session with no row in the 5 hours has no 5-hour figure, not 0: %+v", old)
 	}
@@ -209,7 +209,7 @@ func TestASessionCutFromTheWeeksListStillHasItsFigureForTheWeek(t *testing.T) {
 	spend(r, 2, "u", "big", input(8*mil))
 	spend(r, 2, "u", "small", input(2*mil))
 	level(r, 2, "u", 10) // 1 per million
-	s := r.sessionsOf(at(2), ultra, 1)
+	s := r.sessionsOf(at(2), ultra, ultra, 1)
 	if len(s.Week.Sessions) != 1 || s.Week.Sessions[0].ID != "big" {
 		t.Fatalf("setup: %+v", s.Week.Sessions)
 	}
@@ -229,7 +229,7 @@ func TestSubagentsHaveTheirOwnShare(t *testing.T) {
 	spend(r, 2, "u", "s", input(1*mil))
 	r.AddTraffic(at(2), Source{Account: "u", Model: "opus", Session: "s/x", Parent: "s"}, input(3*mil))
 	level(r, 2, "u", 8) // 2 per million
-	s := r.SessionsFor(at(2), ultra)
+	s := r.SessionsFor(at(2), ultra, ultra)
 	parent := row(t, s, "s")
 	if got := pct(parent.PlanShare7d); !near(got, 8) || len(parent.Subagents) != 1 || !near(pct(parent.Subagents[0].PlanShare7d), 6) {
 		t.Fatalf("the parent counts its subagent: %+v", parent)
@@ -244,7 +244,7 @@ func TestUseOnAnAccountWithoutTheMeterIsCountedApartAndNeverPriced(t *testing.T)
 	level(r, 2, "u", 5)
 	level(r, 2, "p", 30)
 
-	s := r.SessionsFor(at(2), ultra)
+	s := r.SessionsFor(at(2), ultra, ultra)
 	got := row(t, s, "s")
 	if !near(pct(got.PlanShare7d), 5) || got.Elsewhere7d != 850_000 {
 		t.Fatalf("the other account's use stays out of the percent: %+v", got)
@@ -260,7 +260,7 @@ func TestTheBasisCountsCacheWritesInFullAndCacheReadsByASmallFraction(t *testing
 	spend(r, 2, "u", "s", Traffic{Requests: 1, InputTokens: 1 * mil, OutputTokens: 1 * mil, CacheCreationTokens: 1 * mil, CacheReadTokens: 100 * mil})
 	level(r, 2, "u", 9)
 	// 1M + 1M + 1M + 100M * 0.015 = 4.5M units for 9 points
-	if c := r.SessionsFor(at(2), ultra).Calibrations["u"]; !near(c.PerMillion, 2) || CacheReadWeight != 0.015 {
+	if c := r.SessionsFor(at(2), ultra, ultra).Calibrations["u"]; !near(c.PerMillion, 2) || CacheReadWeight != 0.015 {
 		t.Fatalf("%+v", c)
 	}
 }
@@ -272,10 +272,10 @@ func TestTheWindowLengthIsTheMedianGapBetweenResets(t *testing.T) {
 		level(r, n-1, "u", 90)
 		level(r, n, "u", 1)
 	}
-	if got := r.SessionsFor(at(16), ultra).Calibrations["u"].Length; got != 4*SlotLength {
+	if got := r.SessionsFor(at(16), ultra, ultra).Calibrations["u"].Length; got != 4*SlotLength {
 		t.Fatalf("%v", got)
 	}
-	if got := NewRecorder(t.TempDir()); got.SessionsFor(at(0), ultra).Calibrations["u"].Length != 0 {
+	if got := NewRecorder(t.TempDir()); got.SessionsFor(at(0), ultra, ultra).Calibrations["u"].Length != 0 {
 		t.Fatal("no fall seen, no length")
 	}
 }
@@ -284,7 +284,7 @@ func TestARequestThatCostNothingNeedsNoFactor(t *testing.T) {
 	r := NewRecorder(t.TempDir())
 	level(r, 0, "u", 10)
 	spend(r, 1, "u", "s", Traffic{Requests: 1}) // in a window nobody saw open
-	s := r.SessionsFor(at(1), ultra)
+	s := r.SessionsFor(at(1), ultra, ultra)
 	if got := row(t, s, "s"); got.PlanShare7d == nil || *got.PlanShare7d != 0 {
 		t.Fatalf("%+v", got)
 	}

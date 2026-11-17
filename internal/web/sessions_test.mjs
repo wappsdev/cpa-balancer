@@ -3,7 +3,7 @@ import { load } from './extract.mjs'
 const when = 'const when = t => `<span class="when">${esc(t)}</span>`;'
 const { sessionsView, sessionRowHtml } = load({
   consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText'], extra: when,
-  fns: ['sessionsView', 'toggleHtml', 'pinSelectHtml', 'placementText', 'sessionRowHtml', 'planShareText', 'meterTip', 'planCellHtml', 'modelLinesHtml'], returns: ['sessionsView', 'sessionRowHtml'],
+  fns: ['sessionsView', 'toggleHtml', 'pinSelectHtml', 'placementText', 'sessionRowHtml', 'planShareText', 'meterTip', 'planCellHtml', 'modelLinesHtml', 'accountUseHtml'], returns: ['sessionsView', 'sessionRowHtml'],
 })
 const fails = []
 const check = (name, ok) => { if (!ok) fails.push(name) }

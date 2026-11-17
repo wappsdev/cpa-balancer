@@ -11,6 +11,7 @@ test:
 	node internal/web/sessions_test.mjs
 	node internal/web/affinity_test.mjs
 	node internal/web/grouped_test.mjs
+	node internal/web/accountuse_test.mjs
 	node internal/web/transcripts_test.mjs
 
 build:

@@ -186,7 +186,10 @@ type SessionUsage struct {
 	PlanShare7d *float64 `json:"planShare7d"`
 	Elsewhere5h int64    `json:"elsewhere5h"`
 	Elsewhere7d int64    `json:"elsewhere7d"`
-	share       Share    // in this window alone
+	// ByAccount is what the family used of each account, in both windows (nil for an account it did not
+	// use in a window): tokens on the meter's basis, and the percent of that account's own limit window.
+	ByAccount map[string]AccountUse `json:"by_account,omitempty"`
+	share     Share                 // in this window alone
 	// ModelLines is each model the family used, by first seen (see ModelLine). Their tokens add up
 	// to Total.
 	ModelLines []ModelLine `json:"model_lines"`
@@ -236,29 +239,33 @@ type Sessions struct {
 	// Calibrations is what each metered account's meter says now, by account. It stays on the
 	// server: the status page shows it with the account.
 	Calibrations map[string]Calibration `json:"-"`
+	// Factors is the same for every priced account, the aggregate ones too. It stays on the server.
+	Factors map[string]Calibration `json:"-"`
 }
 
 // Sessions reads the history once for both windows, which end with the slot now is in. The
 // 5-hour window is not an account's quota window: those differ per account, so this is a rolling
 // span. It prices nothing: see SessionsFor.
-func (r *Recorder) Sessions(now time.Time) Sessions { return r.sessionsOf(now, nil, weekTopSessions) }
-
-// SessionsFor is Sessions with each session's use priced against the meters of the accounts in
-// metered (see meter.go). It reads back as far as the window before the current one.
-func (r *Recorder) SessionsFor(now time.Time, metered map[string]bool) Sessions {
-	return r.sessionsOf(now, metered, weekTopSessions)
+func (r *Recorder) Sessions(now time.Time) Sessions {
+	return r.sessionsOf(now, nil, nil, weekTopSessions)
 }
 
-func (r *Recorder) sessionsOf(now time.Time, metered map[string]bool, weekLimit int) Sessions {
+// SessionsFor is Sessions with each session's use priced against the meters of the accounts in
+// priced (see meter.go). Share.Points adds up the accounts in aggregate alone, a subset of priced. It reads back as far as the window before the current one.
+func (r *Recorder) SessionsFor(now time.Time, aggregate, priced map[string]bool) Sessions {
+	return r.sessionsOf(now, aggregate, priced, weekTopSessions)
+}
+
+func (r *Recorder) sessionsOf(now time.Time, aggregate, priced map[string]bool, weekLimit int) Sessions {
 	to := slotStart(now).Add(SlotLength)
 	from := to.Add(-WeekWindow)
-	if len(metered) > 0 {
+	if len(priced) > 0 {
 		from = to.Add(-MeterLookback)
 	}
 	all, skipped := r.readSlots(from, to)
 	var ms *Meters
-	if len(metered) > 0 {
-		ms = buildMeters(all, metered)
+	if len(priced) > 0 {
+		ms = buildMeters(all, aggregate, priced)
 	}
 	var slots, recent []*Slot
 	for _, s := range all {
@@ -275,7 +282,13 @@ func (r *Recorder) sessionsOf(now time.Time, metered map[string]bool, weekLimit 
 		SkippedLines: skipped,
 	}
 	if ms != nil {
-		out.Calibrations = ms.calibrations()
+		out.Factors = ms.calibrations()
+		out.Calibrations = map[string]Calibration{}
+		for name, c := range out.Factors {
+			if aggregate[name] {
+				out.Calibrations[name] = c
+			}
+		}
 		fill(out.FiveHour.Sessions, &out)
 		fill(out.Week.Sessions, &out)
 	}
@@ -291,6 +304,9 @@ func fill(rows []SessionUsage, s *Sessions) {
 		}
 		if week, ok := s.Week.Shares[rows[i].ID]; ok {
 			rows[i].PlanShare7d, rows[i].Elsewhere7d = week.Percent(), week.Elsewhere
+		}
+		if by := AccountUses(s.FiveHour.Shares[rows[i].ID], s.Week.Shares[rows[i].ID]); len(by) > 0 {
+			rows[i].ByAccount = by
 		}
 		fill(rows[i].Subagents, s)
 	}
@@ -403,7 +419,7 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int, ms *Meters) Sessi
 				n.last = ss.Last
 			}
 			n.own.Add(sum(ss.Accounts))
-			n.share.add(ms.shareOf(s.T, ss.Accounts))
+			n.share.Add(ms.shareOf(s.T, ss.Accounts))
 			mergeInto(&n.accounts, ss.Accounts)
 			n.addModels(ss.Models, ss.First, ss.Last)
 		}
@@ -480,7 +496,7 @@ func (n *node) absorb(c *node) {
 		n.last = c.last
 	}
 	n.own.Add(c.own)
-	n.share.add(c.share)
+	n.share.Add(c.share)
 	mergeInto(&n.accounts, c.accounts)
 	mergeInto(&n.models, c.models)
 	mergeInto(&n.folded, c.folded)
@@ -520,7 +536,7 @@ func (n *node) usage(depth int) SessionUsage {
 		cu := c.usage(depth + 1)
 		u.Subagents = append(u.Subagents, cu)
 		u.Total.Add(cu.Total)
-		u.share.add(cu.share)
+		u.share.Add(cu.share)
 		mergeInto(&u.Accounts, cu.Accounts)
 		mergeInto(&u.Models, cu.Models)
 		sub := make([]ModelLine, len(cu.ModelLines)) // its own use and its subagents' alike are subagent use here

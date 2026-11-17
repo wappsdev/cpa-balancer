@@ -7,7 +7,7 @@ const lib = (params = {}) => load({
   consts: ['esc', 'num', 'MAX_SESSION_DEPTH', 'REASONS', 'reasonText', 'OPEN_KEY', 'MAX_OPEN', 'folderLabel'],
   fns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'homeInfo', 'toggleHtml', 'pinSelectHtml', 'placementText', 'homeText',
     'usedIn', 'listedUse', 'rowFigures', 'worktreeRowHtml', 'projectRowHtml', 'sessionRowHtml', 'subRowHtml', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
-    'planShareText', 'ultraShareOf', 'meterInfo', 'meterLine', 'ultraBasisLine', 'meterTip', 'planCellHtml', 'modelLinesHtml'],
+    'planShareText', 'ultraShareOf', 'meterInfo', 'meterLine', 'ultraBasisLine', 'meterTip', 'planCellHtml', 'modelLinesHtml', 'accountUseHtml'],
   extra: when, params,
   returns: ['sessionsView', 'readOpen', 'writeOpen', 'projectGroups', 'groupRowsHtml', 'strayPinsHtml', 'rebalanceHtml',
     'planShareText', 'meterInfo', 'meterLine', 'ultraBasisLine', 'meterTip', 'modelLinesHtml'],
