@@ -50,6 +50,7 @@ type Engine struct {
 	switchedTo  map[string]bool // accounts that became active since the last tick, to probe if stale
 	dirty       bool
 	projects    *affinity.Projects     // finds a session's project folder by name
+	repos       *affinity.Repos        // finds the main repository of a folder: a worktree's sessions belong to it
 	picks       map[string]SessionPick // each recent session's last pick, in memory only; bounded
 	loads       map[string]int64       // each project's tokens over the last 7 days, read by Tick; placement weighs the homes by it
 	loadsAt     time.Time
@@ -63,7 +64,7 @@ func New(cfg config.Config, host Host, now func() time.Time, rec *history.Record
 		host.Log("warn", "cpa-balancer: state not loaded, starting empty: "+err.Error())
 		st = state.New()
 	}
-	e := &Engine{cfg: cfg, host: host, now: now, rec: rec, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}, projects: affinity.NewProjects(cfg.Affinity.ProjectsDir, now)}
+	e := &Engine{cfg: cfg, host: host, now: now, rec: rec, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}, projects: affinity.NewProjects(cfg.Affinity.ProjectsDir, now), repos: affinity.NewRepos(now)}
 	e.mu.Lock()
 	e.recompute(now())
 	e.mu.Unlock()
@@ -182,12 +183,13 @@ func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPic
 		return delegate
 	}
 	// CPA hands the scheduler the client's headers; the session is in them. The folder is looked up
-	// before the lock is taken: it reads directory names.
+	// before the lock is taken: it reads directory names, and the folder's git files.
 	if id, root := affinity.SessionID(req.Options.Headers); root != "" {
 		folder, _ := e.projects.Folder(root)
+		project := e.repos.Of(folder).Project
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		return e.place(b, id, root, folder, candidates, e.now())
+		return e.place(b, id, root, folder, project, candidates, e.now())
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()

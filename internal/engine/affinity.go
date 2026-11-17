@@ -68,6 +68,10 @@ type AffinityView struct {
 	// Names is the short name the page shows for each folder (see FolderNames). The folder stays the
 	// key of pins and homes; a folder with no entry is shown as it is.
 	Names map[string]string `json:"names"`
+	// ProjectOf is the project each listed folder belongs to: the folder itself, or, for a git
+	// worktree, the main repository's folder. Homes and folder pins are keyed by the project (a pin on
+	// a worktree's own folder holds for it alone); sessions are listed with their own folder.
+	ProjectOf map[string]string `json:"project_of"`
 }
 
 // standing is an account's standing for a request in a bucket. An account that is not configured
@@ -141,13 +145,17 @@ func (e *Engine) existing(b quota.Bucket, candidates map[string]bool) pluginapi.
 
 // pinFor is the account a session is pinned to, if any: a session's pin outranks its folder's, and
 // a pin in the config outranks one set on the page for the same key (the page refuses to set one).
-func (e *Engine) pinFor(root, folder string) (kind, account string) {
+// A worktree's folder is pinned on its own, or else with its project (the main repository's folder).
+func (e *Engine) pinFor(root, folder, project string) (kind, account string) {
 	a := &e.st.Affinity
 	if acct := pinned(e.cfg.Affinity.SessionPins, a.SessionPins, root); acct != "" {
 		return state.PinSession, acct
 	}
-	if folder != "" {
-		if acct := pinned(e.cfg.Affinity.FolderPins, a.FolderPins, folder); acct != "" {
+	for _, key := range []string{folder, project} {
+		if key == "" {
+			continue
+		}
+		if acct := pinned(e.cfg.Affinity.FolderPins, a.FolderPins, key); acct != "" {
 			return state.PinFolder, acct
 		}
 	}
@@ -194,8 +202,9 @@ func (e *Engine) homeOf(project string, now time.Time) string {
 }
 
 // place answers a request of a known session: the pin, else the project's home, else a detour,
-// else CPA's own order. Callers hold e.mu.
-func (e *Engine) place(b quota.Bucket, id, root, folder string, candidates map[string]bool, now time.Time) pluginapi.SchedulerPickResponse {
+// else CPA's own order. folder is the session's own project folder; project is the one its home
+// and pins belong to (the folder, or a worktree's main repository). Callers hold e.mu.
+func (e *Engine) place(b quota.Bucket, id, root, folder, project string, candidates map[string]bool, now time.Time) pluginapi.SchedulerPickResponse {
 	usable := func(account string) bool {
 		return candidates[account] && e.standing(account, b, now) == policy.Usable
 	}
@@ -203,7 +212,7 @@ func (e *Engine) place(b quota.Bucket, id, root, folder string, candidates map[s
 		e.remember(id, account, reason, folder, now)
 		return pluginapi.SchedulerPickResponse{AuthID: account, Handled: true}
 	}
-	pinKind, pinned := e.pinFor(root, folder)
+	pinKind, pinned := e.pinFor(root, folder, project)
 	if pinned != "" && usable(pinned) {
 		return use(pinned, pinKind+"_pin")
 	}
@@ -219,7 +228,7 @@ func (e *Engine) place(b quota.Bucket, id, root, folder string, candidates map[s
 		e.remember(id, resp.AuthID, fallback, "", now)
 		return resp
 	}
-	if home := e.homeOf(folder, now); home != "" && usable(home) {
+	if home := e.homeOf(project, now); home != "" && usable(home) {
 		if pinned != "" {
 			return use(home, fallback)
 		}
@@ -294,6 +303,9 @@ func (e *Engine) editPin(kind, key string, edit func(*state.State) error) error 
 func (e *Engine) affinityView(now time.Time) *AffinityView {
 	v := &AffinityView{Homes: []HomeView{}, FolderPins: []PinView{}, SessionPins: []PinView{}, Sessions: make(map[string]SessionPick, len(e.picks))}
 	for project, h := range e.st.Affinity.Homes {
+		if e.isWorktree(project) {
+			continue // a home stored before worktrees joined their repository: no longer a project
+		}
 		v.Homes = append(v.Homes, HomeView{Project: project, Account: h.Account, Since: h.Since, Last: h.Last,
 			Full: e.standing(h.Account, quota.Main, now) == policy.Full})
 	}

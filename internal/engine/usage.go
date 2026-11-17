@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -18,7 +19,8 @@ type Use struct {
 }
 
 // ProjectUsage is one project's use in the status's two windows. The project "" holds what has no
-// project: sessions whose folder is not found, and requests that came without a session id.
+// project: sessions whose folder is not found, and requests that came without a session id. A
+// project is a repository: its figures include those of its git worktrees, which are listed apart.
 type ProjectUsage struct {
 	Project  string `json:"project"`
 	FiveHour Use    `json:"five_hour"`
@@ -30,6 +32,11 @@ type ProjectUsage struct {
 	PlanShare7d *float64 `json:"planShare7d"`
 	Elsewhere5h int64    `json:"elsewhere5h"`
 	Elsewhere7d int64    `json:"elsewhere7d"`
+	// Worktrees are the project's git worktrees with use in a window, each with its own figures (the
+	// project's include them), by name: the folder in Project, the worktree's directory name and its path.
+	Worktrees []ProjectUsage `json:"worktrees,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Path      string         `json:"path,omitempty"`
 }
 
 // meteredPlan is the plan whose accounts have a meter to learn from: an Ultra account reports one
@@ -58,8 +65,8 @@ func (e *Engine) ReadSessions(now time.Time) history.Sessions {
 	return e.rec.SessionsFor(now, e.meteredAccounts())
 }
 
-// sharesByProject sums the roots' shares per project folder.
-func (e *Engine) sharesByProject(roots []history.RootUse) map[string]history.Share {
+// sharesByFolder sums the roots' shares per project folder.
+func (e *Engine) sharesByFolder(roots []history.RootUse) map[string]history.Share {
 	out := map[string]history.Share{}
 	for _, root := range roots {
 		folder, _ := e.projects.Folder(root.ID)
@@ -72,9 +79,9 @@ func (e *Engine) sharesByProject(roots []history.RootUse) map[string]history.Sha
 	return out
 }
 
-// byProject sums root sessions per project folder. It looks the folders up by name, so callers hold
+// byFolder sums root sessions per project folder. It looks the folders up by name, so callers hold
 // no lock.
-func (e *Engine) byProject(roots []history.RootUse) map[string]Use {
+func (e *Engine) byFolder(roots []history.RootUse) map[string]Use {
 	out := map[string]Use{}
 	for _, root := range roots {
 		folder, _ := e.projects.Folder(root.ID) // an empty id or a miss is the group of no project
@@ -90,12 +97,81 @@ func (e *Engine) byProject(roots []history.RootUse) map[string]Use {
 	return out
 }
 
+// byProject sums root sessions per project: a worktree's sessions count with its main repository.
+// Callers hold no lock.
+func (e *Engine) byProject(roots []history.RootUse) map[string]Use {
+	return e.foldUse(e.byFolder(roots))
+}
+
+// foldUse adds each folder's use to its project's.
+func (e *Engine) foldUse(folders map[string]Use) map[string]Use {
+	out := map[string]Use{}
+	for folder, u := range folders {
+		project := e.repos.Of(folder).Project
+		sum := out[project]
+		sum.Requests += u.Requests
+		sum.Tokens += u.Tokens
+		sum.Models = history.MergeLines(sum.Models, u.Models)
+		if u.Last.After(sum.Last) {
+			sum.Last = u.Last
+		}
+		out[project] = sum
+	}
+	return out
+}
+
+// foldShares adds each folder's share to its project's. A share is added as points and flags, never
+// as a percent, so that one part that cannot be priced leaves the whole unknown.
+func (e *Engine) foldShares(folders map[string]history.Share) map[string]history.Share {
+	out := map[string]history.Share{}
+	for folder, s := range folders {
+		project := e.repos.Of(folder).Project
+		sum := out[project]
+		sum.Points += s.Points
+		sum.Unknown = sum.Unknown || s.Unknown
+		sum.Elsewhere += s.Elsewhere
+		out[project] = sum
+	}
+	return out
+}
+
+// usageRows is the use of each key (a project, or a folder) in both windows, with its Ultra shares
+// when the accounts are calibrated: a key with no use in a window used none of it.
+func usageRows(five, week map[string]Use, fiveShares, weekShares map[string]history.Share, priced bool) map[string]*ProjectUsage {
+	rows := map[string]*ProjectUsage{}
+	get := func(name string) *ProjectUsage {
+		if rows[name] == nil {
+			rows[name] = &ProjectUsage{Project: name}
+			if priced {
+				rows[name].PlanShare5h, rows[name].PlanShare7d = new(float64), new(float64)
+			}
+		}
+		return rows[name]
+	}
+	for name, u := range five {
+		get(name).FiveHour = u
+	}
+	for name, u := range week {
+		get(name).Week = u
+	}
+	for name, sh := range fiveShares {
+		p := get(name)
+		p.PlanShare5h, p.Elsewhere5h = sh.Percent(), sh.Elsewhere
+	}
+	for name, sh := range weekShares {
+		p := get(name)
+		p.PlanShare7d, p.Elsewhere7d = sh.Percent(), sh.Elsewhere
+	}
+	return rows
+}
+
 // AddSessions puts the history's sessions into the status, with what the card groups them by: each
 // project's use in both windows, summed from every root session (the week's list is cut, the sums
-// are not), and the folder of each listed root session. The sessions are read from the history
-// files, so this runs outside the engine's lock. Sessions read with ReadSessions also carry what
-// they used of the Ultra accounts' limit windows: here that is added to each Ultra account (its
-// meter) and to each project; the rows have it already.
+// are not), and the folder of each listed root session. A project is a repository: its use is that
+// of its own folder and of its git worktrees, which are listed under it with their own figures. The
+// sessions are read from the history files, so this runs outside the engine's lock. Sessions read
+// with ReadSessions also carry what they used of the Ultra accounts' limit windows: here that is
+// added to each Ultra account (its meter) and to each project; the rows have it already.
 func (e *Engine) AddSessions(v *View, s history.Sessions) {
 	v.Sessions = &s
 	v.Meter = &MeterView{Label: probe.DisplayName(meteredPlan), Basis: history.BasisText, FableModels: e.cfg.Buckets.Fable}
@@ -109,35 +185,31 @@ func (e *Engine) AddSessions(v *View, s history.Sessions) {
 	if v.Affinity == nil {
 		return
 	}
-	five, week := e.byProject(s.FiveHour.AllRoots), e.byProject(s.Week.AllRoots)
-	projects := map[string]*ProjectUsage{}
-	get := func(name string) *ProjectUsage {
-		if projects[name] == nil {
-			projects[name] = &ProjectUsage{Project: name}
-			if len(s.Calibrations) > 0 { // a project with no use in a window used none of it
-				projects[name].PlanShare5h, projects[name].PlanShare7d = new(float64), new(float64)
-			}
-		}
-		return projects[name]
+	fiveUse, weekUse := e.byFolder(s.FiveHour.AllRoots), e.byFolder(s.Week.AllRoots)
+	var fiveShares, weekShares map[string]history.Share
+	priced := len(s.Calibrations) > 0
+	if priced {
+		fiveShares, weekShares = e.sharesByFolder(s.FiveHour.AllRoots), e.sharesByFolder(s.Week.AllRoots)
 	}
-	for name, u := range five {
-		get(name).FiveHour = u
+	own := usageRows(fiveUse, weekUse, fiveShares, weekShares, priced)
+	var foldedFive, foldedWeek map[string]history.Share
+	if priced {
+		foldedFive, foldedWeek = e.foldShares(fiveShares), e.foldShares(weekShares)
 	}
-	for name, u := range week {
-		get(name).Week = u
-	}
-	if len(s.Calibrations) > 0 {
-		for name, sh := range e.sharesByProject(s.FiveHour.AllRoots) {
-			p := get(name)
-			p.PlanShare5h, p.Elsewhere5h = sh.Percent(), sh.Elsewhere
-		}
-		for name, sh := range e.sharesByProject(s.Week.AllRoots) {
-			p := get(name)
-			p.PlanShare7d, p.Elsewhere7d = sh.Percent(), sh.Elsewhere
+	projects := usageRows(e.foldUse(fiveUse), e.foldUse(weekUse), foldedFive, foldedWeek, priced)
+	for folder, row := range own {
+		if place := e.repos.Of(folder); place.Worktree && projects[place.Project] != nil {
+			wt := *row
+			wt.Name, wt.Path = filepath.Base(place.Path), place.Path
+			projects[place.Project].Worktrees = append(projects[place.Project].Worktrees, wt)
 		}
 	}
 	v.Affinity.Projects = make([]ProjectUsage, 0, len(projects))
 	for _, p := range projects {
+		sort.Slice(p.Worktrees, func(i, j int) bool {
+			a, b := p.Worktrees[i], p.Worktrees[j]
+			return a.Name < b.Name || (a.Name == b.Name && a.Project < b.Project)
+		})
 		v.Affinity.Projects = append(v.Affinity.Projects, *p)
 	}
 	sort.Slice(v.Affinity.Projects, func(i, j int) bool { return v.Affinity.Projects[i].Project < v.Affinity.Projects[j].Project })
@@ -147,6 +219,12 @@ func (e *Engine) AddSessions(v *View, s history.Sessions) {
 			if folder, ok := e.projects.Folder(root.ID); ok {
 				v.Affinity.SessionProjects[root.ID] = folder
 			}
+		}
+	}
+	v.Affinity.ProjectOf = map[string]string{}
+	for _, folder := range v.Affinity.folders() {
+		if folder != "" {
+			v.Affinity.ProjectOf[folder] = e.repos.Of(folder).Project
 		}
 	}
 	v.Affinity.nameFolders(userHome())

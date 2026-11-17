@@ -66,8 +66,9 @@ func TestFolderNamesAreNeverEmptyForANonEmptyKey(t *testing.T) {
 	}
 }
 
-func TestEncodeHome(t *testing.T) {
-	if got := encodeHome("/Users/al.ice/x"); got != "-Users-al-ice-x" {
+func TestAHomeWithOtherCharactersInItsNameIsCutOffToo(t *testing.T) {
+	got := FolderNames([]string{"-Users-al-ice-Documents-shop"}, "/Users/al_ice")
+	if got["-Users-al-ice-Documents-shop"] != "shop" {
 		t.Fatal(got)
 	}
 }

@@ -3,6 +3,8 @@ package engine
 import (
 	"os"
 	"strings"
+
+	"github.com/wappsdev/cpa-balancer/internal/affinity"
 )
 
 // containers are folder names that only hold projects; a display name leaves them out.
@@ -19,11 +21,6 @@ func userHome() string {
 		return ""
 	}
 	return h
-}
-
-// encodeHome writes a path the way Claude Code names a project folder: "/" and "." become "-".
-func encodeHome(path string) string {
-	return strings.NewReplacer("/", "-", ".", "-").Replace(path)
 }
 
 func isContainer(seg string) bool {
@@ -62,7 +59,7 @@ func (f folderName) display() string {
 func parseFolder(key, home string) folderName {
 	f := folderName{key: key}
 	repo := key
-	eh := encodeHome(home)
+	eh := affinity.EncodePath(home)
 	for _, m := range worktreeMarkers {
 		i := strings.Index(key, m)
 		if i <= 0 || i+len(m) >= len(key) {
@@ -133,8 +130,8 @@ func FolderNames(folders []string, home string) map[string]string {
 	return out
 }
 
-// nameFolders sets the display name of every folder the view shows.
-func (v *AffinityView) nameFolders(home string) {
+// folders is every folder the view shows, in no order and with repeats.
+func (v *AffinityView) folders() []string {
 	var folders []string
 	for _, h := range v.Homes {
 		folders = append(folders, h.Project)
@@ -144,6 +141,9 @@ func (v *AffinityView) nameFolders(home string) {
 	}
 	for _, p := range v.Projects {
 		folders = append(folders, p.Project)
+		for _, w := range p.Worktrees {
+			folders = append(folders, w.Project)
+		}
 	}
 	for _, folder := range v.SessionProjects {
 		folders = append(folders, folder)
@@ -151,7 +151,12 @@ func (v *AffinityView) nameFolders(home string) {
 	for _, pick := range v.Sessions {
 		folders = append(folders, pick.Project)
 	}
-	v.Names = FolderNames(folders, home)
+	return folders
+}
+
+// nameFolders sets the display name of every folder the view shows.
+func (v *AffinityView) nameFolders(home string) {
+	v.Names = FolderNames(v.folders(), home)
 }
 
 // onlyContainers reports whether every segment of an encoded path is a container folder (or the

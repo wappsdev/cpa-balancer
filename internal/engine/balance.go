@@ -20,6 +20,7 @@ const tie = 1e-9
 // sessions and the project folder each one belongs to. It reads the disk, so callers hold no lock.
 // ok is false when there is no history to read.
 func (e *Engine) readLoads(now time.Time) (loads map[string]int64, ok bool) {
+	e.knowHomes()
 	if e.rec == nil {
 		return nil, false
 	}
@@ -31,6 +32,27 @@ func (e *Engine) readLoads(now time.Time) (loads map[string]int64, ok bool) {
 	}
 	return loads, true
 }
+
+// knowHomes looks up the repository of every folder a home is stored under, so that code holding the
+// lock can tell (from what is known, see isWorktree) a home stored under a worktree's folder. It
+// reads the disk, so callers hold no lock.
+func (e *Engine) knowHomes() {
+	e.mu.RLock()
+	keys := make([]string, 0, len(e.st.Affinity.Homes))
+	for key := range e.st.Affinity.Homes {
+		keys = append(keys, key)
+	}
+	e.mu.RUnlock()
+	for _, key := range keys {
+		e.repos.Of(key)
+	}
+}
+
+// isWorktree reports whether a stored key is the folder of a git worktree, from what is already
+// known: it never reads the disk, so callers may hold the lock. Homes are kept per project, the main
+// repository; one stored under a worktree's folder, from before worktrees joined their repository,
+// is no longer a project.
+func (e *Engine) isWorktree(key string) bool { return e.repos.Peek(key).Worktree }
 
 // refreshLoads keeps the load Pick places projects by; it reads outside the lock.
 func (e *Engine) refreshLoads(now time.Time) {
@@ -69,6 +91,9 @@ func (e *Engine) tenants(skip string) (out []tenant, mean float64) {
 		}
 	}
 	for project, h := range a.Homes {
+		if e.isWorktree(project) {
+			continue
+		}
 		if pin := pinned(e.cfg.Affinity.FolderPins, a.FolderPins, project); pin != "" {
 			add(project, pin, true)
 		} else {
