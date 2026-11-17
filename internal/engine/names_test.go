@@ -15,7 +15,7 @@ func TestFolderNames(t *testing.T) {
 		want    map[string]string
 	}{
 		{"home prefix and containers go", []string{"-Users-alice-Documents-Projects-shop"}, map[string]string{"-Users-alice-Documents-Projects-shop": "shop"}},
-		{"a repo name with dashes stays whole", []string{"-Users-alice-Documents-Projects-wapps-tv-remote"}, map[string]string{"-Users-alice-Documents-Projects-wapps-tv-remote": "wapps-tv-remote"}},
+		{"a repo name with dashes stays whole", []string{"-Users-alice-Documents-Projects-photo-sync-app"}, map[string]string{"-Users-alice-Documents-Projects-photo-sync-app": "photo-sync-app"}},
 		{"containers match without case", []string{"-Users-alice-DEVELOPER-Src-shop"}, map[string]string{"-Users-alice-DEVELOPER-Src-shop": "shop"}},
 		{"a folder outside home drops Volumes and the disk", []string{"-Volumes-Data-development-api"}, map[string]string{"-Volumes-Data-development-api": "api"}},
 		{"a folder outside home with a container first", []string{"-work-alpha"}, map[string]string{"-work-alpha": "alpha"}},
