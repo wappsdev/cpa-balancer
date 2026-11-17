@@ -42,6 +42,9 @@ func (r *Repos) fromMemory(folder string) Place {
 	if project, ok := r.infer(folder); ok {
 		return Place{Project: project, Worktree: true, Inferred: true}
 	}
+	if project, ok := r.inferSibling(folder); ok {
+		return Place{Project: project, Worktree: true, Inferred: true}
+	}
 	return Place{Project: folder}
 }
 
@@ -61,6 +64,24 @@ func (r *Repos) infer(folder string) (project string, ok bool) {
 			return "", false
 		}
 		project = e.project
+	}
+	return project, project != ""
+}
+
+// inferSibling maps a folder that is gone, and was never resolved, to the main repository that its
+// key is named after: "<repo>-<suffix>" next to a repository "<repo>" is a worktree made as a sibling
+// of it. Only a folder found now as a main repository counts, so an existing "<repo>-web" that is a
+// repository of its own is never a candidate; the longest key wins. Every candidate is a prefix of
+// the folder, so two of one length are the same key and cannot disagree. It reads no disk; the
+// caller holds the lock.
+func (r *Repos) inferSibling(folder string) (project string, ok bool) {
+	for key, hit := range r.cache {
+		if !hit.main || hit.place.Path == "" || len(key) <= len(project) {
+			continue
+		}
+		if rest, has := strings.CutPrefix(folder, key+"-"); has && rest != "" {
+			project = key
+		}
 	}
 	return project, project != ""
 }

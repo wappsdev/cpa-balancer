@@ -68,6 +68,7 @@ type Repos struct {
 type repoHit struct {
 	place Place
 	at    time.Time
+	main  bool // the folder was found and is a main repository (its .git is a directory)
 }
 
 func NewRepos(now func() time.Time) *Repos {
@@ -96,14 +97,14 @@ func (r *Repos) Of(folder string) Place {
 	}
 	r.mu.Unlock()
 
-	place, found := locate(folder) // reads the disk, outside the lock
+	place, found, main := locate(folder) // reads the disk, outside the lock
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {
 	case found && place.Worktree:
 		r.links.remember(folder, place.Project)
 	case !found && hadHit && prev.place.Path != "":
-		place = prev.place // found on the disk before: the directory is gone since, the answer stays
+		place, main = prev.place, prev.main // found on the disk before: the directory is gone since, the answer stays
 	case !found:
 		place = r.fromMemory(folder)
 	}
@@ -112,7 +113,7 @@ func (r *Repos) Of(folder string) Place {
 			clear(r.cache)
 		}
 	}
-	r.cache[folder] = repoHit{place, now}
+	r.cache[folder] = repoHit{place, now, main}
 	return place
 }
 
@@ -135,24 +136,26 @@ func (r *Repos) size() int {
 }
 
 // locate finds the folder's directory and its repository. found is false when no directory has the
-// folder's name.
-func locate(folder string) (place Place, found bool) {
+// folder's name. isMain is true when the directory is a main repository: its `.git` is a directory.
+func locate(folder string) (place Place, found, isMain bool) {
 	place = Place{Project: folder}
 	if !strings.HasPrefix(folder, "-") {
-		return place, false
+		return place, false, false
 	}
 	budget := maxDirReads
 	dir, ok := walk("/", folder[1:], 0, &budget)
 	if !ok {
-		return place, false
+		return place, false, false
 	}
 	place.Path = dir
 	if main, linked := mainRepository(dir); linked {
 		if key := EncodePath(main); ValidProject(key) {
 			place.Project, place.Worktree = key, true
 		}
+	} else if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
+		isMain = true
 	}
-	return place, true
+	return place, true, isMain
 }
 
 // walk finds the directory below dir whose path, encoded, is rest. It tries the entries whose
