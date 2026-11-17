@@ -108,6 +108,63 @@ func TestProjectsCachesAHitAndRetriesAMissAfterAShortWhile(t *testing.T) {
 	}
 }
 
+// touch sets the modification time of a session's transcript in a folder.
+func touch(t *testing.T, dir, folder, session string, at time.Time) {
+	t.Helper()
+	if err := os.Chtimes(filepath.Join(dir, folder, session+".jsonl"), at, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProjectsChoosesTheFolderWhoseTranscriptWasWrittenLast(t *testing.T) {
+	dir := t.TempDir()
+	clock := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	// the folder that sorts first holds an old copy; Claude Code resumed the session from the other
+	transcript(t, dir, "-work-alpha", sid)
+	transcript(t, dir, "-work-beta", sid)
+	touch(t, dir, "-work-alpha", sid, clock.Add(-10*24*time.Hour))
+	touch(t, dir, "-work-beta", sid, clock)
+	p := NewProjects(dir, func() time.Time { return clock })
+	if folder, ok := p.Folder(sid); !ok || folder != "-work-beta" {
+		t.Fatalf("the live transcript decides, not the first folder: %q %v", folder, ok)
+	}
+}
+
+func TestProjectsFollowsAResumedSessionAfterTheRecheckTime(t *testing.T) {
+	dir := t.TempDir()
+	clock := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	transcript(t, dir, "-work-alpha", sid)
+	transcript(t, dir, "-work-beta", sid)
+	touch(t, dir, "-work-alpha", sid, clock)
+	touch(t, dir, "-work-beta", sid, clock.Add(-time.Hour))
+	p := NewProjects(dir, func() time.Time { return clock })
+	if folder, _ := p.Folder(sid); folder != "-work-alpha" {
+		t.Fatalf("setup: %q", folder)
+	}
+	touch(t, dir, "-work-beta", sid, clock.Add(time.Second)) // resumed from the other folder
+	clock = clock.Add(recheckTTL / 2)
+	if folder, _ := p.Folder(sid); folder != "-work-alpha" {
+		t.Fatalf("within the time the answer is the cached one: %q", folder)
+	}
+	clock = clock.Add(recheckTTL)
+	if folder, ok := p.Folder(sid); !ok || folder != "-work-beta" {
+		t.Fatalf("after the time the session moves to its current folder: %q %v", folder, ok)
+	}
+}
+
+func TestProjectsKeepsAnAnswerWhoseTranscriptStaysInOneFolder(t *testing.T) {
+	dir := t.TempDir()
+	clock := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	transcript(t, dir, "-work-alpha", sid)
+	p := NewProjects(dir, func() time.Time { return clock })
+	for i := 0; i < 3; i++ {
+		if folder, ok := p.Folder(sid); !ok || folder != "-work-alpha" {
+			t.Fatalf("%d: %q %v", i, folder, ok)
+		}
+		clock = clock.Add(recheckTTL + time.Second)
+	}
+}
+
 func TestProjectsCachesAreBounded(t *testing.T) {
 	dir := t.TempDir()
 	p := NewProjects(dir, time.Now)

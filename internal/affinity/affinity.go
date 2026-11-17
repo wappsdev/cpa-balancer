@@ -19,9 +19,10 @@ const (
 	agentHeader   = "X-Claude-Code-Agent-Id"
 	mainAgent     = "main"
 
-	missTTL   = 5 * time.Second // a new session's transcript file appears after its first request; short, so its project home applies within seconds
-	maxCached = 1000            // sessions remembered, hits and misses each
-	maxName   = 255             // the longest file name
+	missTTL    = 5 * time.Second  // a new session's transcript file appears after its first request; short, so its project home applies within seconds
+	recheckTTL = 60 * time.Second // a hit is looked up again after this long, so a session resumed from another directory moves to its current folder
+	maxCached  = 1000             // sessions remembered, hits and misses each
+	maxName    = 255              // the longest file name
 )
 
 // header is the first non-empty value of a header, whatever the case of its name.
@@ -82,32 +83,42 @@ func ValidProject(name string) bool {
 }
 
 // Projects finds a session's project folder: the directory under the projects directory that holds
-// `<sid>.jsonl`. It only lists directory names and checks that a file exists; it never opens one.
+// `<sid>.jsonl`. When a session was resumed from another directory, several folders hold one, and
+// the folder whose file was written last is the current one. It only lists directory names and
+// stats files; it never opens one.
 type Projects struct {
 	dir string
 	now func() time.Time
 
 	mu     sync.Mutex
-	found  map[string]string    // session -> folder
+	found  map[string]hit       // session -> its folder
 	missed map[string]time.Time // session -> when it was not found
 }
 
+// hit is the folder a session was found in, and when that was looked up.
+type hit struct {
+	folder string
+	at     time.Time
+}
+
 func NewProjects(dir string, now func() time.Time) *Projects {
-	return &Projects{dir: dir, now: now, found: map[string]string{}, missed: map[string]time.Time{}}
+	return &Projects{dir: dir, now: now, found: map[string]hit{}, missed: map[string]time.Time{}}
 }
 
 // Folder is the project folder of a root session, found by name. An unknown session has none. A
-// hit is kept; a miss is kept for a short while only, as the transcript is written after the
-// session's first request.
+// hit is kept for recheckTTL, then looked up again (the session may have been resumed from another
+// folder); a miss is kept for a short while only, as the transcript is written after the
+// session's first request. A lookup that finds nothing keeps the earlier answer.
 func (p *Projects) Folder(sid string) (string, bool) {
 	if p.dir == "" || !ValidSID(sid) {
 		return "", false
 	}
 	now := p.now()
 	p.mu.Lock()
-	if folder, ok := p.found[sid]; ok {
+	prev, hadHit := p.found[sid]
+	if hadHit && now.Sub(prev.at) < recheckTTL {
 		p.mu.Unlock()
-		return folder, true
+		return prev.folder, true
 	}
 	if at, ok := p.missed[sid]; ok && now.Sub(at) < missTTL {
 		p.mu.Unlock()
@@ -118,10 +129,14 @@ func (p *Projects) Folder(sid string) (string, bool) {
 	folder, ok := p.scan(sid) // directory reads happen outside the lock
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if ok {
+	switch {
+	case ok:
 		delete(p.missed, sid)
-		p.found[sid] = folder
-	} else {
+		p.found[sid] = hit{folder, now}
+	case hadHit:
+		folder, ok = prev.folder, true
+		p.found[sid] = hit{folder, now}
+	default:
 		p.missed[sid] = now
 	}
 	if len(p.found) > maxCached {
@@ -133,20 +148,29 @@ func (p *Projects) Folder(sid string) (string, bool) {
 	return folder, ok
 }
 
+// scan is the folder whose `<sid>.jsonl` was modified last; the first by name when two have the
+// same time.
 func (p *Projects) scan(sid string) (string, bool) {
 	entries, err := os.ReadDir(p.dir)
 	if err != nil {
 		return "", false
 	}
+	var best string
+	var bestAt time.Time
+	found := false
 	for _, e := range entries {
 		if !e.IsDir() || !ValidProject(e.Name()) {
 			continue
 		}
-		if info, err := os.Stat(filepath.Join(p.dir, e.Name(), sid+".jsonl")); err == nil && info.Mode().IsRegular() {
-			return e.Name(), true
+		info, err := os.Stat(filepath.Join(p.dir, e.Name(), sid+".jsonl"))
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if at := info.ModTime(); !found || at.After(bestAt) {
+			best, bestAt, found = e.Name(), at, true
 		}
 	}
-	return "", false
+	return best, found
 }
 
 // size is the number of sessions remembered, for the tests.
