@@ -185,6 +185,24 @@ func TestTheSharesOfTheLastFiveHoursAndOfTheDaysAreEachCountedInTheirOwnWindow(t
 	}
 }
 
+func TestASessionThatIsOnlyInOneWindowHasNoFigureForTheOther(t *testing.T) {
+	r := NewRecorder(t.TempDir())
+	opened(r)
+	spend(r, 2, "u", "old", input(1*mil)) // the week only
+	level(r, 2, "u", 5)
+	now := int(6 * 12 * SlotLength / SlotLength)
+	spend(r, now, "u", "new", input(1*mil)) // both windows
+	level(r, now, "u", 10)
+
+	s := r.SessionsFor(at(now), ultra)
+	if old := row(t, s, "old"); old.PlanShare5h != nil || pct(old.PlanShare7d) <= 0 {
+		t.Fatalf("a session with no row in the 5 hours has no 5-hour figure, not 0: %+v", old)
+	}
+	if fresh := row(t, s, "new"); pct(fresh.PlanShare5h) <= 0 || pct(fresh.PlanShare7d) <= 0 {
+		t.Fatalf("a session in both has both: %+v", fresh)
+	}
+}
+
 func TestASessionCutFromTheWeeksListStillHasItsFigureForTheWeek(t *testing.T) {
 	r := NewRecorder(t.TempDir())
 	opened(r)

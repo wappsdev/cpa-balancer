@@ -125,8 +125,10 @@ section. The percent below does not count them either.
 ### Use of an Ultra account's limit window (`~% Ultra`)
 
 Every project, session and subagent row shows what it used of **one Ultra account's limit window**
-(plan `max_20x`, which the page calls Ultra) in the window in view, with the other window beside
-it, such as `~3.2% · 7 d ~12.0%`. It is an estimate, and it is learned, not assumed.
+(plan `max_20x`, which the page calls Ultra) in both windows, whichever one is in view, such as
+`5h ~3.2% · 7d ~12.0%`; a row that is in only one window shows `—` for the other. A line under the
+Sessions header says what the percent is based on, from the window length and the unit the status
+serves. It is an estimate, and it is learned, not assumed.
 
 - **Each Ultra account is its own meter.** An Ultra account reports one `main` limit with a
   `resets_at`, and no 5-hour limit. Its utilization opens each window at zero. The balancer
@@ -185,7 +187,7 @@ it, such as `~3.2% · 7 d ~12.0%`. It is an estimate, and it is learned, not ass
 Ultra account `accounts[].meter` (`known`, `per_million`, `from_previous`, `window_hours`, `outside`) and
 `plan_label`, and on every project (`affinity.projects[]`) and every session row (the
 `sessions` rows and their `subagents`) `planShare5h` and `planShare7d` (percent of one account's
-limit window, `null` when it cannot be priced) and `elsewhere5h` and `elsewhere7d` (tokens on
+limit window, `null` when it cannot be priced, or, on a session, when it has no row in that window) and `elsewhere5h` and `elsewhere7d` (tokens on
 accounts with no meter). Rows also carry `model_lines`; projects carry them as `models` in each of
 their two windows.
 

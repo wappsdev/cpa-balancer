@@ -141,17 +141,26 @@ const planWin = {
 const planAff = { session_projects: { [A]: '-work-alpha', [B]: '-work-alpha' }, projects: [{ project: '-work-alpha', five_hour: { requests: 10, tokens: 200, models: [] }, week: { requests: 10, tokens: 200 },
   planShare5h: 4.24, planShare7d: 14.5, elsewhere5h: 1_200_000, elsewhere7d: 1_200_000 }], homes: [], folder_pins: [], session_pins: [], sessions: {} }
 const planGroups = projectGroups(sessionsView(planWin, planAff.sessions), planAff, 'five_hour')
-check('a project carries its figure for the window in view and the other beside it', planGroups[0].plan.share === 4.24 && planGroups[0].plan.alt === 14.5 && planGroups[0].plan.altLabel === '7 d')
-check('in the 7-day view it is the other way round', projectGroups(sessionsView(planWin, planAff.sessions), planAff, 'week')[0].plan.share === 14.5)
+check('a project carries both windows\' figures', planGroups[0].plan.five === 4.24 && planGroups[0].plan.week === 14.5)
+const weekGroups = projectGroups(sessionsView(planWin, planAff.sessions), planAff, 'week')
+check('the figures do not depend on the window in view', weekGroups[0].plan.five === 4.24 && weekGroups[0].plan.week === 14.5)
+const oneWindow = { ...planAff, projects: [{ ...planAff.projects[0], five_hour: { requests: 0, tokens: 0 } }] }
+const oneGroups = projectGroups(sessionsView(planWin, oneWindow.sessions), oneWindow, 'week')
+check('a project with no use in a window has no figure for it', oneGroups[0].plan.five === null && oneGroups[0].plan.week === 14.5)
 const planShown = groupRowsHtml(planGroups, new Set(['p:-work-alpha', 's:' + A]), planAff, name, accounts, m)
 check('the project, the session and the subagent rows each have the cell', planShown.includes('~4.2%') && planShown.includes('~3.2%') && planShown.includes('~1.0%'))
-check('the other window is beside it', planShown.includes('· 7 d ~14.5%') && planShown.includes('· 7 d ~12.0%'))
-check('a session that cannot be priced shows a dash', planShown.includes('— <span class="faint">· 7 d —</span>'))
-check('the cell has the tooltip, with the tokens on the Pro account', /<td title="[^"]*On Pro: 1\.2M tokens[^"]*">~3\.2%/.test(planShown))
+check('every cell shows both windows, whatever the window in view', planShown.includes('5h ~4.2% · 7d ~14.5%') && planShown.includes('5h ~3.2% · 7d ~12.0%') && planShown.includes('5h ~1.0% · 7d ~2.5%'))
+const openAlpha = new Set(['p:-work-alpha', 's:' + A])
+check('the 7-day view shows the same cells', groupRowsHtml(weekGroups, openAlpha, planAff, name, accounts, m).includes('5h ~3.2% · 7d ~12.0%'))
+check('a session that cannot be priced shows a dash for both', planShown.includes('5h — · 7d —'))
+const lone = { ...planWin, sessions: [{ ...session(A, t(5, 100)), planShare5h: null, planShare7d: 7, elsewhere5h: 0, elsewhere7d: 0 }] }
+const loneShown = groupRowsHtml(projectGroups(sessionsView(lone), { session_projects: { [A]: '-work-alpha' } }, 'week'), new Set(['p:-work-alpha']), undefined, name, accounts, m)
+check('a session in one window only shows a dash for the other', loneShown.includes('5h — · 7d ~7.0%'))
+check('the cell has the tooltip, with the tokens on the Pro account', /<td title="[^"]*On Pro: 1\.2M tokens[^"]*">5h ~3\.2%/.test(planShown))
 const cells = html => html.split('</tr>').filter(r => r.includes('<tr')).map(r => (r.match(/<td/g) || []).length)
 check('every row has as many cells as the header has columns after the first', cells(planShown).every(n => n === 7))
 check('the row of smaller sessions has the cell too', cells(groupRowsHtml(planGroups.map(g => ({ ...g, unlisted: 5 })), new Set(['p:-work-alpha']), planAff, name, accounts, m)).every(n => n === 7))
-check('without a status the cell is still there, with a dash', groupRowsHtml(projectGroups(sessionsView(win), undefined, 'week'), new Set(), undefined, name, accounts).includes('— <span class="faint">· 5 h —</span>'))
+check('without a status the cell is still there, with a dash', groupRowsHtml(projectGroups(sessionsView(win), undefined, 'week'), new Set(), undefined, name, accounts).includes('5h — · 7d —'))
 
 const lines = modelLinesHtml([{ model: 'm-1', first: '2026-11-15T09:00:00Z', last: '2026-11-15T10:00:00Z', own: t(1, 5000), subagents: t(1, 2500) }, { model: '', first: '2026-11-15T10:00:00Z', last: '2026-11-15T11:00:00Z', own: t(1, 9), subagents: t(0, 0) }], ['m-1'])
 check('model lines give first and last seen and tokens, the subagents\' apart', lines.includes('7.5k (2.5k in subagents)') && lines.includes('· 9') && lines.includes('no model name'))

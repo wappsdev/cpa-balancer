@@ -282,12 +282,16 @@ func (r *Recorder) sessionsOf(now time.Time, metered map[string]bool, weekLimit 
 	return out
 }
 
-// fill sets the shares of the rows, both windows' figures on every row.
+// fill sets the shares of the rows, both windows' figures on every row. A session that is in only
+// one window has no figure (nil) for the other.
 func fill(rows []SessionUsage, s *Sessions) {
 	for i := range rows {
-		five, week := s.FiveHour.Shares[rows[i].ID], s.Week.Shares[rows[i].ID]
-		rows[i].PlanShare5h, rows[i].Elsewhere5h = five.Percent(), five.Elsewhere
-		rows[i].PlanShare7d, rows[i].Elsewhere7d = week.Percent(), week.Elsewhere
+		if five, ok := s.FiveHour.Shares[rows[i].ID]; ok {
+			rows[i].PlanShare5h, rows[i].Elsewhere5h = five.Percent(), five.Elsewhere
+		}
+		if week, ok := s.Week.Shares[rows[i].ID]; ok {
+			rows[i].PlanShare7d, rows[i].Elsewhere7d = week.Percent(), week.Elsewhere
+		}
 		fill(rows[i].Subagents, s)
 	}
 }

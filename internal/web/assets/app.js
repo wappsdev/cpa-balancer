@@ -366,10 +366,10 @@ function planShareText(p) {
   return p === 0 ? "~0.0%" : p < 0.05 ? "<0.1%" : `~${p.toFixed(1)}%`;
 }
 
-// A row's figures for the window in view, and the other window beside it.
+// A row's figures for both windows, whatever window is in view; only the tokens on accounts with no
+// meter are those of the window in view.
 function ultraShareOf(share5, share7, off5, off7, span) {
-  const week = span === "week";
-  return { share: week ? share7 : share5, alt: week ? share5 : share7, altLabel: week ? "5 h" : "7 d", elsewhere: week ? off7 : off5 };
+  return { five: share5, week: share7, elsewhere: span === "week" ? off7 : off5 };
 }
 
 // What the status says about the Ultra accounts' meters, ready to show: null when it says nothing.
@@ -415,9 +415,9 @@ function meterTip(m, elsewhere) {
   return parts.join(" ");
 }
 
-// The "~% Ultra" cell: the window in view, and the other window beside it.
-function planCellHtml(plan = { share: null, alt: null, altLabel: "7 d", elsewhere: 0 }, m = null) {
-  return `<td title="${esc(meterTip(m, plan.elsewhere))}">${planShareText(plan.share)} <span class="faint">· ${plan.altLabel} ${planShareText(plan.alt)}</span></td>`;
+// The "~% Ultra" cell: both windows, "5h ~a% · 7d ~b%", whatever window is in view.
+function planCellHtml(plan = { five: null, week: null, elsewhere: 0 }, m = null) {
+  return `<td title="${esc(meterTip(m, plan.elsewhere))}">${esc(`5h ${planShareText(plan.five)} · 7d ${planShareText(plan.week)}`)}</td>`;
 }
 
 // Each model a project or session used, by first seen: when it was first and last seen, and its
@@ -452,9 +452,9 @@ function projectGroups(v, aff, span) {
   }
   const used = new Map(), usage = new Map((aff?.projects || []).map(p => [p.project, p]));
   const other = span === "week" ? "five_hour" : "week";
+  const usedIn = u => !!(u && (u.tokens || u.requests));
   for (const p of aff?.projects || []) {
-    const u = p[span];
-    if (u && (u.tokens || u.requests)) { group(p.project); used.set(p.project, u); }
+    if (usedIn(p[span])) { group(p.project); used.set(p.project, p[span]); }
   }
   return [...groups.values()].map(g => {
     g.sessions.sort((a, b) => b.row.tokens - a.row.tokens || (a.row.id < b.row.id ? -1 : 1));
@@ -470,7 +470,8 @@ function projectGroups(v, aff, span) {
       alt: o ? { label: other === "week" ? "7 d" : "5 h", requests: o.requests || 0, tokens: o.tokens || 0 } : null,
       key: g.project === "" ? "n:" : "p:" + g.project, project: g.project, none: g.project === "", sessions: g.sessions,
       requests: u.requests, tokens: u.tokens, last: u.last || "", share: percent(u.tokens, v.total.tokens), unlisted: Math.max(0, u.tokens - listed.tokens),
-      plan: ultraShareOf(p?.planShare5h ?? null, p?.planShare7d ?? null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span), lines: u.models || [],
+      // a project with no use in a window has no figure for it, like a session that is in one window only
+      plan: ultraShareOf(usedIn(p?.five_hour) ? p.planShare5h ?? null : null, usedIn(p?.week) ? p.planShare7d ?? null : null, p?.elsewhere5h || 0, p?.elsewhere7d || 0, span), lines: u.models || [],
     };
   }).sort((a, b) => b.tokens - a.tokens || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
 }
