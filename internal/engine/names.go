@@ -10,10 +10,6 @@ import (
 // containers are folder names that only hold projects; a display name leaves them out.
 var containers = []string{"Documents", "Projects", "Developer", "Desktop", "src", "code", "dev", "development", "work", "repos", "git"}
 
-// worktreeMarkers split a worktree's folder into the repository and the worktree's name. "-work-"
-// is a sibling folder that holds a repository's worktrees ("<repo>-work/<name>").
-var worktreeMarkers = []string{"--claude-worktrees-", "-worktrees-", "-work-"}
-
 // userHome is the home directory of the user CPA runs as; "" when unknown.
 func userHome() string {
 	h, err := os.UserHomeDir()
@@ -60,7 +56,7 @@ func parseFolder(key, home string) folderName {
 	f := folderName{key: key}
 	repo := key
 	eh := affinity.EncodePath(home)
-	for _, m := range worktreeMarkers {
+	for _, m := range affinity.WorktreeMarkers {
 		i := strings.Index(key, m)
 		if i <= 0 || i+len(m) >= len(key) {
 			continue

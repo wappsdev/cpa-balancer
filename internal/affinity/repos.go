@@ -46,6 +46,9 @@ type Place struct {
 	Path string
 	// Worktree is true when the folder is a linked git worktree of another folder's repository.
 	Worktree bool
+	// Inferred is true when the folder is gone and was never found: it is put with the repository of the
+	// worktrees in the same container (see Repos.infer), which may be wrong, so the page says so.
+	Inferred bool
 }
 
 // Repos finds, from git's own small files, which repository a project folder belongs to. A folder
@@ -99,6 +102,8 @@ func (r *Repos) Of(folder string) Place {
 	case !found:
 		if project, ok := r.links.lookup(folder); ok {
 			place = Place{Project: project, Worktree: true}
+		} else if project, ok := r.infer(folder); ok {
+			place = Place{Project: project, Worktree: true, Inferred: true}
 		}
 	}
 	if len(r.cache) >= maxRepoCache {
