@@ -111,6 +111,22 @@ func TestAFailedPickRefusesAnExtraModelAndDelegatesTheRest(t *testing.T) {
 	}
 }
 
+func TestAFailedPickRefusesARequestWithTheAdvisor(t *testing.T) {
+	configureYAML(t, extraConfig(t, extraYAML+"advisor_pin: {model: claude-mythos-9-1}\n"))
+	t.Cleanup(shutdown)
+	enginePick = func(*engine.Engine, pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
+		panic("pick failed")
+	}
+	t.Cleanup(func() { enginePick = (*engine.Engine).Pick })
+	raw, _ := json.Marshal(pluginapi.SchedulerPickRequest{Providers: []string{"claude"}, Model: "m",
+		Options:    pluginapi.SchedulerOptions{Headers: map[string][]string{"Anthropic-Beta": {"oauth-2025-04-20,advisor-tool-2026-03-01"}}},
+		Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "a.json", Provider: "claude"}, {ID: "b.json", Provider: "claude"}}})
+	got := envelope[pluginapi.SchedulerPickResponse](t, dispatch(pluginabi.MethodSchedulerPick, raw))
+	if !got.Handled || !got.Reject || got.RejectCode != engine.ExtraModelUnavailable || got.DelegateBuiltin != "" {
+		t.Fatalf("a panicked pick of a request with the advisor = %+v, want a refusal", got)
+	}
+}
+
 func TestAPickThatDoesNotPanicIsTheEnginesPick(t *testing.T) {
 	configureYAML(t, extraConfig(t, extraYAML))
 	t.Cleanup(shutdown)

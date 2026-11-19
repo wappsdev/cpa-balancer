@@ -98,7 +98,9 @@ type Config struct {
 	Affinity   Affinity   `yaml:"affinity" json:"affinity"`
 	// ExtraModels are models outside CPA's catalog, each pinned to its own accounts.
 	ExtraModels []ExtraModel `yaml:"extra_models,omitempty" json:"extra_models,omitempty"`
-	Fill        Fill         `yaml:"fill" json:"fill"`
+	// AdvisorPin pins the requests that carry the advisor tool to an extra model's accounts.
+	AdvisorPin *AdvisorPin `yaml:"advisor_pin,omitempty" json:"advisor_pin,omitempty"`
+	Fill       Fill        `yaml:"fill" json:"fill"`
 }
 
 // Fill puts a session that starts without a pin on the usable account whose weekly reset comes
@@ -135,6 +137,7 @@ func Parse(raw []byte) (Config, error) {
 			cfg.Accounts[i].Reserve = ReserveOff
 		}
 	}
+	cfg.normalizeAdvisorPin()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -217,6 +220,9 @@ func (c Config) Validate() error {
 		taken[strings.ToLower(name)] = file
 	}
 	if err := c.validateExtraModels(); err != nil {
+		return err
+	}
+	if err := c.validateAdvisorPin(); err != nil {
 		return err
 	}
 	return c.validateAffinity()

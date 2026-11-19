@@ -83,6 +83,18 @@ type View struct {
 	Meter *MeterView `json:"meter,omitempty"`
 	// ExtraModels are the models outside CPA's catalog and the accounts each is pinned to.
 	ExtraModels []ExtraModelView `json:"extra_models,omitempty"`
+	// AdvisorPin is the pin of the requests that carry the advisor tool; absent when none is set.
+	AdvisorPin *AdvisorPinView `json:"advisor_pin,omitempty"`
+}
+
+// AdvisorPinView is the advisor pin and where its requests can go now.
+type AdvisorPinView struct {
+	Model       string              `json:"model"`
+	DisplayName string              `json:"display_name"`
+	BetaPrefix  string              `json:"beta_prefix"`
+	Accounts    []ExtraModelAccount `json:"accounts"` // the extra model's, in the order they are tried; State may also be "full"
+	// AllOut: every account is full or held back, so a request with the advisor is refused now or soon.
+	AllOut bool `json:"all_out"`
 }
 
 type ExtraModelView struct {
@@ -152,5 +164,6 @@ func (e *Engine) Status() View {
 	}
 	v.Affinity = e.affinityView(now)
 	v.ExtraModels = e.extraModelViews()
+	v.AdvisorPin = e.advisorPinView(now)
 	return v
 }

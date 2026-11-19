@@ -2,9 +2,12 @@ package engine
 
 import (
 	"slices"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"github.com/wappsdev/cpa-balancer/internal/config"
+	"github.com/wappsdev/cpa-balancer/internal/policy"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 )
 
 // ExtraModelUnavailable is the reject code of a request for an extra model that none of its
@@ -66,31 +69,87 @@ func (e *Engine) extraModelViews() []ExtraModelView {
 			v.DisplayName = m.ID
 		}
 		for _, a := range m.Accounts {
-			cred, listed := e.credentials[a]
-			state := "ready"
-			switch {
-			case !listed:
-				state = "not loaded"
-			case cred.disabled:
-				state = "disabled"
-			case cred.unavailable:
-				state = "held back"
-			}
-			v.Accounts = append(v.Accounts, ExtraModelAccount{AuthFile: a, Name: names[a], State: state})
+			v.Accounts = append(v.Accounts, ExtraModelAccount{AuthFile: a, Name: names[a], State: e.credentialState(a)})
 		}
 		out = append(out, v)
 	}
 	return out
 }
 
-// RefuseExtra is the answer for a pick the plugin could not make (a panic): an extra model is
-// refused, anything else is left to the caller.
-func RefuseExtra(cfg config.Config, model string) (pluginapi.SchedulerPickResponse, bool) {
-	m, ok := cfg.ExtraModel(model)
-	if !ok {
-		return pluginapi.SchedulerPickResponse{}, false
+// credentialState is how CPA holds an account: ready, not loaded, disabled or held back (cooled
+// down); callers hold e.mu.
+func (e *Engine) credentialState(account string) string {
+	cred, listed := e.credentials[account]
+	switch {
+	case !listed:
+		return "not loaded"
+	case cred.disabled:
+		return "disabled"
+	case cred.unavailable:
+		return "held back"
 	}
-	return refuseExtra(m.ID), true
+	return "ready"
+}
+
+// advisorPinView says, for the status page, where a request with the advisor can go now. An
+// advisor request is a main-model request, so an account whose all-models week is at its cap is
+// "full": CPA still offers it, but it answers with a limit. Callers hold e.mu.
+func (e *Engine) advisorPinView(now time.Time) *AdvisorPinView {
+	p := e.cfg.AdvisorPin
+	if p == nil {
+		return nil
+	}
+	m, _ := e.cfg.ExtraModel(p.Model)
+	v := &AdvisorPinView{Model: m.ID, DisplayName: m.DisplayName, BetaPrefix: p.BetaPrefix, Accounts: []ExtraModelAccount{}, AllOut: true}
+	if v.DisplayName == "" {
+		v.DisplayName = m.ID
+	}
+	names := e.cfg.Names()
+	for _, a := range m.Accounts {
+		state := e.credentialState(a)
+		if state == "ready" && e.standing(a, quota.Main, now) == policy.Full {
+			state = "full"
+		}
+		v.AllOut = v.AllOut && state != "ready"
+		v.Accounts = append(v.Accounts, ExtraModelAccount{AuthFile: a, Name: names[a], State: state})
+	}
+	return v
+}
+
+// pinnedPick is the answer of a request pinned to an extra model's accounts, whatever else holds: a
+// request for the model itself, else one that carries the advisor tool of the advisor pin. ok is
+// false for any other request.
+func pinnedPick(cfg config.Config, req pluginapi.SchedulerPickRequest) (resp pluginapi.SchedulerPickResponse, ok bool) {
+	if m, ok := cfg.ExtraModel(req.Model); ok {
+		return pickExtra(m, req), true
+	}
+	if m, ok := cfg.AdvisorModel(req.Options.Headers); ok {
+		if resp = pickExtra(m, req); resp.Reject {
+			resp = refuseAdvisor(m.ID)
+		}
+		return resp, true
+	}
+	return pluginapi.SchedulerPickResponse{}, false
+}
+
+// RefuseExtra is the answer for a pick the plugin could not make (a panic): a request pinned to an
+// extra model's accounts (the model's own, or the advisor's) is refused, anything else is left to
+// the caller.
+func RefuseExtra(cfg config.Config, req pluginapi.SchedulerPickRequest) (pluginapi.SchedulerPickResponse, bool) {
+	if m, ok := cfg.ExtraModel(req.Model); ok {
+		return refuseExtra(m.ID), true
+	}
+	if m, ok := cfg.AdvisorModel(req.Options.Headers); ok {
+		return refuseAdvisor(m.ID), true
+	}
+	return pluginapi.SchedulerPickResponse{}, false
+}
+
+// refuseAdvisor ends a request that carries the advisor tool: its model may only be used through
+// its own accounts.
+func refuseAdvisor(model string) pluginapi.SchedulerPickResponse {
+	return pluginapi.SchedulerPickResponse{Handled: true, Reject: true, RejectCode: ExtraModelUnavailable,
+		RejectReason: "a request with the " + model + " advisor is served only by that model's accounts, and none of them is available now"}
 }
 
 // refuseExtra ends the request: CPA must not hand it to another account.

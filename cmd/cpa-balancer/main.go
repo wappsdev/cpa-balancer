@@ -168,11 +168,11 @@ func dispatch(method string, req []byte) (raw []byte) {
 var enginePick = (*engine.Engine).Pick
 
 // failedPick answers a pick that panicked. CPA's own order may choose any account, so an extra
-// model is refused instead.
+// model, and a request with the pinned advisor, is refused instead.
 func failedPick(req []byte) []byte {
 	var r pluginapi.SchedulerPickRequest
 	if e := engineNow(); e != nil && json.Unmarshal(req, &r) == nil {
-		if refusal, isExtra := engine.RefuseExtra(e.Config(), r.Model); isExtra {
+		if refusal, isExtra := engine.RefuseExtra(e.Config(), r); isExtra {
 			return ok(refusal)
 		}
 	}
