@@ -10,7 +10,8 @@ import (
 )
 
 // The waste meter: at each weekly reset of the all-models week, the room an account still had
-// (100 - its last reading) times its plan's size. It only measures; nothing is placed by it.
+// (100 - its last reading) times its plan's size; a week with no real reading counts as all of it,
+// marked estimated. It only measures; nothing is placed by it.
 
 // WasteView is an account's last resets, the newest first, and the points wasted in the last 7
 // and 30 days.
@@ -69,5 +70,19 @@ func (e *Engine) noteResets(name string, acc *state.Account, now time.Time) {
 			e.dirty = true
 		}
 		i = j
+	}
+	if len(closed) == 0 {
+		return
+	}
+	// The weeks after the last one with a real reading that have closed since had none: the account
+	// was idle, so all of each week is wasted. Only as many as the state keeps are looked at.
+	next := closed[len(closed)-1].ResetsAt.Add(week)
+	if weeks := int(now.Sub(next) / week); weeks >= state.MaxResets {
+		next = next.Add(time.Duration(weeks-state.MaxResets+1) * week)
+	}
+	for ; !next.After(now); next = next.Add(week) {
+		if acc.AddReset(state.Reset{ResetsAt: next, Weight: weight, Wasted: 100 * weight, Estimated: true}) {
+			e.dirty = true
+		}
 	}
 }

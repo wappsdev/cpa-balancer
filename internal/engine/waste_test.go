@@ -86,6 +86,33 @@ func TestTheWasteOfAResetSeenFromTwoSourcesTakesTheNewestReading(t *testing.T) {
 	}
 }
 
+func TestAWeekWithNoRealReadingIsRecordedAsAllWastedAndEstimated(t *testing.T) {
+	w := newWorld(t, W, X)
+	w.start()
+	w.e.st.Account(X).Plan = probe.Plan{Name: "max_5x"} // 5 Pro plans
+	w.use(X, 60, 10, 0)
+	w.clock.t = t0.Add(11 * time.Hour)
+	w.use(W, 10, 100, 0) // a recompute: X's week closed with a real reading
+	// X is not used, and nothing reads it, for the next week
+	w.clock.t = t0.Add(179 * time.Hour)
+	w.use(W, 10, 100, 0)
+	v := w.waste(X)
+	if len(v.Resets) != 2 {
+		t.Fatalf("two resets: %+v", v.Resets)
+	}
+	idle, real := v.Resets[0], v.Resets[1] // the newest first
+	if !idle.ResetsAt.Equal(t0.Add(178*time.Hour)) || !idle.Estimated || idle.Wasted != 500 || idle.Util != 0 {
+		t.Fatalf("the idle week counts its whole room, marked estimated: %+v", idle)
+	}
+	if real.Estimated || real.Wasted != 200 {
+		t.Fatalf("the week with a reading is not estimated: %+v", real)
+	}
+	w.use(W, 10, 100, 0)
+	if got := len(w.waste(X).Resets); got != 2 {
+		t.Fatalf("each week once, got %d", got)
+	}
+}
+
 func TestTheWasteTotalsCountTheLastSevenAndThirtyDays(t *testing.T) {
 	w := newWorld(t, W, X)
 	w.start()

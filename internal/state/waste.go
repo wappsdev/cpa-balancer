@@ -15,6 +15,9 @@ type Reset struct {
 	ObservedAt time.Time `json:"observed_at"` // when that reading was taken
 	Weight     float64   `json:"weight"`      // the plan's size in Pro plans; 1 when unknown
 	Wasted     float64   `json:"wasted"`      // (100 - util) times the weight: Pro plans' points never used
+	// Estimated: no real reading was taken in the week, so it counts as unused (Util 0) and
+	// ObservedAt is empty. An idle account's week is all wasted.
+	Estimated bool `json:"estimated,omitempty"`
 }
 
 // AddReset records a reset unless it is at or before the latest one recorded; it reports whether

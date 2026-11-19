@@ -228,7 +228,9 @@ function wasteHtml(accounts, name) {
   if (!list.some(a => a.resets.length)) return '<p class="empty">No weekly reset seen yet.</p>';
   const pts = n => String(Math.round(n || 0));
   const day = t => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const reset = r => `<span class="chip" title="${esc(`last reading ${Math.round(r.util)}% at ${new Date(r.observed_at).toLocaleString()}`)}">${esc(day(r.resets_at))}: ${pts(r.wasted)} pts · ${Math.round(r.util)}%</span>`;
+  const reset = r => r.estimated
+    ? `<span class="chip warn" title="no real reading in this week: all of it counts as unused">${esc(day(r.resets_at))}: ${pts(r.wasted)} pts · estimated</span>`
+    : `<span class="chip" title="${esc(`last reading ${Math.round(r.util)}% at ${new Date(r.observed_at).toLocaleString()}`)}">${esc(day(r.resets_at))}: ${pts(r.wasted)} pts · ${Math.round(r.util)}%</span>`;
   const rows = list.map(a => `<tr><th scope="row">${esc(name(a.file))}</th><td>${pts(a.week)}</td><td>${pts(a.month)}</td>
     <td class="left">${a.resets.slice(0, 4).map(reset).join(" ") || '<span class="faint">none yet</span>'}</td></tr>`).join("");
   const sum = k => list.reduce((n, a) => n + a[k], 0);

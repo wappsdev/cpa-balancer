@@ -38,7 +38,10 @@ check('the last resets show their wasted points', html.includes('400 pts') && ht
 check('a reset says the last reading it is from', html.includes('60%'))
 check('the totals of all accounts are summed', html.includes('>1230<'))
 check('no reset seen yet is said', wasteHtml([{ auth_file: 'a.json', waste: { week: 0, month: 0, resets: [] } }], name).includes('No weekly reset'))
-check('a view without waste works', typeof wasteHtml([{ auth_file: 'a.json' }], name) === 'string')
+check('a view without waste says no reset was seen', wasteHtml([{ auth_file: 'a.json' }], name).includes('No weekly reset seen yet.'))
+const idle = wasteHtml([{ auth_file: 'a.json', waste: { week: 500, month: 500, resets: [{ resets_at: '2026-11-14T10:00:00Z', util: 0, weight: 5, wasted: 500, estimated: true }] } }], name)
+check('a week with no real reading is marked estimated, with its points', idle.includes('500 pts') && idle.includes('estimated') && !idle.includes('0%'))
+check('a week with a reading is not marked estimated', !html.includes('estimated'))
 
 if (fails.length) { console.log('FAIL: ' + fails.join('; ')); process.exit(1) }
 console.log('PASS')
