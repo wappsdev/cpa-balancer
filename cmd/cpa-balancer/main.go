@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"runtime/debug"
 	"sync"
@@ -118,8 +119,12 @@ func dispatch(method string, req []byte) (raw []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			host.Log("error", fmt.Sprintf("cpa-balancer: panic in %s: %v\n%s", method, r, debug.Stack()))
-			if method == pluginabi.MethodSchedulerPick {
+			switch method {
+			case pluginabi.MethodSchedulerPick:
 				raw = failedPick(req)
+				return
+			case pluginabi.MethodRequestInterceptBefore:
+				raw = ok(markAdvisor) // the body could not be read: pinned, as a request with the advisor
 				return
 			}
 			raw = fail(fmt.Errorf("panic: %v", r))
@@ -136,7 +141,19 @@ func dispatch(method string, req []byte) (raw []byte) {
 		if e := engineNow(); e != nil {
 			return ok(enginePick(e, r))
 		}
+		if refusal, refused := engine.RefuseUnconfigured(r); refused {
+			return ok(refusal)
+		}
 		return ok(pluginapi.SchedulerPickResponse{DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Handled: true})
+	case pluginabi.MethodRequestInterceptBefore:
+		var r pluginapi.RequestInterceptRequest
+		if err := json.Unmarshal(req, &r); err != nil {
+			return ok(markAdvisor)
+		}
+		return ok(interceptBefore(r))
+	case pluginabi.MethodRequestInterceptAfter:
+		// the marker is for the scheduler only: it never reaches the upstream
+		return ok(pluginapi.RequestInterceptResponse{ClearHeaders: []string{config.AdvisorMarker}})
 	case pluginabi.MethodUsageHandle:
 		var r pluginapi.UsageRecord
 		if err := json.Unmarshal(req, &r); err != nil {
@@ -161,6 +178,29 @@ func dispatch(method string, req []byte) (raw []byte) {
 		return ok(map[string]any{})
 	}
 	return ok(map[string]any{})
+}
+
+// markAdvisor is the interceptor's answer for a request that carries the advisor: the marker the
+// scheduler pins it by.
+var markAdvisor = pluginapi.RequestInterceptResponse{Headers: http.Header{config.AdvisorMarker: {"1"}}}
+
+// interceptBefore marks a request whose body carries the advisor, before an account is chosen. CPA
+// adds the advisor beta itself only after the pick, so without the marker such a request would
+// pass the pin. Without advisor_pin nothing is marked; with no configuration at all the default
+// rule marks it, and the pick refuses it.
+func interceptBefore(r pluginapi.RequestInterceptRequest) pluginapi.RequestInterceptResponse {
+	prefix := config.DefaultAdvisorBeta
+	if e := engineNow(); e != nil {
+		p := e.Config().AdvisorPin
+		if p == nil {
+			return pluginapi.RequestInterceptResponse{}
+		}
+		prefix = p.BetaPrefix
+	}
+	if config.AdvisorInBody(r.Body, prefix) {
+		return markAdvisor
+	}
+	return pluginapi.RequestInterceptResponse{}
 }
 
 // enginePick is the engine's pick; a test swaps it for one that panics, to reach the recovery in
@@ -251,7 +291,7 @@ func configure(req []byte) []byte {
 		"metadata": pluginapi.Metadata{Name: web.PluginID, Version: "0.2.0", Author: "Adnan Kurt",
 			GitHubRepository: "https://github.com/wappsdev/cpa-balancer"},
 		"capabilities": map[string]bool{"scheduler": true, "scheduler_across_priorities": true,
-			"usage_plugin": true, "management_api": true, "model_registrar": true},
+			"usage_plugin": true, "management_api": true, "model_registrar": true, "request_interceptor": true},
 	})
 }
 

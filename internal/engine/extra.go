@@ -121,10 +121,21 @@ func RefuseExtra(cfg config.Config, req pluginapi.SchedulerPickRequest) (plugina
 }
 
 // refuseAdvisor ends a request that carries the advisor tool: its model may only be used through
-// its own accounts.
+// its own accounts. CPA answers a scheduler refusal with HTTP 500 and this reason as the message.
 func refuseAdvisor(model string) pluginapi.SchedulerPickResponse {
 	return pluginapi.SchedulerPickResponse{Handled: true, Reject: true, RejectCode: ExtraModelUnavailable,
-		RejectReason: "a request with the " + model + " advisor is served only by that model's accounts, and none of them is available now"}
+		RejectReason: "All accounts approved for the " + model + " advisor are unavailable; switch the advisor model or wait for a reset"}
+}
+
+// RefuseUnconfigured is the answer, with no configuration accepted yet, for a request that carries
+// the advisor by the default rule: the accounts it may use are not known, so it is refused rather
+// than handed to CPA's order. ok is false for any other request.
+func RefuseUnconfigured(req pluginapi.SchedulerPickRequest) (pluginapi.SchedulerPickResponse, bool) {
+	if !config.AdvisorRequested(req.Options.Headers, config.DefaultAdvisorBeta) {
+		return pluginapi.SchedulerPickResponse{}, false
+	}
+	return pluginapi.SchedulerPickResponse{Handled: true, Reject: true, RejectCode: ExtraModelUnavailable,
+		RejectReason: "The balancer has no valid configuration, so a request with the advisor is refused; fix the plugin's configuration"}, true
 }
 
 // refuseExtra ends the request: CPA must not hand it to another account.

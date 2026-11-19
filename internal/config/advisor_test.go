@@ -47,6 +47,39 @@ func TestTheAdvisorPinIsChecked(t *testing.T) {
 	}
 }
 
+func TestTheAdvisorMarkerPinsARequestLikeTheBeta(t *testing.T) {
+	cfg, err := Parse([]byte(extraBase + extraOne + advisorPin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{AdvisorMarker, "x-cpa-balancer-advisor"} {
+		if m, ok := cfg.AdvisorModel(map[string][]string{key: {"1"}}); !ok || m.ID != "claude-mythos-9-1" {
+			t.Fatalf("%s: got %+v %v", key, m, ok)
+		}
+	}
+}
+
+func TestTheAdvisorIsFoundInTheBodyAsCPAFindsIt(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"claude-opus-5-5","tools":[{"type":"advisor_20260301","name":"advisor","model":"claude-mythos-5-2"}]}`,
+		`{"tools":[{"type":"web_search_20250305"},{"type":" Advisor_20270101 "}]}`, // CPA trims and lowers the type
+		`{"betas":["oauth-2025-04-20","Advisor-Tool-2026-03-01"]}`,
+		`{"betas":"advisor-tool-2026-03-01"}`, // CPA takes a single string too
+	} {
+		if !AdvisorInBody([]byte(body), DefaultAdvisorBeta) {
+			t.Fatalf("%s: the advisor is in the body", body)
+		}
+	}
+	for _, body := range []string{
+		``, `not json`, `{}`, `{"tools":[{"type":"web_search_20250305"}]}`, `{"tools":{"type":"advisor_x"}}`,
+		`{"betas":["oauth-2025-04-20"]}`, `{"tools":[{"name":"advisor_like","type":"custom"}]}`,
+	} {
+		if AdvisorInBody([]byte(body), DefaultAdvisorBeta) {
+			t.Fatalf("%s: no advisor in the body", body)
+		}
+	}
+}
+
 func TestTheAdvisorBetaIsFoundInAnyValueAndAnyCase(t *testing.T) {
 	cfg, err := Parse([]byte(extraBase + extraOne + advisorPin))
 	if err != nil {

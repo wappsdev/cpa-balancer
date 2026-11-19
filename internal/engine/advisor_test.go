@@ -42,7 +42,8 @@ func (w *world) withBeta(model string, session int, beta string, accounts ...str
 }
 
 func advisorRefused(r pluginapi.SchedulerPickResponse) bool {
-	return r.Handled && r.Reject && r.AuthID == "" && r.RejectCode == ExtraModelUnavailable && strings.Contains(r.RejectReason, Advisor)
+	return r.Handled && r.Reject && r.AuthID == "" && r.RejectCode == ExtraModelUnavailable && strings.Contains(r.RejectReason, Advisor) &&
+		strings.Contains(r.RejectReason, "switch the advisor model or wait for a reset")
 }
 
 func TestARequestWithTheAdvisorGoesOnlyToTheAdvisorsAccounts(t *testing.T) {
