@@ -183,7 +183,7 @@ function accountCard(a, v) {
 // The models outside CPA's catalog, each with the accounts it is pinned to, in the order they are
 // tried. A request for one goes only to these accounts; with none ready, it is refused.
 // The warning when every account of the advisor pin is full or held back.
-const ADVISOR_OUT = "Mythos danışman: CVP hesaplarının hepsi dolu; danışmanı geçici olarak Fable'a çevirin";
+const ADVISOR_OUT = "All the pinned accounts of the advisor are full or held back; switch the advisor model or wait for a reset";
 const EXTRA_STATE = { ready: "", reserve: "warn", "held back": "warn", full: "bad", disabled: "bad", "not loaded": "bad" };
 // The advisor pin: a request whose anthropic-beta starts with the prefix carries the advisor tool,
 // so it goes only to the accounts of the advisor's model, in this order, or is refused.

@@ -22,9 +22,9 @@ check('the accounts show in order with their states', html.indexOf('third') < ht
 check('a full account is marked bad', html.includes('chip bad'))
 check('an account held by its reserve only is a warning, not bad', advisorPinHtml({ ...pin, accounts: [{ auth_file: 'x.json', state: 'reserve' }] }, name).includes('chip warn'))
 check('no warning while an account is ready', !html.includes(ADVISOR_OUT))
-check('the warning says to move the advisor to Fable for now', ADVISOR_OUT === "Mythos danışman: CVP hesaplarının hepsi dolu; danışmanı geçici olarak Fable'a çevirin")
+check('the warning is in English and names no program or model', ADVISOR_OUT === 'All the pinned accounts of the advisor are full or held back; switch the advisor model or wait for a reset')
 const out = advisorPinHtml({ ...pin, all_out: true, accounts: [{ auth_file: 'x.json', state: 'held back' }, { auth_file: 'g.json', state: 'full' }] }, name)
-check('every account out gives the warning', out.includes(ADVISOR_OUT.replace("'", '&#39;')) || out.includes(ADVISOR_OUT))
+check('every account out gives the warning', out.includes(ADVISOR_OUT))
 check('no pin, no card', advisorPinHtml(null, name) === '' && advisorPinHtml(undefined, name) === '')
 
 if (fails.length) { console.log('FAIL: ' + fails.join('; ')); process.exit(1) }

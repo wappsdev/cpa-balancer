@@ -139,16 +139,28 @@ pin those requests to the accounts of its extra model:
             beta_prefix: advisor-tool-    # optional; this is the default
 
 - A request is pinned when any comma-separated value of any `anthropic-beta` header starts with
-  `beta_prefix`, in any letter case and with spaces around it. It goes to one of the extra model's
-  accounts, chosen by the same tiers, reset order and session stickiness as the model itself, or
-  is refused (`extra_model_unavailable`), and never falls back.
+  `beta_prefix`, in any letter case and with spaces around it, or when its body carries the
+  advisor. CPA adds the advisor beta itself, after the account is chosen, when the body declares a
+  tool whose type starts with `advisor_` or lists the beta in `betas`. So the plugin's request
+  interceptor reads the body before the pick: for such a body it adds the header
+  `X-Cpa-Balancer-Advisor: 1`, which the pin matches like the beta, and it removes the header again
+  once the account is chosen, so it never reaches the upstream. A body it cannot read is marked.
+- A pinned request goes to one of the extra model's accounts, chosen by the same tiers, reset
+  order and session stickiness as the model itself, or is refused (`extra_model_unavailable`),
+  and never falls back. CPA answers a scheduler refusal with HTTP 500; a scheduler cannot set the
+  status. The message says what to do: "All accounts approved for the `<model>` advisor are
+  unavailable; switch the advisor model or wait for a reset".
+- Until a configuration is accepted (for example the first one is invalid), a request with the
+  advisor by the default rule (`advisor-tool-`, or a body with an `advisor_` tool) is refused
+  rather than handed to CPA's order.
 - The pin holds like an extra model's: over session pins, folder pins, fill, the home, CPA's own
   pin, while paused and in shadow mode. A pinned request is not a placement of its session. A
   request for an extra model keeps that model's own accounts, with or without the beta.
 - Without `advisor_pin` the header changes nothing.
 - The page lists the pin with its accounts and their states (`reserve` when only the reserve holds
   an account back, `full` when the all-models week is at its cap). When no account can take a
-  request (each one full or held back) it warns that the advisor should be moved to Fable for now. The limits above (aliases, Home mode, a fused plugin) apply here too.
+  request (each one full or held back) it warns that the advisor model should be switched, or a
+  reset awaited. The limits above (aliases, Home mode, a fused plugin) apply here too.
 
 ## Page
 
