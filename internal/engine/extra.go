@@ -14,30 +14,6 @@ import (
 // accounts can take. It is not CPA's "auth_unavailable", which CPA retries.
 const ExtraModelUnavailable = "extra_model_unavailable"
 
-// pickExtra sends a request for an extra model to the first of its accounts among the candidates,
-// or refuses it. CPA registers the model for every claude account, so this is the only pin: it
-// holds while paused and in shadow mode, and over session, folder and CPA's own pins. The session
-// is not placed, because the model's accounts are not the balancer's choice.
-func pickExtra(m config.ExtraModel, req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
-	candidates := map[string]bool{}
-	for _, c := range req.Candidates {
-		candidates[c.ID] = true
-	}
-	allowed := m.Accounts
-	if pinned, _ := req.Options.Metadata["pinned_auth_id"].(string); pinned != "" {
-		allowed = nil
-		if slices.Contains(m.Accounts, pinned) {
-			allowed = []string{pinned}
-		}
-	}
-	for _, a := range allowed {
-		if candidates[a] {
-			return pluginapi.SchedulerPickResponse{AuthID: a, Handled: true}
-		}
-	}
-	return refuseExtra(m.ID)
-}
-
 // ModelInfos is what the plugin registers with CPA for the extra models. A model with thinking
 // levels thinks adaptively: no fixed budget, and it cannot be turned off.
 func ModelInfos(models []config.ExtraModel) []pluginapi.ModelInfo {
@@ -57,7 +33,7 @@ func ModelInfos(models []config.ExtraModel) []pluginapi.ModelInfo {
 }
 
 // extraModelViews says, for the status page, where each extra model can go now; callers hold e.mu.
-func (e *Engine) extraModelViews() []ExtraModelView {
+func (e *Engine) extraModelViews(now time.Time) []ExtraModelView {
 	if len(e.cfg.ExtraModels) == 0 {
 		return nil
 	}
@@ -69,7 +45,7 @@ func (e *Engine) extraModelViews() []ExtraModelView {
 			v.DisplayName = m.ID
 		}
 		for _, a := range m.Accounts {
-			v.Accounts = append(v.Accounts, ExtraModelAccount{AuthFile: a, Name: names[a], State: e.credentialState(a)})
+			v.Accounts = append(v.Accounts, ExtraModelAccount{AuthFile: a, Name: names[a], State: e.pinState(a, quota.Main, now)})
 		}
 		out = append(out, v)
 	}
@@ -91,9 +67,27 @@ func (e *Engine) credentialState(account string) string {
 	return "ready"
 }
 
-// advisorPinView says, for the status page, where a request with the advisor can go now. An
-// advisor request is a main-model request, so an account whose all-models week is at its cap is
-// "full": CPA still offers it, but it answers with a limit. Callers hold e.mu.
+// pinState is how a pinned request sees an account now: ready, reserve (held back by its reserve
+// only, so it serves when no account is ready), full (at its weekly cap), held back (a 5-hour cap or
+// a cooldown), disabled or not loaded. Callers hold e.mu.
+func (e *Engine) pinState(account string, b quota.Bucket, now time.Time) string {
+	if state := e.credentialState(account); state != "ready" {
+		return state
+	}
+	switch e.pinTier(account, b, now) {
+	case 1, 3:
+		return "ready"
+	case 2:
+		return "reserve"
+	}
+	if e.standing(account, b, now) == policy.Full {
+		return "full"
+	}
+	return "held back"
+}
+
+// advisorPinView says, for the status page, where a request with the advisor can go now. AllOut:
+// none of its accounts can take one, so it is refused. Callers hold e.mu.
 func (e *Engine) advisorPinView(now time.Time) *AdvisorPinView {
 	p := e.cfg.AdvisorPin
 	if p == nil {
@@ -106,30 +100,11 @@ func (e *Engine) advisorPinView(now time.Time) *AdvisorPinView {
 	}
 	names := e.cfg.Names()
 	for _, a := range m.Accounts {
-		state := e.credentialState(a)
-		if state == "ready" && e.standing(a, quota.Main, now) == policy.Full {
-			state = "full"
-		}
-		v.AllOut = v.AllOut && state != "ready"
+		state := e.pinState(a, quota.Main, now)
+		v.AllOut = v.AllOut && state != "ready" && state != "reserve"
 		v.Accounts = append(v.Accounts, ExtraModelAccount{AuthFile: a, Name: names[a], State: state})
 	}
 	return v
-}
-
-// pinnedPick is the answer of a request pinned to an extra model's accounts, whatever else holds: a
-// request for the model itself, else one that carries the advisor tool of the advisor pin. ok is
-// false for any other request.
-func pinnedPick(cfg config.Config, req pluginapi.SchedulerPickRequest) (resp pluginapi.SchedulerPickResponse, ok bool) {
-	if m, ok := cfg.ExtraModel(req.Model); ok {
-		return pickExtra(m, req), true
-	}
-	if m, ok := cfg.AdvisorModel(req.Options.Headers); ok {
-		if resp = pickExtra(m, req); resp.Reject {
-			resp = refuseAdvisor(m.ID)
-		}
-		return resp, true
-	}
-	return pluginapi.SchedulerPickResponse{}, false
 }
 
 // RefuseExtra is the answer for a pick the plugin could not make (a panic): a request pinned to an

@@ -14,7 +14,8 @@ const (
 	advisorBeta = "oauth-2025-04-20,advisor-tool-2026-03-01,fine-grained-tool-streaming-2025-05-14"
 )
 
-// advisorWorld pins the advisor to X, then G; W has the most room and fill would choose G.
+// advisorWorld pins the advisor to X and G; X resets first of them. W has the most room and resets
+// first of all, so both the balancing rule and fill would choose W.
 func advisorWorld(t *testing.T, fill bool) *world {
 	w := newWorld(t, W, G, X)
 	w.cfg.Fill.Enabled = fill
@@ -25,9 +26,9 @@ func advisorWorld(t *testing.T, fill bool) *world {
 	w.cfg.AdvisorPin = &config.AdvisorPin{Model: Advisor, BetaPrefix: config.DefaultAdvisorBeta}
 	w.folder("-work-alpha", 1)
 	w.start()
-	w.use(W, 10, 140, 0)
+	w.use(W, 10, 15, 0)
 	w.use(G, 52, 90, 0)
-	w.use(X, 80, 100, 0)
+	w.use(X, 80, 20, 0)
 	return w
 }
 
@@ -47,7 +48,7 @@ func advisorRefused(r pluginapi.SchedulerPickResponse) bool {
 func TestARequestWithTheAdvisorGoesOnlyToTheAdvisorsAccounts(t *testing.T) {
 	w := advisorWorld(t, false)
 	if got := w.e.Pick(w.withBeta(Opus, 1, advisorBeta, W, G, X)); got.AuthID != X || got.Reject {
-		t.Fatalf("the advisor's first account takes it: %+v", got)
+		t.Fatalf("the advisor's first reset takes it: %+v", got)
 	}
 	if got := w.e.Pick(w.withBeta(Opus, 1, advisorBeta, W, G)); got.AuthID != G || got.Reject {
 		t.Fatalf("the next of its accounts takes it while the first is out: %+v", got)
@@ -109,9 +110,9 @@ func TestSessionAndFolderPinsDoNotMoveTheAdvisor(t *testing.T) {
 func TestFillDoesNotMoveTheAdvisor(t *testing.T) {
 	w := advisorWorld(t, true)
 	if got := w.e.Pick(w.withBeta(Opus, 1, advisorBeta, W, G, X)).AuthID; got != X {
-		t.Fatalf("fill would choose G; the advisor goes to its first account, got %q", got)
+		t.Fatalf("fill would choose W; the advisor goes to its first reset, got %q", got)
 	}
-	if got := w.e.Pick(w.withBeta(Opus, 1, "", W, G, X)).AuthID; got != G {
+	if got := w.e.Pick(w.withBeta(Opus, 1, "", W, G, X)).AuthID; got != W {
 		t.Fatalf("without the advisor fill places the session, got %q", got)
 	}
 }
@@ -143,9 +144,9 @@ func TestWithoutAnAdvisorPinTheBetaChangesNothing(t *testing.T) {
 	w := advisorWorld(t, false)
 	w.cfg.AdvisorPin = nil
 	w.start()
-	w.use(W, 10, 140, 0)
+	w.use(W, 10, 15, 0)
 	w.use(G, 52, 90, 0)
-	w.use(X, 80, 100, 0)
+	w.use(X, 80, 20, 0)
 	if got := w.e.Pick(w.withBeta(Opus, 1, advisorBeta, W, G, X)).AuthID; got != W {
 		t.Fatalf("the request is placed as any other, got %q", got)
 	}
@@ -161,7 +162,11 @@ func TestTheStatusShowsTheAdvisorPinAndWarnsWhenAllItsAccountsAreOut(t *testing.
 	if v := w.e.Status().AdvisorPin; v.AllOut || v.Accounts[0].State != "not loaded" || v.Accounts[1].State != "ready" {
 		t.Fatalf("one account ready is no warning: %+v", v)
 	}
-	w.use(G, 90, 30, 0) // G's cap is 90 under 48 h before its reset: full
+	w.use(G, 90, 30, 0) // at its reserve's cap (90 under 48 h before the reset), under the final cap
+	if v := w.e.Status().AdvisorPin; v.AllOut || v.Accounts[1].State != "reserve" {
+		t.Fatalf("an account held only by its reserve still takes the advisor: %+v", v)
+	}
+	w.use(G, 99, 30, 0) // at the final cap
 	if v := w.e.Status().AdvisorPin; !v.AllOut || v.Accounts[1].State != "full" {
 		t.Fatalf("every account full or held back is a warning: %+v", v)
 	}

@@ -92,7 +92,7 @@ type AdvisorPinView struct {
 	Model       string              `json:"model"`
 	DisplayName string              `json:"display_name"`
 	BetaPrefix  string              `json:"beta_prefix"`
-	Accounts    []ExtraModelAccount `json:"accounts"` // the extra model's, in the order they are tried; State may also be "full"
+	Accounts    []ExtraModelAccount `json:"accounts"` // the extra model's, as the pin sees them (see pinState)
 	// AllOut: every account is full or held back, so a request with the advisor is refused now or soon.
 	AllOut bool `json:"all_out"`
 }
@@ -106,8 +106,9 @@ type ExtraModelView struct {
 type ExtraModelAccount struct {
 	AuthFile string `json:"auth_file"`
 	Name     string `json:"name"`
-	// State is "ready", "held back" (CPA cools it down), "disabled" (switched off by hand) or
-	// "not loaded" (CPA does not list it).
+	// State is "ready", "reserve" (held back by its reserve only: it serves when no account is
+	// ready), "full" (at its weekly cap), "held back" (a 5-hour cap, or CPA cools it down),
+	// "disabled" (switched off by hand) or "not loaded" (CPA does not list it).
 	State string `json:"state"`
 }
 
@@ -163,7 +164,7 @@ func (e *Engine) Status() View {
 		v.Accounts = append(v.Accounts, av)
 	}
 	v.Affinity = e.affinityView(now)
-	v.ExtraModels = e.extraModelViews()
+	v.ExtraModels = e.extraModelViews(now)
 	v.AdvisorPin = e.advisorPinView(now)
 	return v
 }

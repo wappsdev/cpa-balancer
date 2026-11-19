@@ -184,7 +184,7 @@ function accountCard(a, v) {
 // tried. A request for one goes only to these accounts; with none ready, it is refused.
 // The warning when every account of the advisor pin is full or held back.
 const ADVISOR_OUT = "Mythos danışman: CVP hesaplarının hepsi dolu; danışmanı geçici olarak Fable'a çevirin";
-const EXTRA_STATE = { ready: "", "held back": "warn", full: "bad", disabled: "bad", "not loaded": "bad" };
+const EXTRA_STATE = { ready: "", reserve: "warn", "held back": "warn", full: "bad", disabled: "bad", "not loaded": "bad" };
 // The advisor pin: a request whose anthropic-beta starts with the prefix carries the advisor tool,
 // so it goes only to the accounts of the advisor's model, in this order, or is refused.
 function advisorPinHtml(pin, name) {

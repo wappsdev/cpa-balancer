@@ -121,26 +121,32 @@ func (e *Engine) Inherit(prev *Engine) {
 		return
 	}
 	prev.mu.RLock()
-	picks, starts := maps.Clone(prev.picks), maps.Clone(prev.starts)
+	picks, starts, pinStarts := maps.Clone(prev.picks), maps.Clone(prev.starts), maps.Clone(prev.pinStarts)
 	prev.mu.RUnlock()
 	e.mu.Lock()
-	e.picks, e.starts = picks, starts
+	e.picks, e.starts, e.pinStarts = picks, starts, pinStarts
 	e.mu.Unlock()
 }
 
-// startOn notes the account a main session runs on; at the limit the session idle longest goes.
+// startOn notes the account a main session runs on under fill.
 func (e *Engine) startOn(root, account string, now time.Time) {
-	if e.starts == nil {
-		e.starts = map[string]started{}
+	e.startIn(&e.starts, root, account, now)
+}
+
+// startIn notes the account a session runs on in one of the session maps; at the limit the session
+// idle longest goes.
+func (e *Engine) startIn(m *map[string]started, key, account string, now time.Time) {
+	if *m == nil {
+		*m = map[string]started{}
 	}
-	if _, ok := e.starts[root]; !ok && len(e.starts) >= MaxRememberedSessions {
+	if _, ok := (*m)[key]; !ok && len(*m) >= MaxRememberedSessions {
 		oldest, first := "", true
-		for k, s := range e.starts {
-			if first || s.at.Before(e.starts[oldest].at) {
+		for k, s := range *m {
+			if first || s.at.Before((*m)[oldest].at) {
 				oldest, first = k, false
 			}
 		}
-		delete(e.starts, oldest)
+		delete(*m, oldest)
 	}
-	e.starts[root] = started{account: account, at: now}
+	(*m)[key] = started{account: account, at: now}
 }

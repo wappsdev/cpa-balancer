@@ -53,6 +53,7 @@ type Engine struct {
 	repos       *affinity.Repos        // finds the main repository of a folder: a worktree's sessions belong to it
 	picks       map[string]SessionPick // each recent session's last pick, in memory only; bounded
 	starts      map[string]started     // the account each recent main session started on, under fill; in memory, bounded
+	pinStarts   map[string]started     // the pinned account each recent main session started on, per extra model; in memory, bounded
 	loads       map[string]int64       // each project's tokens over the last 7 days, read by Tick; placement weighs the homes by it
 	loadsAt     time.Time
 }
@@ -171,7 +172,7 @@ func isClaude(req pluginapi.SchedulerPickRequest) bool {
 
 // Pick answers scheduler.pick. Its only I/O is the directory-name lookup of a session not seen before.
 func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
-	if resp, ok := pinnedPick(e.cfg, req); ok {
+	if resp, ok := e.pinnedPick(req); ok {
 		return resp
 	}
 	candidates := map[string]bool{}

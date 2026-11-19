@@ -87,10 +87,22 @@ A Claude Mythos model that CPA's catalog does not have can be served through cho
 - The plugin registers the model with CPA for the `claude` provider (CPA's model registrar), so the
   built-in claude executor serves it. A plugin cannot read CPA's model registry, so the context,
   output limit and thinking levels are set here.
-- CPA then offers every claude account for the model. The balancer's scheduler sends a request to
-  the first of the model's accounts that CPA offers, and refuses it (`extra_model_unavailable`)
-  when none is offered. It never falls back to another account. The pin holds while paused, in
-  shadow mode, and over folder, session and CPA's own pins.
+- CPA then offers every claude account for the model. The balancer's scheduler sends a request
+  only to one of the model's accounts that CPA offers, and refuses it (`extra_model_unavailable`)
+  when none of them can take it. It never falls back to another account. The pin holds while
+  paused, in shadow mode, and over folder, session and CPA's own pins (CPA's pin is kept when it
+  names one of the model's accounts).
+- Among the model's accounts the choice follows the normal path's rules, in tiers. First the
+  usable ones: under their caps, their reserve included, with a fresh reading, not held back by
+  CPA. If there is none, the ones held back by their reserve only: under `final_cap`, with the
+  5-hour window under its cap. A reserve is spent here because refusing would end the session.
+  Last, the ones with no fresh reading (a pause stops the probes) that CPA does not hold back.
+  Within a tier the weekly reset that comes first goes first, then the order in `accounts`. An
+  account at `final_cap` or its 5-hour cap, or one CPA holds back, is never chosen; with none
+  left the request is refused. The order does not depend on `fill.enabled`.
+- A main session stays on the account it started on (its prompt cache is there) until that
+  account is full. A request that account cannot take for a passing reason (a 5-hour cap, a
+  cooldown) goes to the next account; the session then returns.
 - The scheduler matches the model name the way CPA routes it: spaces around it, letter case, a
   thinking suffix such as `(high)`, an auth prefix and a `[1m]` marker do not escape the pin.
 - An id must start with `claude-mythos-` (lower case). Every request for an extra model is pinned,
@@ -127,15 +139,16 @@ pin those requests to the accounts of its extra model:
             beta_prefix: advisor-tool-    # optional; this is the default
 
 - A request is pinned when any comma-separated value of any `anthropic-beta` header starts with
-  `beta_prefix`, in any letter case and with spaces around it. It goes to the first of the extra
-  model's accounts that CPA offers, or is refused (`extra_model_unavailable`), and never falls back.
+  `beta_prefix`, in any letter case and with spaces around it. It goes to one of the extra model's
+  accounts, chosen by the same tiers, reset order and session stickiness as the model itself, or
+  is refused (`extra_model_unavailable`), and never falls back.
 - The pin holds like an extra model's: over session pins, folder pins, fill, the home, CPA's own
   pin, while paused and in shadow mode. A pinned request is not a placement of its session. A
   request for an extra model keeps that model's own accounts, with or without the beta.
 - Without `advisor_pin` the header changes nothing.
-- The page lists the pin with its accounts and their states (`full` when the all-models week is at
-  its cap). When every account is full or held back it warns that the advisor should be moved to
-  Fable for now. The limits above (aliases, Home mode, a fused plugin) apply here too.
+- The page lists the pin with its accounts and their states (`reserve` when only the reserve holds
+  an account back, `full` when the all-models week is at its cap). When no account can take a
+  request (each one full or held back) it warns that the advisor should be moved to Fable for now. The limits above (aliases, Home mode, a fused plugin) apply here too.
 
 ## Page
 
