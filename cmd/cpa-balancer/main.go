@@ -134,7 +134,7 @@ func dispatch(method string, req []byte) (raw []byte) {
 			return fail(err)
 		}
 		if e := engineNow(); e != nil {
-			return ok(e.Pick(r))
+			return ok(enginePick(e, r))
 		}
 		return ok(pluginapi.SchedulerPickResponse{DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Handled: true})
 	case pluginabi.MethodUsageHandle:
@@ -162,6 +162,10 @@ func dispatch(method string, req []byte) (raw []byte) {
 	}
 	return ok(map[string]any{})
 }
+
+// enginePick is the engine's pick; a test swaps it for one that panics, to reach the recovery in
+// dispatch.
+var enginePick = (*engine.Engine).Pick
 
 // failedPick answers a pick that panicked. CPA's own order may choose any account, so an extra
 // model is refused instead.

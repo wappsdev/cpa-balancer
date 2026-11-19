@@ -1,6 +1,6 @@
 PLUGIN_DIR := $(HOME)/.cli-proxy-api/plugins/darwin/arm64
 
-.PHONY: test build build-import install
+.PHONY: test proof build build-import install
 
 test:
 	node --check internal/web/assets/app.js
@@ -14,6 +14,11 @@ test:
 	node internal/web/accountuse_test.mjs
 	node internal/web/transcripts_test.mjs
 	node internal/web/extramodels_test.mjs
+
+# Runs tools/sdkproof against the CPA host code (a scratch copy of the module): what the extra
+# models rely on. Slower than test; run it after changing extra models or the CPA version.
+proof:
+	tools/sdkproof/run.sh
 
 build:
 	go build -buildmode=c-shared -o dist/cpa-balancer.dylib ./cmd/cpa-balancer
