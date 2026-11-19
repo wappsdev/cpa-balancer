@@ -88,6 +88,7 @@ func (e *Engine) recompute(now time.Time) {
 	snaps := map[string]policy.Snapshot{}
 	for _, a := range e.cfg.Accounts {
 		acc := e.st.Account(a.AuthFile)
+		e.noteResets(a.AuthFile, acc, now)
 		var anchored quota.Readings
 		if acc.AnchorReading != nil {
 			anchored = quota.Readings{quota.Session: *acc.AnchorReading}

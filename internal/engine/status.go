@@ -42,6 +42,7 @@ type AccountView struct {
 	Reopens      map[quota.Bucket]time.Time `json:"reopens,omitempty"`   // when a held account takes work again
 	LastAnchor   time.Time                  `json:"last_anchor,omitzero"`
 	AnchorModel  string                     `json:"anchor_model,omitempty"`
+	Waste        *WasteView                 `json:"waste"` // what was left unused at its last weekly resets
 }
 
 // AccountMeter is what an Ultra account's own meter taught the balancer: the percent of the account's
@@ -146,6 +147,7 @@ func (e *Engine) Status() View {
 				av.AnchorModel = e.cfg.Anchor.FallbackModel
 			}
 		}
+		av.Waste = wasteView(e.st.Accounts[a.AuthFile], now)
 		v.Accounts = append(v.Accounts, av)
 	}
 	v.Affinity = e.affinityView(now)

@@ -29,6 +29,7 @@ type Account struct {
 	PlanCheckedAt    time.Time      `json:"plan_checked_at,omitzero"`
 	NoFiveHour       bool           `json:"no_five_hour,omitempty"` // the usage endpoint lists no 5-hour limit
 	NoFable          bool           `json:"no_fable,omitempty"`     // nor a Fable weekly limit
+	Resets           []Reset        `json:"resets,omitempty"`       // the last weekly resets seen, the oldest first
 }
 
 type Change struct {
