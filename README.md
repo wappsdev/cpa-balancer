@@ -65,6 +65,8 @@ The config lives in CPA's config file under `plugins.configs.cpa-balancer`:
             projects_dir: ~/.claude/projects   # Claude Code's projects directory
             folder_pins: {my-folder: claude-xxxxxxxx-first@example.com.json}   # optional
             session_pins: {<main session id>: claude-xxxxxxxx-second@example.com.json}   # optional
+          fill:
+            enabled: true        # false: a new project goes to the account with the most room, as before
 
 An invalid config is not applied: the plugin keeps the previous one and reports
 `config_error` on its page.
@@ -265,14 +267,28 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   folder as the project, so a folder pin on it holds for its worktrees; a folder pin on a worktree's
   own folder holds for that worktree alone. Keys stay the folder names Claude Code made. A home stored
   under a worktree's folder before this existed is ignored.
+- **Fill** (`fill.enabled`, on by default). Every account's week should be spent before it resets.
+  The order is: session pin, folder pin, fill, home. When a main session without a pin starts, its
+  project keeps its home only while the home's account is usable and has not reset since the project
+  was placed there. Otherwise fill places the project again: on the usable account whose weekly
+  reset comes first (usable: under its caps, its reserve allows it, not held back; an account with no
+  fresh reading is never usable). Accounts that reset within the same minute tie, and the balancing
+  rule below decides between them. A running session is never moved by fill, since that would cost
+  its prompt cache: it keeps the account it started on until that account is full (a subagent
+  follows its main session). A request the account cannot take now (5-hour cap, cooldown) takes a
+  detour, as below. Where each running session started is kept in memory (500 sessions) and is
+  handed to the new engine on a config change; after a CPA restart a session counts as new. The
+  page says `fill: resets in Xh with Y% room` for a placement by fill, as it was at that moment, and
+  `running session: stays where it started` for a session whose project has moved on. Extra models
+  are not touched by fill. With fill off, the rules below are the whole story.
 - **Stay until full.** A project stays on its home account until that account reaches its weekly cap,
   the cap in force from `thresholds` and the account's reserve (the same cap the balancer switches on).
   Only a fresh weekly reading at or over the cap is "full". A 5-hour cap, a CPA cooldown, stale data
   or an account CPA does not offer for a request is a detour for that request: the project keeps its
   home and the request goes to another account (reason `fallback`). When the home is full the project
   moves to another account and stays there. A project never moves only to balance.
-- **Balanced start.** A new project, and a project that moves, goes to the usable account that is
-  furthest below its fair share. An account's share of the room is its weekly headroom: room under
+- **Balanced start.** With fill off, a new project, and a project that moves, goes to the usable account that is
+  furthest below its fair share (with fill on, this rule only breaks a tie between the first resets). An account's share of the room is its weekly headroom: room under
   the cap in percent, times the plan's size (a plan not read yet counts as one Pro), as a part of the
   usable accounts' total. Its share of the load is the weight of the projects homed there, plus the
   new one, as a part of the total. The score is the first minus the second, so equal accounts split
@@ -293,7 +309,9 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   in a detour (5-hour cap, CPA cooldown, disabled) keeps its projects and is never filled, since
   every request of a project placed there would be a fallback. An account with no fresh weekly
   reading counts as having no room. With no account to go to, the projects stay. The log says how
-  many moved, never which.
+  many moved, never which. With fill on, the plan uses fill's order: a project moves only onto a
+  usable account whose reset comes first, so a plan never undoes fill. Running sessions stay where
+  they started; the sessions that start after Apply use the new homes.
 - **Pins.** A folder pin and a session pin (a main session's id; its subagents follow it) hold until the
   pinned account is full or held back. Then the request falls back like any other, and the page says
   so; the pin returns when the account has room. A session pin outranks a folder pin, and either outranks
@@ -316,6 +334,17 @@ history. The picks behind the card are kept in memory (500 sessions); homes and 
 state file, which is written at once when a pin or a rebalance changes it. The page finds a session's
 folder through `affinity.session_projects` and a project's use through `affinity.projects` in
 `/status`, both read from the history and the folder names, so they survive a restart.
+
+## Unused at reset
+
+The waste meter measures what fill is for. At each reset of an account's all-models week, the
+balancer records the room it still had: 100 minus the window's last reading, times the plan's size
+in Pro plans (an unknown plan counts as one), in "wasted points". The last reading is the one taken
+before the reset; its time is kept with the record. A reset that passed while CPA was down is
+recorded at the next start, from the reading in the state file; each reset is recorded once. The
+state file keeps the last 12 resets per account. The "Unused at reset" card lists each account's
+last resets and its totals of the last 7 and 30 days, and `/status` carries them as `waste` on each
+account. It is read only and changes no placement.
 
 ## Transcript history
 

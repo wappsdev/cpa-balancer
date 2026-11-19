@@ -51,6 +51,8 @@
     <div class="card outlook" id="outlook" hidden></div>
     <div class="section-head"><h2>Accounts</h2><span class="hint">bar = utilization · tick = cap in force</span></div>
     <div class="accounts" id="accounts"></div>
+    <div class="section-head"><h2>Unused at reset</h2><span class="hint">Pro plans' points left in each week when it reset: (100 − last reading) × plan size</span></div>
+    <div class="card sessions" id="waste"><p class="empty">Loading…</p></div>
     <div class="section-head" id="extra-models-head" hidden><h2>Extra models</h2><span class="hint">served only by these accounts, in this order</span></div>
     <div class="accounts" id="extra-models" hidden></div>
     <div class="section-head">
@@ -60,7 +62,7 @@
         <button type="button" data-span="week" aria-pressed="false">7 days</button>
       </div>
       <span class="hint" id="sessions-hint"></span>
-      <button type="button" class="button" id="rebalance" title="Rebalance now: place every project without a folder pin again, balanced by headroom and load. Shows the plan first." disabled>Dengele</button>
+      <button type="button" class="button" id="rebalance" title="Rebalance now: place every project without a folder pin again: by fill (the first reset with room) when fill is on, else balanced by headroom and load. Shows the plan first." disabled>Dengele</button>
     </div>
     <p class="hint meter-line" id="sessions-basis" hidden></p>
     <p class="hint meter-line" id="sessions-meter" hidden></p>

@@ -125,6 +125,7 @@ function renderStatus(v) {
     : choice("Main bucket", v.decision.main, v.decision.main_order) + choice("Fable bucket", v.decision.fable, v.decision.fable_order);
 
   $("accounts").innerHTML = (v.accounts || []).map(a => accountCard(a, v)).join("");
+  $("waste").innerHTML = wasteHtml(v.accounts, short);
   $("extra-models-head").hidden = $("extra-models").hidden = !v.extra_models?.length;
   $("extra-models").innerHTML = extraModelsHtml(v.extra_models, short);
   renderSessions(v.sessions);
@@ -198,6 +199,21 @@ function extraModelsHtml(models, name) {
     <div class="order">${chips}</div>
   </article>`;
   }).join("");
+}
+
+// The room each account left unused at its last weekly resets, in Pro plans' points (100 minus the
+// last reading, times the plan's size), with the totals of the last 7 and 30 days. Read only.
+function wasteHtml(accounts, name) {
+  const list = (accounts || []).map(a => ({ file: a.auth_file, week: a.waste?.week || 0, month: a.waste?.month || 0, resets: a.waste?.resets || [] }));
+  if (!list.some(a => a.resets.length)) return '<p class="empty">No weekly reset seen yet.</p>';
+  const pts = n => String(Math.round(n || 0));
+  const day = t => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const reset = r => `<span class="chip" title="${esc(`last reading ${Math.round(r.util)}% at ${new Date(r.observed_at).toLocaleString()}`)}">${esc(day(r.resets_at))}: ${pts(r.wasted)} pts · ${Math.round(r.util)}%</span>`;
+  const rows = list.map(a => `<tr><th scope="row">${esc(name(a.file))}</th><td>${pts(a.week)}</td><td>${pts(a.month)}</td>
+    <td class="left">${a.resets.slice(0, 4).map(reset).join(" ") || '<span class="faint">none yet</span>'}</td></tr>`).join("");
+  const sum = k => list.reduce((n, a) => n + a[k], 0);
+  return `<table class="sessions-table"><thead><tr><th class="left">Account</th><th>7 days</th><th>30 days</th><th class="left">Last resets: wasted · last reading</th></tr></thead>
+    <tbody>${rows}<tr><th scope="row">All</th><td>${pts(sum("week"))}</td><td>${pts(sum("month"))}</td><td></td></tr></tbody></table>`;
 }
 
 async function refreshStatus() {
@@ -367,6 +383,7 @@ function sessionsView(w, picks) {
 const REASONS = {
   project_home: "project home", folder_pin: "folder pin", session_pin: "session pin", fallback: "fallback after cap",
   folder_pin_fallback: "folder pin: account full, fallback", session_pin_fallback: "session pin: account full, fallback", no_project: "no project",
+  fill: "fill", running: "running session: stays where it started",
 };
 const reasonText = r => REASONS[r] || r;
 
@@ -598,10 +615,17 @@ function pinSelectHtml(kind, key, pin, accounts, name) {
     <option value=""${pin ? "" : " selected"}>no pin</option>${options}</select>${locked ? ' <span class="faint">config</span>' : ""}`;
 }
 
+// Why fill chose an account, as it was when it placed the project (at): its reset and its room.
+function fillText(fill, at) {
+  const hours = Math.max(0, Math.round((Date.parse(fill.resets_at) - Date.parse(at)) / 3600000));
+  return `fill: resets in ${hours}h with ${Math.round(fill.room)}% room`;
+}
+
 // Where a session's last request went and why.
 function placementText(pick, name) {
   if (!pick) return '<span class="faint">—</span>';
-  return `<span class="chip${/fallback/.test(pick.reason) ? " warn" : ""}">${esc(name(pick.account))}</span> <span class="faint">${esc(reasonText(pick.reason))}</span>`;
+  const why = pick.reason === "fill" && pick.fill ? fillText(pick.fill, pick.at) : reasonText(pick.reason);
+  return `<span class="chip${/fallback/.test(pick.reason) ? " warn" : ""}">${esc(name(pick.account))}</span> <span class="faint">${esc(why)}</span>`;
 }
 
 // A project's account and why: its folder pin when there is one, else its home.
@@ -611,7 +635,7 @@ function homeText(project, aff, name) {
     return `<span class="chip accent">${esc(name(pin.account))}</span> <span class="faint">folder pin</span>${pin.full ? ' <span class="chip warn">account full: falling back</span>' : ""}`;
   }
   if (home) {
-    return `<span class="chip">${esc(name(home.account))}</span> <span class="faint">project home</span>${home.full ? ' <span class="chip warn">full: moves on the next request</span>' : ""}`;
+    return `<span class="chip">${esc(name(home.account))}</span> <span class="faint">project home${home.fill ? " · " + esc(fillText(home.fill, home.since)) : ""}</span>${home.full ? ' <span class="chip warn">full: moves on the next request</span>' : ""}`;
   }
   return '<span class="faint">no home yet</span>';
 }
