@@ -120,8 +120,10 @@ func (r *Recorder) current(now time.Time) *Slot {
 
 // Source says where traffic came from: the account and model that served it and the client
 // session (with its parent, for a subagent) that sent it. An empty Session is a request without one.
+// Project is the project folder a header gave the session when no transcript could ("" if none); the
+// slot keeps it with the session so the session's grouping survives a restart.
 type Source struct {
-	Account, Model, Session, Parent string
+	Account, Model, Session, Parent, Project string
 }
 
 // AddTraffic counts requests for the account and for the session in one step, so the two views

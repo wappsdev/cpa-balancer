@@ -28,6 +28,7 @@ const (
 // two ways.
 type SessionSlot struct {
 	Parent   string             `json:"parent,omitempty"`
+	Project  string             `json:"project,omitempty"` // the folder a request header gave the session; see Source
 	First    time.Time          `json:"first"`
 	Last     time.Time          `json:"last"`
 	Accounts map[string]Traffic `json:"accounts,omitempty"`
@@ -125,6 +126,9 @@ func (s *Slot) AddTraffic(now time.Time, src Source, t Traffic) {
 	model := CleanModel(src.Model)
 	addCapped(&s.account(src.Account).Models, model, t)
 	ss := s.session(now, src.Session, src.Parent)
+	if src.Project != "" {
+		ss.Project = src.Project
+	}
 	addCapped(&ss.Accounts, src.Account, t)
 	addCapped(&ss.Models, model, t)
 }
@@ -172,6 +176,7 @@ func (t Traffic) Tokens() int64 { return t.InputTokens + t.OutputTokens + t.Cach
 type SessionUsage struct {
 	ID        string             `json:"id"` // empty: requests that came without a session
 	Parent    string             `json:"parent,omitempty"`
+	Project   string             `json:"-"` // the latest folder a request header gave it or a subagent; stays on the server
 	First     time.Time          `json:"first,omitzero"`
 	Last      time.Time          `json:"last,omitzero"`
 	Own       Traffic            `json:"own"`
@@ -223,11 +228,12 @@ type SessionWindow struct {
 
 // RootUse is a root session's family in a window, without its detail.
 type RootUse struct {
-	ID    string
-	Last  time.Time
-	Total Traffic
-	Share Share
-	Lines []ModelLine
+	ID      string
+	Project string // see SessionUsage.Project
+	Last    time.Time
+	Total   Traffic
+	Share   Share
+	Lines   []ModelLine
 }
 
 // Sessions is what the status page shows: the last five hours and the last seven days.
@@ -314,6 +320,8 @@ func fill(rows []SessionUsage, s *Sessions) {
 
 type node struct {
 	id, parent  string
+	project     string // the latest folder a header gave this session; projectAt is when it was seen
+	projectAt   time.Time
 	first, last time.Time
 	own         Traffic
 	accounts    map[string]Traffic
@@ -418,6 +426,7 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int, ms *Meters) Sessi
 			if ss.Last.After(n.last) {
 				n.last = ss.Last
 			}
+			n.takeProject(ss.Project, ss.Last)
 			n.own.Add(sum(ss.Accounts))
 			n.share.Add(ms.shareOf(s.T, ss.Accounts))
 			mergeInto(&n.accounts, ss.Accounts)
@@ -467,7 +476,7 @@ func buildWindow(slots []*Slot, from, to time.Time, limit int, ms *Meters) Sessi
 	index(rows)
 	listed := 0
 	for _, row := range rows {
-		w.AllRoots = append(w.AllRoots, RootUse{ID: row.ID, Last: row.Last, Total: row.Total, Share: row.share, Lines: row.ModelLines})
+		w.AllRoots = append(w.AllRoots, RootUse{ID: row.ID, Project: row.Project, Last: row.Last, Total: row.Total, Share: row.share, Lines: row.ModelLines})
 		if row.ID != "" && limit > 0 && listed >= limit {
 			w.Other.Sessions++
 			w.Other.Total.Add(row.Total)
@@ -487,6 +496,13 @@ func sortRows(rows []SessionUsage) {
 	})
 }
 
+// takeProject makes project the node's when it is not older than the one it has.
+func (n *node) takeProject(project string, at time.Time) {
+	if project != "" && !at.Before(n.projectAt) {
+		n.project, n.projectAt = project, at
+	}
+}
+
 // absorb adds another node's own use to this one, as if the requests had come from it.
 func (n *node) absorb(c *node) {
 	if !c.first.IsZero() && (n.first.IsZero() || c.first.Before(n.first)) {
@@ -495,6 +511,7 @@ func (n *node) absorb(c *node) {
 	if c.last.After(n.last) {
 		n.last = c.last
 	}
+	n.takeProject(c.project, c.projectAt)
 	n.own.Add(c.own)
 	n.share.Add(c.share)
 	mergeInto(&n.accounts, c.accounts)
@@ -523,7 +540,7 @@ func (n *node) usage(depth int) SessionUsage {
 	if depth >= maxDepth {
 		n.foldDescendants()
 	}
-	u := SessionUsage{ID: n.id, Parent: n.parent, First: n.first, Last: n.last, Own: n.own, Total: n.own,
+	u := SessionUsage{ID: n.id, Parent: n.parent, Project: n.project, First: n.first, Last: n.last, Own: n.own, Total: n.own,
 		Accounts: map[string]Traffic{}, Models: map[string]Traffic{}, share: n.share}
 	mergeInto(&u.Accounts, n.accounts)
 	mergeInto(&u.Models, n.models)
@@ -535,6 +552,9 @@ func (n *node) usage(depth int) SessionUsage {
 	for _, c := range n.children {
 		cu := c.usage(depth + 1)
 		u.Subagents = append(u.Subagents, cu)
+		if u.Project == "" {
+			u.Project = cu.Project // a root with no request of its own is still a project's session
+		}
 		u.Total.Add(cu.Total)
 		u.share.Add(cu.share)
 		mergeInto(&u.Accounts, cu.Accounts)

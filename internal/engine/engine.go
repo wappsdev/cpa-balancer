@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +69,11 @@ func New(cfg config.Config, host Host, now func() time.Time, rec *history.Record
 	}
 	e := &Engine{cfg: cfg, host: host, now: now, rec: rec, st: st, credentials: map[string]credential{}, switchedTo: map[string]bool{}, projects: affinity.NewProjects(cfg.Affinity.ProjectsDir, now), repos: affinity.NewRepos(now)}
 	e.repos.Restore(st.Affinity.Links)
+	if rec != nil { // sessions a header placed in a project, before a transcript could, keep it across a restart
+		for _, root := range rec.Sessions(now()).Week.AllRoots {
+			e.projects.Restore(root.ID, root.Project, root.Last)
+		}
+	}
 	e.mu.Lock()
 	e.recompute(now())
 	e.mu.Unlock()
@@ -153,7 +159,8 @@ func (e *Engine) OnUsage(rec pluginapi.UsageRecord) {
 		traffic.Failed = 1
 	}
 	session, parent := history.CanonicalSession(rec.SessionID, rec.ParentSessionID)
-	e.rec.AddTraffic(now, history.Source{Account: rec.AuthID, Model: rec.Model, Session: session, Parent: parent}, traffic)
+	root, _, _ := strings.Cut(session, "/")
+	e.rec.AddTraffic(now, history.Source{Account: rec.AuthID, Model: rec.Model, Session: session, Parent: parent, Project: e.projects.Tagged(root)}, traffic)
 	_, bucketed := e.bucketOf(rec.Model)
 	readings := quota.FromHeaders(rec.ResponseHeaders, bucketed || e.cfg.InFableShare(rec.Model), now)
 	if len(readings) == 0 {
@@ -173,6 +180,7 @@ func isClaude(req pluginapi.SchedulerPickRequest) bool {
 
 // Pick answers scheduler.pick. Its only I/O is the directory-name lookup of a session not seen before.
 func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
+	e.tagProject(req) // before any early return, so the status groups the session in every mode
 	if resp, ok := e.pinnedPick(req); ok {
 		return resp
 	}
@@ -202,6 +210,20 @@ func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPic
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.existing(b, candidates)
+}
+
+// tagProject remembers the project a claude request's X-Wapps-Project-Root header names as its
+// session's, unless a transcript already names one. A client that cannot write transcripts, such
+// as a job runner, sends the header; the folder then groups the session and picks its project's
+// account like a transcript's folder (see affinity.RootFolder, Projects.Folder).
+func (e *Engine) tagProject(req pluginapi.SchedulerPickRequest) {
+	if !isClaude(req) {
+		return
+	}
+	folder := affinity.RootFolder(req.Options.Headers)
+	if _, root := affinity.SessionID(req.Options.Headers); folder != "" && root != "" {
+		e.projects.Resolve(root, folder)
+	}
 }
 
 // Tick runs the periodic work: refresh credentials, probe, re-decide, anchor, persist.

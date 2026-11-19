@@ -233,7 +233,7 @@ choice), a worktree to see its sessions, and a session to see its subagents; the
 remembered in the browser. A session
 row has its id (first 8 characters; the full id is in the tooltip), when it was last seen, requests,
 tokens (cache reads and the accounts it used are in the tooltip) and its share of the window.
-Sessions with no known folder, and requests without a session id, are one group, `no project`. A
+Sessions with no known folder (no transcript and no project root header, see "Project affinity"), and requests without a session id, are one group, `no project`. A
 project's totals are summed from every session of the window, so they are complete even when the
 week lists only its 30 largest sessions; what the list leaves out is one line under the project.
 `/status` carries the same data as `sessions.five_hour` and `sessions.week`:
@@ -346,6 +346,24 @@ buckets, in `apply` mode and not paused; `shadow` and paused hand every pick to 
   then looked up again; a miss for 5 seconds, because Claude Code writes the transcript after the
   first request). A session with no header, no folder yet or
   an id that is not a plain one has no project: its pick is CPA's, as before.
+- **Project root header.** A client that cannot write transcripts under `affinity.projects_dir`, such
+  as a local job runner, can name its project in `X-Wapps-Project-Root: <absolute path of the
+  repository root>` on every request. The balancer writes the path as Claude Code names a folder
+  (every character that is not an ASCII letter or digit becomes `-`; `/home/u/proj` is
+  `-home-u-proj`) and uses that folder as the session's folder, but only while no transcript holds
+  one: a transcript always wins, and takes over as soon as the index finds it. The header is read
+  on every request of the Claude provider, in every mode, so the status groups the session even in
+  `shadow` mode or while paused (nothing is placed then). It is ignored when the value is not an
+  absolute path, is longer than 4096 bytes, has a control character or invalid UTF-8, is `/`, or
+  gives a folder name that is not a valid project (more than 255 bytes). The path is cleaned first
+  (`/a/b/` is `/a/b`). The folder then acts like a transcript's: it picks the project's home, a
+  folder pin on it applies (so a job follows its project's pin), and a git worktree path joins its
+  repository's project. A session with no transcript and no header stays in `no project`. The
+  folder is remembered in memory (the 5,000 most recently seen sessions) and recorded with the
+  session in the history, so the grouping lasts for the whole window and survives a restart; the
+  balancer reads it back from the last 7 days of history at start. The header is supplied by the
+  client, so a client can label its own session with any project. That changes the grouping of that
+  session and its project's pin choice, nothing else.
 - **Worktrees.** The git worktrees of one repository are one project. A folder name is a working
   directory with every character that is not a letter or a digit written as `-`, so it is ambiguous.
   The balancer finds the directory by walking the file system from `/` and matching the encoded names
@@ -427,8 +445,8 @@ full, fallback` or `no project`. Each project row and each main-session row has 
 route) at once, and `no pin` clears it, so the choice always shows which pin is active. A pin set in
 the config is shown and cannot be changed there. A pin on a folder or a session the window does not
 show is listed under the table ("Pins outside this window"), with "Unpin". A folder name is user
-data, so the page escapes it and the plugin keeps it out of its log, its recent changes and its
-history. The picks behind the card are kept in memory (500 sessions); homes and pins are in the
+data, so the page escapes it and the plugin keeps it out of its log and its recent changes. The history
+holds a folder name only for a session the project root header placed (see above). The picks behind the card are kept in memory (500 sessions); homes and pins are in the
 state file, which is written at once when a pin or a rebalance changes it. The page finds a session's
 folder through `affinity.session_projects` and a project's use through `affinity.projects` in
 `/status`, both read from the history and the folder names, so they survive a restart.

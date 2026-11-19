@@ -107,6 +107,9 @@ type Projects struct {
 	building chan struct{}      // open while a pass runs; closed when it ends
 
 	passes atomic.Int64 // passes started, for the tests
+
+	tagMu sync.Mutex
+	tags  map[string]tag // folders that headers gave to sessions with no transcript; see Tag
 }
 
 // indexed is the folder that holds a session's newest transcript file, and that file's time.
@@ -119,11 +122,21 @@ func NewProjects(dir string, now func() time.Time) *Projects {
 	return &Projects{dir: dir, now: now}
 }
 
-// Folder is the project folder of a root session, found by name. An unknown session has none. The
-// answer is as old as the index (at most indexTTL, plus the length of a pass), so a session resumed
-// from another folder moves to its current folder within that time, and a new session, whose
-// transcript is written after its first request, has its project within that time too.
+// Folder is the project folder of a root session, found by name. A transcript always wins; a
+// session with none has the folder its header gave it (see Tag), else none. The answer is as old
+// as the index (at most indexTTL, plus the length of a pass), so a session resumed from another
+// folder moves to its current folder within that time, and a new session, whose transcript is
+// written after its first request, has its project within that time too.
 func (p *Projects) Folder(sid string) (string, bool) {
+	if folder, ok := p.transcript(sid); ok {
+		return folder, true
+	}
+	folder := p.Tagged(sid)
+	return folder, folder != ""
+}
+
+// transcript is the folder that holds the session's transcript file, from the index.
+func (p *Projects) transcript(sid string) (string, bool) {
 	if p.dir == "" || !ValidSID(sid) {
 		return "", false
 	}
