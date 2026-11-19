@@ -127,7 +127,7 @@ function renderStatus(v) {
   $("accounts").innerHTML = (v.accounts || []).map(a => accountCard(a, v)).join("");
   $("waste").innerHTML = wasteHtml(v.accounts, short);
   $("extra-models-head").hidden = $("extra-models").hidden = !v.extra_models?.length;
-  $("extra-models").innerHTML = extraModelsHtml(v.extra_models, short);
+  $("extra-models").innerHTML = extraModelsHtml(v.extra_models, short) + advisorPinHtml(v.advisor_pin, short);
   renderSessions(v.sessions);
 
   $("changes").innerHTML = (v.changes || []).slice().reverse().slice(0, 12).map(c => `<li>
@@ -182,7 +182,27 @@ function accountCard(a, v) {
 
 // The models outside CPA's catalog, each with the accounts it is pinned to, in the order they are
 // tried. A request for one goes only to these accounts; with none ready, it is refused.
-const EXTRA_STATE = { ready: "", "held back": "warn", disabled: "bad", "not loaded": "bad" };
+// The warning when every account of the advisor pin is full or held back.
+const ADVISOR_OUT = "Mythos danışman: CVP hesaplarının hepsi dolu; danışmanı geçici olarak Fable'a çevirin";
+const EXTRA_STATE = { ready: "", "held back": "warn", full: "bad", disabled: "bad", "not loaded": "bad" };
+// The advisor pin: a request whose anthropic-beta starts with the prefix carries the advisor tool,
+// so it goes only to the accounts of the advisor's model, in this order, or is refused.
+function advisorPinHtml(pin, name) {
+  if (!pin) return "";
+  const chips = (pin.accounts || []).map((a, i) => {
+    const level = EXTRA_STATE[a.state] ?? "bad";
+    return `<span class="chip${level ? " " + level : ""}"><b>${i + 1}</b> ${esc(name(a.auth_file))}${a.state === "ready" ? "" : " · " + esc(a.state)}</span>`;
+  }).join("");
+  return `<article class="card account-card">
+    <div class="account-head">
+      <span class="name">Advisor</span>
+      <code>anthropic-beta: ${esc(pin.beta_prefix)}…</code> → <code>${esc(pin.model)}</code>
+      ${pin.all_out ? '<span class="chip bad">refused: no account ready</span>' : ""}
+    </div>
+    ${pin.all_out ? `<p class="banner bad">${esc(ADVISOR_OUT)}</p>` : ""}
+    <div class="order">${chips}</div>
+  </article>`;
+}
 function extraModelsHtml(models, name) {
   return (models || []).map(m => {
     const accounts = m.accounts || [];

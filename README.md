@@ -114,6 +114,29 @@ The plugin cannot see any of them, so neither the config check nor the page can 
   plugin's scheduler (it "fuses" it), but the extra models stay registered until the next config
   change or restart. Restart CPA, or remove `extra_models`, after a fuse is logged.
 
+### Advisor pin
+
+Claude Code sends a configured advisor as a server-side tool inside the main request: the body
+names the main model (for example `claude-opus-5-5`) and the tool names the advisor's model. The
+scheduler never sees the body, only the `anthropic-beta` header that turns the tool on
+(`advisor-tool-2026-03-01`). When the advisor's model may only be used through certain accounts,
+pin those requests to the accounts of its extra model:
+
+          advisor_pin:
+            model: claude-mythos-5-2      # an id from extra_models; its accounts serve the request
+            beta_prefix: advisor-tool-    # optional; this is the default
+
+- A request is pinned when any comma-separated value of any `anthropic-beta` header starts with
+  `beta_prefix`, in any letter case and with spaces around it. It goes to the first of the extra
+  model's accounts that CPA offers, or is refused (`extra_model_unavailable`), and never falls back.
+- The pin holds like an extra model's: over session pins, folder pins, fill, the home, CPA's own
+  pin, while paused and in shadow mode. A pinned request is not a placement of its session. A
+  request for an extra model keeps that model's own accounts, with or without the beta.
+- Without `advisor_pin` the header changes nothing.
+- The page lists the pin with its accounts and their states (`full` when the all-models week is at
+  its cap). When every account is full or held back it warns that the advisor should be moved to
+  Fable for now. The limits above (aliases, Home mode, a fused plugin) apply here too.
+
 ## Page
 
 Management Center → **Account Balancer** (sign in with "Remember password"):
