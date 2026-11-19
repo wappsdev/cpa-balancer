@@ -23,7 +23,15 @@ const (
 type Home struct {
 	Account string    `json:"account"`
 	Since   time.Time `json:"since"`
-	Last    time.Time `json:"last"` // when a request last used it
+	Last    time.Time `json:"last"`           // when a request last used it
+	Fill    *Fill     `json:"fill,omitempty"` // set when fill chose the account
+}
+
+// Fill is what fill saw of an account when it put a project there: when its week resets and the
+// room it had under its cap, in percent.
+type Fill struct {
+	ResetsAt time.Time `json:"resets_at"`
+	Room     float64   `json:"room"`
 }
 
 // Affinity is what the balancer remembers about projects: their homes, and the pins set on the page.
@@ -90,6 +98,14 @@ func (s *State) SetHome(project, account string, now time.Time) {
 		})
 		delete(a.Homes, oldest)
 	}
+}
+
+// PlaceHome places a project on account by fill: the home starts over, on the same account too, and
+// keeps what fill saw.
+func (s *State) PlaceHome(project, account string, fill *Fill, now time.Time) {
+	delete(s.Affinity.Homes, project)
+	s.SetHome(project, account, now)
+	s.Affinity.Homes[project].Fill = fill
 }
 
 // TouchHome notes that a request used the project's home.

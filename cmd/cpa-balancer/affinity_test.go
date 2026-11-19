@@ -82,7 +82,8 @@ func TestASchedulerPickOnTheWireUsesTheSessionsProject(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	v := pluginAPI{}.Status().(engine.View)
-	if v.Affinity == nil || v.Affinity.Sessions[affinitySession].Reason != engine.ReasonProject || v.Affinity.Sessions[affinitySession].Project != "-work-alpha" {
+	// the two weeks reset together, so fill places the project by room: on b
+	if v.Affinity == nil || v.Affinity.Sessions[affinitySession].Reason != engine.ReasonFill || v.Affinity.Sessions[affinitySession].Project != "-work-alpha" {
 		t.Fatalf("%+v", v.Affinity)
 	}
 	// a session of no known folder is unchanged

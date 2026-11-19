@@ -52,6 +52,7 @@ type Engine struct {
 	projects    *affinity.Projects     // finds a session's project folder by name
 	repos       *affinity.Repos        // finds the main repository of a folder: a worktree's sessions belong to it
 	picks       map[string]SessionPick // each recent session's last pick, in memory only; bounded
+	starts      map[string]started     // the account each recent main session started on, under fill; in memory, bounded
 	loads       map[string]int64       // each project's tokens over the last 7 days, read by Tick; placement weighs the homes by it
 	loadsAt     time.Time
 }

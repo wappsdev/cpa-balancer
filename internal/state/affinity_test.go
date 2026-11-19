@@ -73,6 +73,22 @@ func TestMovingAHomeKeepsItsOriginalSinceOnlyWhenTheAccountIsTheSame(t *testing.
 	}
 }
 
+func TestPlacingAHomeAgainStartsItOverWithWhatFillSaw(t *testing.T) {
+	s := New()
+	s.SetHome("-work-alpha", "a.json", now)
+	later := now.Add(time.Hour)
+	fill := &Fill{ResetsAt: now.Add(10 * time.Hour), Room: 12}
+	s.PlaceHome("-work-alpha", "a.json", fill, later)
+	h := s.Affinity.Homes["-work-alpha"]
+	if h.Account != "a.json" || !h.Since.Equal(later) || !h.Last.Equal(later) || h.Fill == nil || *h.Fill != *fill {
+		t.Fatalf("a placement starts the home over, on the same account too: %+v", h)
+	}
+	s.SetHome("-work-alpha", "b.json", later)
+	if s.Affinity.Homes["-work-alpha"].Fill != nil {
+		t.Fatal("a move by another rule drops what fill saw")
+	}
+}
+
 func TestTheHomesAreBoundedAndTheLeastRecentlyUsedGoFirst(t *testing.T) {
 	s := New()
 	for i := 0; i < MaxHomes; i++ {

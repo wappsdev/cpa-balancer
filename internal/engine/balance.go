@@ -149,6 +149,8 @@ type balancer struct {
 	// closed holds the accounts that cannot take a project now (in a detour): they keep a project
 	// they already have, and count in the shares, but pick never moves one onto them.
 	closed map[string]bool
+	// only, when set, holds the accounts pick may choose at all: fill's first resets.
+	only map[string]bool
 }
 
 func (e *Engine) newBalancer(accounts []string, now time.Time) *balancer {
@@ -172,7 +174,7 @@ func (e *Engine) newBalancer(accounts []string, now time.Time) *balancer {
 func (b *balancer) pick(weight, total float64, prefer string) string {
 	best, bestScore := "", 0.0
 	for _, a := range b.accounts {
-		if b.closed[a] && a != prefer {
+		if (b.closed[a] && a != prefer) || (b.only != nil && !b.only[a]) {
 			continue
 		}
 		score := b.share[a] - (b.load[a]+weight)/total
@@ -256,10 +258,15 @@ func (e *Engine) Rebalance(apply bool) RebalanceResult {
 	if apply {
 		res.Applied = true
 		for _, m := range res.Plan {
-			if m.From != m.To {
+			switch {
+			case m.From == m.To:
+				continue
+			case e.cfg.Fill.Enabled:
+				e.st.PlaceHome(m.Project, m.To, e.fillWhy(m.To, now), now)
+			default:
 				e.st.SetHome(m.Project, m.To, now)
-				moved++
 			}
+			moved++
 		}
 		if moved > 0 {
 			e.dirty = true
@@ -322,6 +329,19 @@ func (e *Engine) plan(now time.Time) (res RebalanceResult) {
 		return res
 	}
 	b.closed = closed
+	if e.cfg.Fill.Enabled {
+		// the same order a session that starts is placed by, so a plan never undoes fill
+		var usable []string
+		for _, a := range candidates {
+			if !closed[a] {
+				usable = append(usable, a)
+			}
+		}
+		b.only = map[string]bool{}
+		for _, a := range e.fillFirst(usable, now) {
+			b.only[a] = true
+		}
+	}
 	var total float64
 	for _, t := range ts {
 		if _, ok := b.share[t.account]; t.pinned && ok {

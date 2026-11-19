@@ -179,3 +179,20 @@ func TestFiveHourStepsPerAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFillIsOnByDefaultAndCanBeTurnedOff(t *testing.T) {
+	cfg, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Fill.Enabled {
+		t.Fatal("fill must default to on")
+	}
+	cfg, err = Parse([]byte(minimal + "fill: {enabled: false}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Fill.Enabled {
+		t.Fatal("fill.enabled: false turns fill off")
+	}
+}

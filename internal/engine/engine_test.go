@@ -89,6 +89,9 @@ func testConfig(t *testing.T) config.Config {
 	c.Accounts = []config.Account{{AuthFile: W}, {AuthFile: G, Reserve: config.ReserveDefault}}
 	c.Buckets.Main = []string{Opus}
 	c.Buckets.Fable = []string{Fable}
+	// The placement tests describe the balancing rule fill replaces when it is off, so they run with
+	// it off: they are what turning the switch off gives back. fill_test.go turns it on.
+	c.Fill.Enabled = false
 	return c
 }
 

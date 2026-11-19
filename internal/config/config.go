@@ -98,6 +98,14 @@ type Config struct {
 	Affinity   Affinity   `yaml:"affinity" json:"affinity"`
 	// ExtraModels are models outside CPA's catalog, each pinned to its own accounts.
 	ExtraModels []ExtraModel `yaml:"extra_models,omitempty" json:"extra_models,omitempty"`
+	Fill        Fill         `yaml:"fill" json:"fill"`
+}
+
+// Fill puts a session that starts without a pin on the usable account whose weekly reset comes
+// first, so an account's week is spent before it resets. Off, a new project goes to the account
+// with the most room against its load.
+type Fill struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 func Default() Config {
@@ -112,6 +120,7 @@ func Default() Config {
 		},
 		Anchor:   Anchor{Enabled: true, Model: "claude-haiku-4-5-20251001", FallbackModel: "claude-sonnet-5-5"},
 		Affinity: Affinity{ProjectsDir: "~/.claude/projects"},
+		Fill:     Fill{Enabled: true},
 	}
 }
 

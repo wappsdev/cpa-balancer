@@ -21,6 +21,8 @@ const (
 	ReasonFolderPinFallback  = "folder_pin_fallback"  // the folder's pinned account is full or held back
 	ReasonSessionPinFallback = "session_pin_fallback" // the session's pinned account is full or held back
 	ReasonNoProject          = "no_project"           // no project found: CPA's own order
+	ReasonFill               = "fill"                 // fill placed the project: its account resets first and has room
+	ReasonRunning            = "running"              // the project moved on, but a running session stays where it started
 )
 
 // Where a pin was set.
@@ -38,14 +40,17 @@ type SessionPick struct {
 	Reason  string    `json:"reason"`
 	Project string    `json:"project,omitempty"` // the folder; user data, escaped on the page
 	At      time.Time `json:"at"`
+	// Fill is what fill saw of the account when it placed the project (reason fill only).
+	Fill *state.Fill `json:"fill,omitempty"`
 }
 
 type HomeView struct {
-	Project string    `json:"project"`
-	Account string    `json:"account"`
-	Since   time.Time `json:"since"`
-	Last    time.Time `json:"last"`
-	Full    bool      `json:"full"` // the account is at its weekly cap: the project moves on its next request
+	Project string      `json:"project"`
+	Account string      `json:"account"`
+	Since   time.Time   `json:"since"`
+	Last    time.Time   `json:"last"`
+	Full    bool        `json:"full"`           // the account is at its weekly cap: the project moves on its next request
+	Fill    *state.Fill `json:"fill,omitempty"` // what fill saw when it placed the project
 }
 
 type PinView struct {
@@ -231,7 +236,22 @@ func (e *Engine) place(b quota.Bucket, id, root, folder, project string, candida
 		e.remember(id, resp.AuthID, fallback, "", now)
 		return resp
 	}
-	if home := e.homeOf(project, now); home != "" && usable(home) {
+	if pinned == "" && e.cfg.Fill.Enabled {
+		if home, why := e.sessionHome(root, project, now); home != "" && usable(home) {
+			reason := ReasonProject
+			if h := e.st.Affinity.Homes[project]; h == nil || h.Account != home {
+				reason = ReasonRunning
+			}
+			if why != nil {
+				reason = ReasonFill
+			}
+			resp := use(home, reason)
+			p := e.picks[id]
+			p.Fill = why
+			e.picks[id] = p
+			return resp
+		}
+	} else if home := e.homeOf(project, now); home != "" && usable(home) {
 		if pinned != "" {
 			return use(home, fallback)
 		}
@@ -309,7 +329,7 @@ func (e *Engine) affinityView(now time.Time) *AffinityView {
 		if e.isWorktree(project) {
 			continue // a home stored before worktrees joined their repository: no longer a project
 		}
-		v.Homes = append(v.Homes, HomeView{Project: project, Account: h.Account, Since: h.Since, Last: h.Last,
+		v.Homes = append(v.Homes, HomeView{Project: project, Account: h.Account, Since: h.Since, Last: h.Last, Fill: h.Fill,
 			Full: e.standing(h.Account, quota.Main, now) == policy.Full})
 	}
 	sort.Slice(v.Homes, func(i, j int) bool {

@@ -232,6 +232,9 @@ func configure(req []byte) []byte {
 		}
 		e := engine.New(cfg, host, time.Now, recorder)
 		previous := current
+		if previous != nil {
+			e.Inherit(previous) // a running session stays where it started across a config change
+		}
 		current, configYAML, configErr = e, string(lr.ConfigYAML), ""
 		if stop == nil {
 			stop = make(chan struct{})
