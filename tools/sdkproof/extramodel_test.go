@@ -8,7 +8,9 @@
 //   - every claude auth then supports the model, so only the scheduler can pin it;
 //   - a scheduler Reject or error ends the request; a pick the scheduler does not handle falls
 //     back to the built-in selector, which may choose any claude auth;
-//   - the model stays listed while the plugin is loaded, whatever the pinned auth's state.
+//   - the model stays listed while the plugin is loaded, whatever the pinned auth's state;
+//   - the client's anthropic-beta header reaches the scheduler for a catalog model, so the advisor
+//     pin can hold for it (streams included), and its reject ends that request too.
 package cliproxy
 
 import (
@@ -40,22 +42,30 @@ func (proofRegistrar) RegisterModels(context.Context, pluginapi.ModelRegistratio
 	}}}, nil
 }
 
-// proofScheduler pins proofModel to "auth-b" and answers as mode says.
+// proofScheduler pins proofModel to "auth-b" and answers as mode says. In "advisor" mode it pins a
+// request whose anthropic-beta carries the advisor tool to "auth-b", and sends any other to "auth-a".
 type proofScheduler struct {
 	mu     sync.Mutex
-	mode   string // "pin", "error", "unhandled"
+	mode   string // "pin", "advisor", "error", "unhandled"
 	models []string
+	betas  []string // the anthropic-beta values each pick saw, joined
 }
 
 func (s *proofScheduler) Pick(_ context.Context, req pluginapi.SchedulerPickRequest) (pluginapi.SchedulerPickResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.models = append(s.models, req.Model)
+	beta := strings.Join(http.Header(req.Options.Headers).Values("Anthropic-Beta"), ",")
+	s.betas = append(s.betas, beta)
 	switch s.mode {
 	case "error":
 		return pluginapi.SchedulerPickResponse{}, errorString("plugin failed")
 	case "unhandled":
 		return pluginapi.SchedulerPickResponse{}, nil
+	case "advisor":
+		if !strings.Contains(strings.ToLower(beta), "advisor-tool-") {
+			return pluginapi.SchedulerPickResponse{AuthID: "auth-a", Handled: true}, nil
+		}
 	}
 	for _, c := range req.Candidates {
 		if c.ID == "auth-b" {
@@ -187,6 +197,45 @@ func TestProofExtraModelThroughRegistrarAndScheduler(t *testing.T) {
 		t.Fatalf("stream served by %v, want only auth-b", got)
 	}
 
+	// The advisor pin: a request for a catalog model reaches the scheduler with the client's
+	// anthropic-beta header, so a pin by that header holds, for streams too; without it the same
+	// model goes elsewhere.
+	sched.mode = "advisor"
+	advisor := cliproxyexecutor.Options{Headers: http.Header{"Anthropic-Beta": {"oauth-2025-04-20, Advisor-Tool-2026-03-01"}}}
+	runAdvisor := func() error {
+		_, err := service.coreManager.Execute(ctx, []string{"claude"}, cliproxyexecutor.Request{Model: "claude-opus-5-5"}, advisor)
+		return err
+	}
+	for i := 0; i < 3; i++ {
+		if err := runAdvisor(); err != nil {
+			t.Fatalf("execute with the advisor beta: %v", err)
+		}
+	}
+	if got := exec.take(); !slices.Equal(got, []string{"auth-b", "auth-b", "auth-b"}) {
+		t.Fatalf("a request with the advisor beta was served by %v, want only auth-b", got)
+	}
+	if last := sched.betas[len(sched.betas)-1]; !strings.Contains(last, "Advisor-Tool-2026-03-01") {
+		t.Fatalf("the scheduler saw anthropic-beta %q: the client's header must reach it", last)
+	}
+	advisorStream := advisor
+	advisorStream.Stream = true
+	stream, err = service.coreManager.ExecuteStream(ctx, []string{"claude"}, cliproxyexecutor.Request{Model: "claude-opus-5-5"}, advisorStream)
+	if err != nil {
+		t.Fatalf("stream with the advisor beta: %v", err)
+	}
+	for range stream.Chunks {
+	}
+	if got := exec.take(); !slices.Equal(got, []string{"auth-b"}) {
+		t.Fatalf("a stream with the advisor beta was served by %v, want only auth-b", got)
+	}
+	if err := run("claude-opus-5-5"); err != nil {
+		t.Fatalf("execute without the beta: %v", err)
+	}
+	if got := exec.take(); !slices.Equal(got, []string{"auth-a"}) {
+		t.Fatalf("a request without the beta was served by %v, want auth-a", got)
+	}
+	sched.mode = "pin"
+
 	// An upstream failure on the pinned auth is not retried on another auth.
 	// 429 comes last: the cooldown it starts outlives the reset below.
 	for _, status := range []int{http.StatusInternalServerError, http.StatusNotFound, http.StatusTooManyRequests} {
@@ -231,6 +280,15 @@ func TestProofExtraModelThroughRegistrarAndScheduler(t *testing.T) {
 	if !listed {
 		t.Fatal("the model left the list when the pinned auth was disabled")
 	}
+	// A request with the advisor beta for a catalog model is refused too: the reject ends it.
+	sched.mode = "advisor"
+	if err := runAdvisor(); err == nil || !strings.Contains(err.Error(), "pinned auth not available") {
+		t.Fatalf("with the pinned auth disabled, a request with the advisor beta: err = %v, want the scheduler's reject", err)
+	}
+	if got := exec.take(); len(got) != 0 {
+		t.Fatalf("with the pinned auth disabled a request with the advisor beta reached %v", got)
+	}
+	sched.mode = "pin"
 
 	// A scheduler error ends the request too.
 	sched.mode = "error"
