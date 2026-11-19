@@ -13,6 +13,7 @@ test:
 	node internal/web/grouped_test.mjs
 	node internal/web/accountuse_test.mjs
 	node internal/web/transcripts_test.mjs
+	node internal/web/extramodels_test.mjs
 
 build:
 	go build -buildmode=c-shared -o dist/cpa-balancer.dylib ./cmd/cpa-balancer

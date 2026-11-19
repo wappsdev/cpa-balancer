@@ -69,6 +69,31 @@ The config lives in CPA's config file under `plugins.configs.cpa-balancer`:
 An invalid config is not applied: the plugin keeps the previous one and reports
 `config_error` on its page.
 
+## Extra models
+
+A Claude model that CPA's catalog does not have can be served through chosen accounts only (for
+example a model that only one account is approved for):
+
+          extra_models:
+            - id: claude-new-model
+              display_name: Claude New Model
+              accounts: [claude-xxxxxxxx-second@example.com.json]   # tried in this order
+              context_length: 1000000
+              max_completion_tokens: 128000
+              thinking_levels: [low, medium, high, xhigh, max]       # adaptive thinking; omit for none
+
+- The plugin registers the model with CPA for the `claude` provider (CPA's model registrar), so the
+  built-in claude executor serves it. A plugin cannot read CPA's model registry, so the context,
+  output limit and thinking levels are set here.
+- CPA then offers every claude account for the model. The balancer's scheduler sends a request to
+  the first of the model's accounts that CPA offers, and refuses it (`extra_model_unavailable`)
+  when none is offered. It never falls back to another account. The pin holds while paused, in
+  shadow mode, and over folder, session and CPA's own pins.
+- Each account must be one of `accounts`. An extra model cannot also be in a bucket.
+- CPA asks for the models when it loads the plugin and after a config change. The model stays in
+  `/v1/models` while the plugin is loaded, even while none of its accounts is ready; a request
+  then gets the refusal. The page lists each extra model with the state of its accounts.
+
 ## Page
 
 Management Center → **Account Balancer** (sign in with "Remember password"):

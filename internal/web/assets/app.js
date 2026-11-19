@@ -125,6 +125,8 @@ function renderStatus(v) {
     : choice("Main bucket", v.decision.main, v.decision.main_order) + choice("Fable bucket", v.decision.fable, v.decision.fable_order);
 
   $("accounts").innerHTML = (v.accounts || []).map(a => accountCard(a, v)).join("");
+  $("extra-models-head").hidden = $("extra-models").hidden = !v.extra_models?.length;
+  $("extra-models").innerHTML = extraModelsHtml(v.extra_models, short);
   renderSessions(v.sessions);
 
   $("changes").innerHTML = (v.changes || []).slice().reverse().slice(0, 12).map(c => `<li>
@@ -175,6 +177,27 @@ function accountCard(a, v) {
       <button type="button" class="button" data-recheck="${esc(a.auth_file)}"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Recheck</span></button>
     </div>
   </article>`;
+}
+
+// The models outside CPA's catalog, each with the accounts it is pinned to, in the order they are
+// tried. A request for one goes only to these accounts; with none ready, it is refused.
+const EXTRA_STATE = { ready: "", "held back": "warn", disabled: "bad", "not loaded": "bad" };
+function extraModelsHtml(models, name) {
+  return (models || []).map(m => {
+    const accounts = m.accounts || [];
+    const chips = accounts.map((a, i) => {
+      const level = EXTRA_STATE[a.state] ?? "bad";
+      return `<span class="chip${level ? " " + level : ""}"><b>${i + 1}</b> ${esc(name(a.auth_file))}${a.state === "ready" ? "" : " · " + esc(a.state)}</span>`;
+    }).join("");
+    return `<article class="card account-card">
+    <div class="account-head">
+      <span class="name">${esc(m.display_name)}</span>
+      <code>${esc(m.id)}</code>
+      ${accounts.some(a => a.state === "ready") ? "" : '<span class="chip bad">refused: no account ready</span>'}
+    </div>
+    <div class="order">${chips}</div>
+  </article>`;
+  }).join("");
 }
 
 async function refreshStatus() {
