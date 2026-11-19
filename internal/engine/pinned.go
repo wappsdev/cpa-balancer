@@ -26,6 +26,14 @@ import (
 // request is refused. A main session stays on the pinned account it started on (its prompt cache
 // is there) until that account is full; while the account cannot take a request for a passing
 // reason (a 5-hour cap, a cooldown), that request goes to the next account and the session returns.
+//
+// Before the tiers, a session that is placed by the normal path's pins (its own pin, else its
+// project's folder pin, the project of a worktree being its main repository) is offered the account
+// the pin names, when that account is one of the model's and is in tier 1. A pin that names another
+// account, or one that is in no tier 1 now, changes nothing. The pin decides only where a session
+// starts or moves to (and where a detour goes): a session on an account of the set stays on it
+// while that account is usable, because its prompt cache is there. Like the normal path's pins, it
+// is off while paused and in shadow mode.
 
 // pinTier is an account's tier for a pinned request in a bucket, 0 when it cannot take one. Callers
 // hold e.mu.
@@ -64,7 +72,9 @@ func (e *Engine) pinBucket(model string) quota.Bucket {
 }
 
 // pickPinned chooses among m's accounts for a request; callers hold e.mu. See the rules above.
-func (e *Engine) pickPinned(m config.ExtraModel, req pluginapi.SchedulerPickRequest, now time.Time) (pluginapi.SchedulerPickResponse, bool) {
+// folder and project are the session's own folder and the project its pins belong to, looked up
+// before the lock (see place).
+func (e *Engine) pickPinned(m config.ExtraModel, req pluginapi.SchedulerPickRequest, folder, project string, now time.Time) (pluginapi.SchedulerPickResponse, bool) {
 	candidates := map[string]bool{}
 	for _, c := range req.Candidates {
 		candidates[c.ID] = true
@@ -82,6 +92,7 @@ func (e *Engine) pickPinned(m config.ExtraModel, req pluginapi.SchedulerPickRequ
 	b := e.pinBucket(req.Model)
 	_, root := affinity.SessionID(req.Options.Headers)
 	key := root + "\x00" + m.ID
+	prefer := e.preferredPin(m, root, folder, project, b, candidates, now)
 	if s, ok := e.pinStarts[key]; ok && root != "" && slices.Contains(m.Accounts, s.account) {
 		switch {
 		case candidates[s.account] && e.pinTier(s.account, b, now) == 1:
@@ -89,13 +100,13 @@ func (e *Engine) pickPinned(m config.ExtraModel, req pluginapi.SchedulerPickRequ
 			return use(s.account)
 		case e.standing(s.account, b, now) != policy.Full:
 			// a detour for this request: the session keeps its account
-			if a := e.firstPinned(m, b, candidates, now); a != "" {
+			if a := e.firstPinned(m, b, candidates, prefer, now); a != "" {
 				return use(a)
 			}
 			return pluginapi.SchedulerPickResponse{}, false
 		}
 	}
-	a := e.firstPinned(m, b, candidates, now)
+	a := e.firstPinned(m, b, candidates, prefer, now)
 	if a == "" {
 		return pluginapi.SchedulerPickResponse{}, false
 	}
@@ -105,9 +116,25 @@ func (e *Engine) pickPinned(m config.ExtraModel, req pluginapi.SchedulerPickRequ
 	return use(a)
 }
 
-// firstPinned is the first of m's accounts CPA offers by tier, then by reset, then in m's order; ""
-// when none can take the request. Callers hold e.mu.
-func (e *Engine) firstPinned(m config.ExtraModel, b quota.Bucket, candidates map[string]bool, now time.Time) string {
+// preferredPin is the account the session's pin names, if it is one of m's, CPA offers it and it is
+// in tier 1; else "". Callers hold e.mu.
+func (e *Engine) preferredPin(m config.ExtraModel, root, folder, project string, b quota.Bucket, candidates map[string]bool, now time.Time) string {
+	if root == "" || e.cfg.Mode != "apply" || e.cfg.Paused {
+		return ""
+	}
+	_, account := e.pinFor(root, folder, project)
+	if account != "" && slices.Contains(m.Accounts, account) && candidates[account] && e.pinTier(account, b, now) == 1 {
+		return account
+	}
+	return ""
+}
+
+// firstPinned is prefer when it is not empty, else the first of m's accounts CPA offers by tier,
+// then by reset, then in m's order; "" when none can take the request. Callers hold e.mu.
+func (e *Engine) firstPinned(m config.ExtraModel, b quota.Bucket, candidates map[string]bool, prefer string, now time.Time) string {
+	if prefer != "" {
+		return prefer
+	}
 	type option struct {
 		account string
 		tier    int
@@ -149,8 +176,14 @@ func (e *Engine) pinnedPick(req pluginapi.SchedulerPickRequest) (resp pluginapi.
 			return pluginapi.SchedulerPickResponse{}, false
 		}
 	}
+	// the folder is looked up before the lock is taken: it reads directory names and git files
+	var folder, project string
+	if _, root := affinity.SessionID(req.Options.Headers); root != "" {
+		folder, _ = e.projects.Folder(root)
+		project = e.repos.Of(folder).Project
+	}
 	e.mu.Lock()
-	resp, picked := e.pickPinned(m, req, e.now())
+	resp, picked := e.pickPinned(m, req, folder, project, e.now())
 	e.mu.Unlock()
 	switch {
 	case picked:

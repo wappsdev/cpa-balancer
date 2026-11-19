@@ -92,8 +92,9 @@ A Claude Mythos model that CPA's catalog does not have can be served through cho
 - CPA then offers every claude account for the model. The balancer's scheduler sends a request
   only to one of the model's accounts that CPA offers, and refuses it (`extra_model_unavailable`)
   when none of them can take it. It never falls back to another account. The pin holds while
-  paused, in shadow mode, and over folder, session and CPA's own pins (CPA's pin is kept when it
-  names one of the model's accounts).
+  paused, in shadow mode, and over CPA's own pin (kept when it names one of the model's accounts).
+  A session pin or a folder pin never moves a request to an account outside the model's set; one
+  that names an account of the set is a preference, described below.
 - Among the model's accounts the choice follows the normal path's rules, in tiers. First the
   usable ones: under their caps, their reserve included, with a fresh reading, not held back by
   CPA. If there is none, the ones held back by their reserve only: under `final_cap`, with the
@@ -102,9 +103,24 @@ A Claude Mythos model that CPA's catalog does not have can be served through cho
   Within a tier the weekly reset that comes first goes first, then the order in `accounts`. An
   account at `final_cap` or its 5-hour cap, or one CPA holds back, is never chosen; with none
   left the request is refused. The order does not depend on `fill.enabled`.
+- Before the tiers, the pin of the request's session is tried. It is found as on the normal path:
+  the session's own pin, else its project's folder pin (`affinity.folder_pins` or a pin set on the
+  page; a worktree's project is its main repository, unless the worktree has a pin of its own, and
+  a session with no transcript takes its project from the `X-Wapps-Project-Root` header). The
+  session pin outranks the folder pin, and the first one found decides alone: a session pin that
+  cannot be used is not replaced by the folder pin. If that pin names an account of the model's
+  set, CPA offers it, and it is in the first tier (usable now), the request goes there, even when
+  another account resets first. Otherwise (the account is not in the set, is at a cap, is held
+  back by its reserve or by CPA, or has no fresh reading) the pin changes nothing and the tiers
+  decide as above. The pin is not used while paused or in shadow mode, as on the normal path.
+  It applies the same way to a request pinned by `advisor_pin`, within the advisor model's accounts.
 - A main session stays on the account it started on (its prompt cache is there) until that
   account is full. A request that account cannot take for a passing reason (a 5-hour cap, a
-  cooldown) goes to the next account; the session then returns.
+  cooldown) goes to the next account; the session then returns. The pin above decides only where
+  a session starts, where it moves to when its account is full, and where such a detour goes: a
+  session that already uses an account of the set stays on it while that account is usable, even
+  if the pin names another account that is usable too. A session that starts while its pinned
+  account is out stays where it started when the pinned account comes back.
 - The scheduler matches the model name the way CPA routes it: spaces around it, letter case, a
   thinking suffix such as `(high)`, an auth prefix and a `[1m]` marker do not escape the pin.
 - An id must start with `claude-mythos-` (lower case). Every request for an extra model is pinned,
@@ -179,8 +195,8 @@ pin those requests to the accounts of its extra model:
   `betas` of another type. CPA's plugin host cannot remove a header after the pick (it drops an after-auth
   interceptor's `ClearHeaders`), so the marker stays in the request; CPA's claude executor
   forwards only its own list of client headers, and the marker is not on it.
-- A pinned request goes to one of the extra model's accounts, chosen by the same tiers, reset
-  order and session stickiness as the model itself, or is refused (`extra_model_unavailable`),
+- A pinned request goes to one of the extra model's accounts, chosen by the same pin preference,
+  tiers, reset order and session stickiness as the model itself, or is refused (`extra_model_unavailable`),
   and never falls back. When none of the pinned accounts can take a request by the balancer's own
   readings, the interceptor ends it before the pick with HTTP 429 and an Anthropic error body
   (`rate_limit_error`) that says what to do: "All accounts approved for the `<model>` advisor are
@@ -192,8 +208,10 @@ pin those requests to the accounts of its extra model:
 - Until a configuration is accepted (for example the first one is invalid), a request with the
   advisor by the default rule (`advisor-tool-`, or a body with an `advisor_` tool) is refused
   rather than handed to CPA's order.
-- The pin holds like an extra model's: over session pins, folder pins, fill, the home, CPA's own
-  pin, while paused and in shadow mode. A pinned request is not a placement of its session. A
+- The pin holds like an extra model's: over fill, the home, CPA's own pin, while paused and in
+  shadow mode. Session and folder pins only choose among the advisor model's accounts, as for an
+  extra model (see above). A pinned request is not a placement of its session, so the Sessions
+  card shows no reason for it. A
   request for an extra model keeps that model's own accounts, with or without the beta.
 - Without `advisor_pin` the header changes nothing.
 - The page lists the pin with its accounts and their states (`reserve` when only the reserve holds
