@@ -71,12 +71,12 @@ An invalid config is not applied: the plugin keeps the previous one and reports
 
 ## Extra models
 
-A Claude model that CPA's catalog does not have can be served through chosen accounts only (for
-example a model that only one account is approved for):
+A Claude Mythos model that CPA's catalog does not have can be served through chosen accounts only
+(for example a model that only one account is approved for):
 
           extra_models:
-            - id: claude-new-model
-              display_name: Claude New Model
+            - id: claude-mythos-5-2
+              display_name: Claude Mythos 5.2
               accounts: [claude-xxxxxxxx-second@example.com.json]   # tried in this order
               context_length: 1000000
               max_completion_tokens: 128000
@@ -89,10 +89,28 @@ example a model that only one account is approved for):
   the first of the model's accounts that CPA offers, and refuses it (`extra_model_unavailable`)
   when none is offered. It never falls back to another account. The pin holds while paused, in
   shadow mode, and over folder, session and CPA's own pins.
+- The scheduler matches the model name the way CPA routes it: spaces around it, letter case, a
+  thinking suffix such as `(high)`, an auth prefix and a `[1m]` marker do not escape the pin.
+- An id must start with `claude-mythos-` (lower case). Every request for an extra model is pinned,
+  so an id that is also a catalog model would pin all of that model's traffic. The plugin cannot
+  read CPA's catalog, and CPA updates the catalog from the network, so the family name is the rule.
 - Each account must be one of `accounts`. An extra model cannot also be in a bucket.
 - CPA asks for the models when it loads the plugin and after a config change. The model stays in
   `/v1/models` while the plugin is loaded, even while none of its accounts is ready; a request
   then gets the refusal. The page lists each extra model with the state of its accounts.
+- After an upstream error CPA cools the account down; requests for the model are refused until
+  the cooldown ends.
+
+**Limits: in these cases the pin does not hold and a request can reach any claude account.**
+The plugin cannot see any of them, so neither the config check nor the page can warn about them.
+
+- **Never alias an extra model.** An `oauth-model-alias` entry, global or on one auth, whose
+  upstream name is an extra model lets a request for the alias name pass the scheduler unmatched.
+  A plugin's model registrar gets no view of CPA's alias table.
+- **CPA's Home mode.** With Home mode on, CPA picks accounts without the plugin scheduler.
+- **A fused plugin.** When CPA recovers a panic inside its plugin adapter it stops calling the
+  plugin's scheduler (it "fuses" it), but the extra models stay registered until the next config
+  change or restart. Restart CPA, or remove `extra_models`, after a fuse is logged.
 
 ## Page
 

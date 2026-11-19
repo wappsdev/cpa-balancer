@@ -284,9 +284,9 @@ func emailOf(authFile string) string {
 	return strings.TrimSuffix(authPrefix.ReplaceAllString(authFile, ""), ".json")
 }
 
-// Names is each account's name, by auth file: its label, else the e-mail's local part (adnan for
-// account-a@example.com), with the domain added when two unlabelled accounts share a local part
-// (adnan-wapps, adnan-gmail). The Management Center, the HUD and their commands all use these.
+// Names is each account's name, by auth file: its label, else the e-mail's local part (user for
+// user@example.com), with the domain added when two unlabelled accounts share a local part
+// (user-example, user-sample). The Management Center, the HUD and their commands all use these.
 func (c Config) Names() map[string]string {
 	split := func(authFile string) (local, domain string) {
 		e := emailOf(authFile)
