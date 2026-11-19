@@ -184,17 +184,25 @@ var markAdvisor = pluginapi.RequestInterceptResponse{Headers: http.Header{config
 // interceptBefore marks a request whose body carries the advisor, before an account is chosen. CPA
 // adds the advisor beta itself only after the pick, so without the marker such a request would
 // pass the pin. Without advisor_pin nothing is marked; with no configuration at all the default
-// rule marks it, and the pick refuses it.
+// rule marks it, and the pick refuses it. A pinned request none of whose accounts can take it is
+// ended here with 429 and an Anthropic error body, rather than by the scheduler's refusal, which
+// CPA answers with 500.
 func interceptBefore(r pluginapi.RequestInterceptRequest) pluginapi.RequestInterceptResponse {
-	prefix := config.DefaultAdvisorBeta
-	if e := engineNow(); e != nil {
-		p := e.Config().AdvisorPin
-		if p == nil {
-			return pluginapi.RequestInterceptResponse{}
+	e := engineNow()
+	if e == nil {
+		if config.AdvisorInBody(r.Body, config.DefaultAdvisorBeta) {
+			return markAdvisor
 		}
-		prefix = p.BetaPrefix
+		return pluginapi.RequestInterceptResponse{}
 	}
-	if config.AdvisorInBody(r.Body, prefix) {
+	p := e.Config().AdvisorPin
+	marked := p != nil && config.AdvisorInBody(r.Body, p.BetaPrefix)
+	if reason, refused := e.EarlyRefusal(r.Model, r.Headers, marked, r.Metadata); refused {
+		body, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "rate_limit_error", "message": reason}})
+		return pluginapi.RequestInterceptResponse{Terminate: true, StatusCode: http.StatusTooManyRequests,
+			ResponseHeaders: http.Header{"Content-Type": {"application/json"}}, ResponseBody: body}
+	}
+	if marked {
 		return markAdvisor
 	}
 	return pluginapi.RequestInterceptResponse{}

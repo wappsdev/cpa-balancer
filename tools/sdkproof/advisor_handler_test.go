@@ -5,7 +5,8 @@
 // manager. It proves what the advisor pin relies on when the advisor is only in the body (CPA adds
 // its beta after the pick):
 //   - a header a before-auth request interceptor adds reaches the scheduler's pick;
-//   - a scheduler reject ends the request with HTTP 500, and its reason is the error's message.
+//   - a scheduler reject ends the request with HTTP 500, and its reason is the error's message;
+//   - an interceptor that ends the request itself answers the client with its status (429) and body.
 //
 // An after-auth interceptor cannot remove that header again: the plugin host drops ClearHeaders on
 // that path. The claude executor forwards only its own list of client headers, which the marker is
@@ -36,11 +37,17 @@ const (
 	advisorText = "All accounts approved for the claude-proof-advisor advisor are unavailable; switch the advisor model or wait for a reset"
 )
 
-// markInterceptor marks a body with an advisor_ tool before the pick.
-type markInterceptor struct{}
+// markInterceptor marks a body with an advisor_ tool before the pick, or, while out is set, ends
+// the request with 429 as the plugin does when no pinned account can take it.
+type markInterceptor struct{ out *bool }
 
-func (markInterceptor) InterceptRequestBeforeAuth(_ context.Context, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
+func (m markInterceptor) InterceptRequestBeforeAuth(_ context.Context, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
 	if strings.Contains(string(req.Body), `"type":"advisor_`) {
+		if *m.out {
+			return pluginapi.RequestInterceptResponse{Terminate: true, StatusCode: http.StatusTooManyRequests,
+				ResponseHeaders: http.Header{"Content-Type": {"application/json"}},
+				ResponseBody:    []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"` + advisorText + `"}}`)}, nil
+		}
 		return pluginapi.RequestInterceptResponse{Headers: http.Header{marker: {"1"}}}, nil
 	}
 	return pluginapi.RequestInterceptResponse{}, nil
@@ -113,9 +120,10 @@ func TestProofAnAdvisorOnlyInTheBodyIsPinnedThroughTheHandler(t *testing.T) {
 	ctx := context.Background()
 	host := pluginhost.New()
 	sched := &pinScheduler{}
+	interceptorOut := false
 	host.RegisterPluginForTest("balancer", pluginapi.Plugin{
 		Metadata:     pluginapi.Metadata{Name: "balancer", Version: "1.0.0"},
-		Capabilities: pluginapi.Capabilities{RequestInterceptor: markInterceptor{}, Scheduler: sched},
+		Capabilities: pluginapi.Capabilities{RequestInterceptor: markInterceptor{out: &interceptorOut}, Scheduler: sched},
 	})
 	manager := coreauth.NewManager(nil, nil, nil)
 	manager.SetPluginScheduler(host)
@@ -133,6 +141,12 @@ func TestProofAnAdvisorOnlyInTheBodyIsPinnedThroughTheHandler(t *testing.T) {
 	run := func(body string) error {
 		_, _, errMsg := handler.ExecuteWithAuthManager(ctx, "claude", model, []byte(body), "")
 		if errMsg != nil {
+			if interceptorOut {
+				if errMsg.StatusCode != http.StatusTooManyRequests || !errMsg.DirectResponse || !strings.Contains(string(errMsg.Body), advisorText) {
+					t.Fatalf("an interceptor's end answered %d %q, want 429 with its body", errMsg.StatusCode, errMsg.Body)
+				}
+				return &coreauth.Error{Message: string(errMsg.Body)} // CPA leaves Error nil for an interceptor's end
+			}
 			if errMsg.StatusCode != http.StatusInternalServerError {
 				t.Fatalf("a scheduler reject answered HTTP %d, want 500 (the status a scheduler cannot set)", errMsg.StatusCode)
 			}
@@ -171,4 +185,12 @@ func TestProofAnAdvisorOnlyInTheBodyIsPinnedThroughTheHandler(t *testing.T) {
 		t.Fatalf("a refused request reached %v", auths)
 	}
 	t.Logf("refusal: %v", err)
+
+	interceptorOut = true
+	if err := run(advisorBody); err == nil {
+		t.Fatal("the interceptor's end did not end the request")
+	}
+	if auths, _ := exec.take(); len(auths) != 0 {
+		t.Fatalf("a request the interceptor ended reached %v", auths)
+	}
 }

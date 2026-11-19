@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
@@ -99,5 +101,41 @@ func TestWithoutAnEngineARequestWithTheAdvisorIsRefused(t *testing.T) {
 	}
 	if got := pick(nil); got.Reject || got.DelegateBuiltin != pluginapi.SchedulerBuiltinFillFirst {
 		t.Fatalf("any other request goes to CPA's order: %+v", got)
+	}
+}
+
+func TestTheInterceptorEndsAnAdvisorRequestNoPinnedAccountCanTake(t *testing.T) {
+	affinitySetup(t, extraYAML+"advisor_pin: {model: claude-mythos-9-1}\n")
+	usageVia(t, "b.json", 99) // the advisor's only account is at its final cap
+	got := interceptBeforeVia(t, advisorBody, nil)
+	if !got.Terminate || got.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("response = %+v, want a 429 that ends the request", got)
+	}
+	var body struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(got.ResponseBody, &body); err != nil || body.Type != "error" || body.Error.Type != "rate_limit_error" ||
+		!strings.Contains(body.Error.Message, "switch the advisor model or wait for a reset") || got.ResponseHeaders.Get("Content-Type") != "application/json" {
+		t.Fatalf("an Anthropic error body with the message: %s %+v %v", got.ResponseBody, got.ResponseHeaders, err)
+	}
+	// the same for the beta in the header
+	if got := interceptBeforeVia(t, `{"model":"m"}`, map[string][]string{"Anthropic-Beta": {"advisor-tool-2026-03-01"}}); !got.Terminate {
+		t.Fatalf("a request with the beta: %+v", got)
+	}
+	// CPA's own pin is the scheduler's to answer
+	raw, _ := json.Marshal(pluginapi.RequestInterceptRequest{Model: "m", Body: []byte(advisorBody), Metadata: map[string]any{"pinned_auth_id": "b.json"}})
+	if got := envelope[pluginapi.RequestInterceptResponse](t, dispatch(pluginabi.MethodRequestInterceptBefore, raw)); got.Terminate {
+		t.Fatalf("with CPA's pin the interceptor only marks: %+v", got)
+	}
+	usageVia(t, "b.json", 50)
+	if got := interceptBeforeVia(t, advisorBody, nil); got.Terminate || len(got.Headers[config.AdvisorMarker]) != 1 {
+		t.Fatalf("with room the request is only marked: %+v", got)
+	}
+	if got := interceptBeforeVia(t, `{"model":"m"}`, nil); got.Terminate || len(got.Headers) != 0 {
+		t.Fatalf("another request is left alone: %+v", got)
 	}
 }

@@ -160,3 +160,42 @@ func (e *Engine) pinnedPick(req pluginapi.SchedulerPickRequest) (resp pluginapi.
 	}
 	return refuseExtra(m.ID), true
 }
+
+// EarlyRefusal is the reason to end a pinned request before CPA picks an account: none of the
+// pinned accounts can take it by the engine's own readings, so the scheduler would refuse it too,
+// whatever CPA offers. The plugin's interceptor answers it with a client error instead of the 500 a
+// scheduler refusal gets. A request is pinned when it is for an extra model, or carries the advisor
+// (by its headers, or, as the interceptor found, in its body). CPA's own pin is left to the
+// scheduler. ok is false for any request the scheduler may still serve.
+func (e *Engine) EarlyRefusal(model string, headers map[string][]string, advisorInBody bool, metadata map[string]any) (reason string, ok bool) {
+	if pinned, _ := metadata["pinned_auth_id"].(string); pinned != "" {
+		return "", false
+	}
+	m, isExtra := e.cfg.ExtraModel(model)
+	if !isExtra {
+		p := e.cfg.AdvisorPin
+		if p == nil {
+			return "", false
+		}
+		var advisor bool
+		if m, advisor = e.cfg.AdvisorModel(headers); !advisor && advisorInBody {
+			m, advisor = e.cfg.ExtraModel(p.Model)
+		}
+		if !advisor {
+			return "", false
+		}
+	}
+	now := e.now()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	b := e.pinBucket(model)
+	for _, a := range m.Accounts {
+		if e.pinTier(a, b, now) > 0 {
+			return "", false
+		}
+	}
+	if isExtra {
+		return refuseExtra(m.ID).RejectReason, true
+	}
+	return refuseAdvisor(m.ID).RejectReason, true
+}

@@ -123,6 +123,12 @@ The plugin cannot see any of them, so neither the config check nor the page can 
   upstream name is an extra model lets a request for the alias name pass the scheduler unmatched.
   A plugin's model registrar gets no view of CPA's alias table.
 - **CPA's Home mode.** With Home mode on, CPA picks accounts without the plugin scheduler.
+- **An interceptor call that fails.** When CPA's host gets an error calling the plugin's request
+  interceptor, it logs a warning and the request goes on unmarked, so an advisor that is only in
+  the body passes the pin. The scheduler cannot tell such a request apart: the plugin's own model
+  calls (the anchors) skip its interceptor by design, and refusing every request the interceptor
+  did not see would refuse all traffic while the interceptor fails. A body the interceptor itself
+  cannot read is marked.
 - **A fused plugin.** When CPA recovers a panic inside its plugin adapter it stops calling the
   plugin's scheduler (it "fuses" it), but the extra models stay registered until the next config
   change or restart. Restart CPA, or remove `extra_models`, after a fuse is logged.
@@ -144,17 +150,27 @@ pin those requests to the accounts of its extra model:
   advisor. CPA adds the advisor beta itself, after the account is chosen, when the body declares a
   tool whose type starts with `advisor_` or lists the beta in `betas`. So the plugin's request
   interceptor reads the body before the pick: for such a body it adds the header
-  `X-Cpa-Balancer-Advisor: 1`, which the pin matches like the beta. It reads the body as CPA does
-  (gjson, the same fields) and marks a body it cannot read the same way: invalid JSON, `tools` or
-  `betas` twice or under an escaped name, a tool with two `type` keys, or `tools` or `betas` of
-  another type. CPA's plugin host cannot remove a header after the pick (it drops an after-auth
+  `X-Cpa-Balancer-Advisor: 1`, which the pin matches like the beta. CPA decides on the body after
+  translating it to Claude's format, and a translator can move a tool from elsewhere (the Responses
+  API's `input[].additional_tools`), so the interceptor scans the whole body in the client's
+  format, with gjson as CPA reads it: any object at any depth whose `type`, trimmed and in lower
+  case, starts with `advisor_`, and any `betas` string that starts with `beta_prefix`. That can pin
+  a request CPA would not give the advisor; it never misses one. It marks a body it cannot read as
+  CPA would: invalid JSON, nesting deeper than 64 levels, `type` or `betas` twice or under an
+  escaped name in any object, `tools` or `betas` twice at the top, or a top-level `tools` or
+  `betas` of another type. CPA's plugin host cannot remove a header after the pick (it drops an after-auth
   interceptor's `ClearHeaders`), so the marker stays in the request; CPA's claude executor
   forwards only its own list of client headers, and the marker is not on it.
 - A pinned request goes to one of the extra model's accounts, chosen by the same tiers, reset
   order and session stickiness as the model itself, or is refused (`extra_model_unavailable`),
-  and never falls back. CPA answers a scheduler refusal with HTTP 500; a scheduler cannot set the
-  status. The message says what to do: "All accounts approved for the `<model>` advisor are
-  unavailable; switch the advisor model or wait for a reset".
+  and never falls back. When none of the pinned accounts can take a request by the balancer's own
+  readings, the interceptor ends it before the pick with HTTP 429 and an Anthropic error body
+  (`rate_limit_error`) that says what to do: "All accounts approved for the `<model>` advisor are
+  unavailable; switch the advisor model or wait for a reset". 429, because the usual cause is
+  every account at its limit until a reset. The scheduler would refuse the same request (its
+  readings are the same), so nothing is lost by ending it early. A refusal the scheduler makes
+  itself (CPA offers none of the accounts the readings allow) gets HTTP 500, with the same
+  message: a scheduler cannot set the status. A request for an extra model is ended the same way.
 - Until a configuration is accepted (for example the first one is invalid), a request with the
   advisor by the default rule (`advisor-tool-`, or a body with an `advisor_` tool) is refused
   rather than handed to CPA's order.
