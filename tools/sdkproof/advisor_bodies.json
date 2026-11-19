@@ -20,5 +20,14 @@
   {"name": "duplicate type keys in a tool", "body": "{\"tools\":[{\"type\":\"custom\",\"type\":\"advisor_20260301\"}]}", "cpa": false, "marked": true},
   {"name": "an escaped tools key (gjson reads it as tools)", "body": "{\"\\u0074ools\":[{\"type\":\"advisor_20260301\"}]}", "cpa": true, "marked": true},
   {"name": "invalid JSON", "body": "{\"tools\":[{\"type\":\"advisor_20260301\"}]", "cpa": true, "marked": true},
-  {"name": "invalid JSON without the advisor", "body": "{\"model\":", "cpa": false, "marked": true}
+  {"name": "invalid JSON without the advisor", "body": "{\"model\":", "cpa": false, "marked": true},
+  {"name": "responses: the advisor in input[].additional_tools", "format": "openai-response", "body": "{\"model\": \"m\", \"input\": [{\"type\": \"message\", \"role\": \"user\", \"content\": \"hi\"}, {\"type\": \"additional_tools\", \"tools\": [{\"type\": \"advisor_20260301\", \"name\": \"advisor\", \"model\": \"x\"}]}]}", "cpa": true, "marked": true},
+  {"name": "responses: the advisor in tools", "format": "openai-response", "body": "{\"model\": \"m\", \"input\": \"hi\", \"tools\": [{\"type\": \"advisor_20260301\", \"name\": \"advisor\", \"model\": \"x\"}]}", "cpa": true, "marked": true},
+  {"name": "responses: an advisor tool without a name (the translator drops it; the pin takes it)", "format": "openai-response", "body": "{\"model\": \"m\", \"input\": [{\"type\": \"additional_tools\", \"tools\": [{\"type\": \"advisor_20260301\"}]}]}", "cpa": false, "marked": true},
+  {"name": "responses: no advisor", "format": "openai-response", "body": "{\"model\": \"m\", \"input\": \"hi\", \"tools\": [{\"type\": \"function\", \"name\": \"f\", \"parameters\": {\"type\": \"object\"}}]}", "cpa": false, "marked": false},
+  {"name": "chat: an advisor tool", "format": "openai", "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"advisor_20260301\", \"name\": \"advisor\"}]}", "cpa": false, "marked": true},
+  {"name": "an advisor type nested in a message (the pin takes it)", "body": "{\"messages\": [{\"role\": \"user\", \"content\": [{\"type\": \"advisor_note\", \"text\": \"x\"}]}]}", "cpa": false, "marked": true},
+  {"name": "a text that only mentions the advisor", "body": "{\"messages\": [{\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"{\\\"type\\\":\\\"advisor_20260301\\\"}\"}]}]}", "cpa": false, "marked": false},
+  {"name": "the beta in a nested betas (the pin takes it)", "body": "{\"metadata\": {\"betas\": [\"advisor-tool-2026-03-01\"]}}", "cpa": false, "marked": true},
+  {"name": "nesting deeper than the scan reads", "body": "{\"x\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[{\"type\":\"text\"}]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}", "cpa": false, "marked": true}
 ]

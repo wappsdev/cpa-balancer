@@ -71,11 +71,12 @@ func TestTheAdvisorIsFoundInTheBodyWhereverCPAWouldFindIt(t *testing.T) {
 	}
 	var cases []struct {
 		Name   string `json:"name"`
+		Format string `json:"format"` // the client's format; empty is Claude's
 		Body   string `json:"body"`
 		CPA    bool   `json:"cpa"`
 		Marked bool   `json:"marked"`
 	}
-	if err := json.Unmarshal(raw, &cases); err != nil || len(cases) < 20 {
+	if err := json.Unmarshal(raw, &cases); err != nil || len(cases) < 30 {
 		t.Fatalf("corpus: %d cases, %v", len(cases), err)
 	}
 	for _, c := range cases {

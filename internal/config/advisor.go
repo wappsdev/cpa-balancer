@@ -93,13 +93,20 @@ func AdvisorRequested(headers map[string][]string, prefix string) bool {
 	return false
 }
 
-// AdvisorInBody reports whether a request body carries the advisor. It reads the body as CPA's
-// claude executor does (internal/runtime/executor/claude_executor_request.go, with gjson): a tool in
-// "tools" whose "type", trimmed and in lower case, starts with "advisor_", or a value of "betas" (a
-// list, whose string values count, or one string) that starts with prefix in any case. It fails
-// closed, reporting the advisor, for a body it cannot read the way CPA would: one that is not valid
-// JSON, has "tools" or "betas" twice or under an escaped name, has a tool with two "type" keys, or
-// has "tools" or "betas" of another type. An empty body, and null, carry nothing.
+// maxBodyDepth bounds the scan of a body: a body nested deeper is taken to carry the advisor.
+const maxBodyDepth = 64
+
+// AdvisorInBody reports whether a request body carries the advisor. CPA decides on the body after
+// it is translated to Claude's format (internal/runtime/executor/claude_executor_request.go reads
+// the translated "tools" and "betas"), and a translator may move a tool from anywhere (the
+// Responses API's input[].additional_tools, for one), so the whole body in the client's format is
+// read, with gjson as CPA does: any object, at any depth, whose "type", trimmed and in lower case,
+// starts with "advisor_", and any "betas", one string or a list, with a string value that starts
+// with prefix in any case. That may pin a request CPA would not give the advisor; it never misses
+// one. It fails closed, reporting the advisor, for a body it cannot read the way CPA would: one
+// that is not valid JSON or is nested deeper than maxBodyDepth, an object with "type" or "betas"
+// twice or under an escaped name, "tools" or "betas" twice at the top, or a top-level "tools" or
+// "betas" of another type. An empty body, and null, carry nothing.
 func AdvisorInBody(body []byte, prefix string) bool {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return false
@@ -108,41 +115,57 @@ func AdvisorInBody(body []byte, prefix string) bool {
 		return true
 	}
 	root := gjson.ParseBytes(body)
-	if !root.IsObject() {
-		return false
-	}
-	if ambiguous(root, "tools", "betas") {
-		return true
-	}
-	switch tools := root.Get("tools"); {
-	case !tools.Exists() || tools.Type == gjson.Null:
-	case !tools.IsArray():
-		return true
-	default:
-		for _, tool := range tools.Array() {
-			if tool.IsObject() && ambiguous(tool, "type") {
-				return true
-			}
-			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(tool.Get("type").String())), "advisor_") {
-				return true
-			}
+	if root.IsObject() {
+		if ambiguous(root, "tools", "betas") {
+			return true
+		}
+		if tools := root.Get("tools"); tools.Exists() && tools.Type != gjson.Null && !tools.IsArray() {
+			return true
+		}
+		if betas := root.Get("betas"); betas.Exists() && betas.Type != gjson.Null && betas.Type != gjson.String && !betas.IsArray() {
+			return true
 		}
 	}
-	starts := func(v gjson.Result) bool {
-		return v.Type == gjson.String && strings.HasPrefix(strings.ToLower(strings.TrimSpace(v.String())), prefix)
-	}
-	switch betas := root.Get("betas"); {
-	case !betas.Exists() || betas.Type == gjson.Null:
-		return false
-	case betas.Type == gjson.String:
-		return starts(betas)
-	case !betas.IsArray():
+	return advisorIn(root, prefix, 0)
+}
+
+// advisorIn scans a value of a body for the advisor; see AdvisorInBody.
+func advisorIn(v gjson.Result, prefix string, depth int) bool {
+	if depth > maxBodyDepth {
 		return true
-	default:
-		for _, b := range betas.Array() {
-			if starts(b) {
-				return true
-			}
+	}
+	if !v.IsObject() && !v.IsArray() {
+		return false
+	}
+	if v.IsObject() && ambiguous(v, "type", "betas") {
+		return true
+	}
+	found := false
+	v.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "type":
+			found = value.Type == gjson.String && strings.HasPrefix(strings.ToLower(strings.TrimSpace(value.String())), "advisor_")
+		case "betas":
+			found = betaIn(value, prefix)
+		}
+		found = found || advisorIn(value, prefix, depth+1)
+		return !found
+	})
+	return found
+}
+
+// betaIn reports whether a "betas" value, one string or a list, holds a string that starts with
+// prefix in any case; other values are skipped, as CPA finds no beta in them.
+func betaIn(v gjson.Result, prefix string) bool {
+	starts := func(s gjson.Result) bool {
+		return s.Type == gjson.String && strings.HasPrefix(strings.ToLower(strings.TrimSpace(s.String())), prefix)
+	}
+	if !v.IsArray() {
+		return starts(v)
+	}
+	for _, b := range v.Array() {
+		if starts(b) {
+			return true
 		}
 	}
 	return false
