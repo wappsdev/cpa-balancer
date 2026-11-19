@@ -228,6 +228,18 @@ func (e *Engine) place(b quota.Bucket, id, root, folder, project string, candida
 	if pinned != "" {
 		fallback = pinKind + "_pin_fallback"
 	}
+	if pinned != "" && e.cfg.Fill.Enabled {
+		// the pin cannot take this request: the first reset with room, as fill orders them
+		var offered []string
+		for _, a := range e.cfg.Accounts {
+			if usable(a.AuthFile) {
+				offered = append(offered, a.AuthFile)
+			}
+		}
+		if account := e.best(e.fillFirst(offered, now), b, now); account != "" {
+			return use(account, fallback)
+		}
+	}
 	if folder == "" {
 		resp := e.existing(b, candidates)
 		if pinned == "" {
@@ -237,7 +249,7 @@ func (e *Engine) place(b quota.Bucket, id, root, folder, project string, candida
 		return resp
 	}
 	if pinned == "" && e.cfg.Fill.Enabled {
-		if home, why := e.sessionHome(root, project, now); home != "" && usable(home) {
+		if home, why := e.sessionHome(root, project, candidates, now); home != "" && usable(home) {
 			reason := ReasonProject
 			if h := e.st.Affinity.Homes[project]; h == nil || h.Account != home {
 				reason = ReasonRunning

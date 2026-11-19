@@ -16,7 +16,8 @@ import (
 // follows the normal path's rules, in tiers:
 //  1. usable: under its caps, its reserve included, with a fresh reading, not held back by CPA;
 //  2. held back by its reserve only: under the final cap, its 5-hour window under its cap;
-//  3. no fresh reading (a pause stops the probes, a new account has none), not held back by CPA.
+//  3. no fresh reading (a pause stops the probes, a new account has none, and an estimate made
+//     after a reset is not one), not held back by CPA.
 //
 // Within a tier the weekly reset that comes first goes first, then the extra model's order. A
 // higher tier is used only when the tiers before it are empty, so a reserve is spent only when
@@ -34,6 +35,13 @@ func (e *Engine) pinTier(account string, b quota.Bucket, now time.Time) int {
 		return 0
 	}
 	a, s, th := e.cfg.Accounts[i], e.snaps[account], e.cfg.Thresholds
+	if r, ok := s.Readings[b]; ok && r.Source == "estimate" {
+		// made after a reset, until a real reading comes: as good as none
+		if s.Unavailable {
+			return 0
+		}
+		return 3
+	}
 	if ok, _ := policy.Eligibility(a, s, true, b, now, th, false); ok {
 		return 1
 	}

@@ -199,10 +199,16 @@ func TestRebalanceAgreesWithFill(t *testing.T) {
 		w.e.st.SetHome(name, W, w.clock.t) // placed before fill, on the account that resets last
 	}
 	res := w.e.Rebalance(true)
+	if len(res.Plan) != 3 {
+		t.Fatalf("the plan holds the three projects: %+v", res.Plan)
+	}
 	for _, m := range res.Plan {
 		if m.To != X {
 			t.Fatalf("the plan puts every project on the account fill would choose: %+v", res.Plan)
 		}
+	}
+	if homes := w.e.Status().Affinity.Homes; len(homes) != 3 {
+		t.Fatalf("three homes: %+v", homes)
 	}
 	for _, h := range w.e.Status().Affinity.Homes {
 		if h.Fill == nil || h.Fill.Room != 10 {
@@ -214,6 +220,9 @@ func TestRebalanceAgreesWithFill(t *testing.T) {
 		t.Fatalf("fill chooses the plan's account for a new project, got %q", got)
 	}
 	again := w.e.Rebalance(false)
+	if len(again.Plan) != 4 {
+		t.Fatalf("the second plan holds the four projects: %+v", again.Plan)
+	}
 	for _, m := range again.Plan {
 		if m.From != m.To {
 			t.Fatalf("a second plan moves nothing: %+v", again.Plan)
@@ -261,5 +270,81 @@ func TestARebuiltEngineKeepsWhereRunningSessionsStarted(t *testing.T) {
 	w.pick(2) // a new session moves the project's home to G
 	if got := w.pick(1); got != X {
 		t.Fatalf("the running session keeps its account across the rebuild, got %q", got)
+	}
+}
+
+func TestFillSkipsAnAccountWithLessThanTheMinimumRoom(t *testing.T) {
+	w := fillWorld(t)
+	w.folder("-work-alpha", 1)
+	for i, name := range []string{"-work-a", "-work-b"} {
+		w.folder(name, i+10)
+	}
+	w.start()
+	w.use(W, 30, 144, 0)
+	w.use(G, 5, 18, 0)
+	w.use(X, 98, 10, 0) // 1 point of room under its cap of 99: below min_room 10
+	if got := w.pick(1); got != G || w.reason(sidN(1)) != ReasonFill {
+		t.Fatalf("an account with 1%% room is not a fill target: %q (%s)", got, w.reason(sidN(1)))
+	}
+	for _, name := range []string{"-work-a", "-work-b"} {
+		w.e.st.SetHome(name, W, w.clock.t)
+	}
+	res := w.e.Rebalance(false)
+	if len(res.Plan) != 3 {
+		t.Fatalf("plan: %+v", res.Plan)
+	}
+	for _, m := range res.Plan {
+		if m.To != G {
+			t.Fatalf("the rebalance keeps the same floor: %+v", res.Plan)
+		}
+	}
+}
+
+func TestBelowTheMinimumRoomEverywhereTheBalancingRuleDecides(t *testing.T) {
+	w := newWorld(t, W, X)
+	w.cfg.Fill.Enabled = true
+	w.folder("-work-alpha", 1)
+	w.start()
+	w.use(W, 98.5, 144, 0)
+	w.use(X, 98, 10, 0)
+	if got := w.pick(1); got != X || w.reason(sidN(1)) != ReasonProject {
+		t.Fatalf("the most room takes the project, not by fill: %q (%s)", got, w.reason(sidN(1)))
+	}
+}
+
+func TestAnEstimateAfterAResetIsNotAFreshReadingForFill(t *testing.T) {
+	w := fillWorld(t)
+	w.folder("-work-alpha", 1)
+	w.start()
+	w.use(X, 50, 10, 0)
+	w.clock.t = w.clock.t.Add(11 * time.Hour) // X reset: its reading is now an estimate, 167 h away
+	w.use(W, 30, 167.5, 0)
+	w.use(G, 99, 100, 0) // full
+	if got := w.pick(1); got != W {
+		t.Fatalf("an estimate is not preferred over a real reading, got %q", got)
+	}
+}
+
+func TestFillConsidersOnlyTheAccountsCPAOffers(t *testing.T) {
+	w := fillWorld(t)
+	w.folder("-work-alpha", 1)
+	w.start()
+	w.usual()
+	if got := w.e.Pick(w.req(Opus, 1, "", W, G)).AuthID; got != G || w.reason(sidN(1)) != ReasonFill || w.home("-work-alpha") != G {
+		t.Fatalf("X is not offered: fill places the project on G, got %q (%s), home %q", got, w.reason(sidN(1)), w.home("-work-alpha"))
+	}
+}
+
+func TestAPinThatFallsBackUsesFillsOrder(t *testing.T) {
+	w := fillWorld(t)
+	w.folder("-work-pinned", 1)
+	w.start()
+	w.usual()
+	if err := w.e.SetPin(state.PinFolder, "-work-pinned", W); err != nil {
+		t.Fatal(err)
+	}
+	w.use(W, 30, 144, 98) // the pinned account's 5-hour window is at its cap
+	if got := w.pick(1); got != X || w.reason(sidN(1)) != ReasonFolderPinFallback {
+		t.Fatalf("the fallback takes the first reset with room: %q (%s)", got, w.reason(sidN(1)))
 	}
 }

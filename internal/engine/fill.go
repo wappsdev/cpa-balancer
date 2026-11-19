@@ -26,15 +26,20 @@ type started struct {
 	at      time.Time // the session's last request
 }
 
-// fillFirst is the part of usable that fill prefers: the accounts whose weekly reset comes first.
-// Only a usable account has a fresh reading, so an account with an unknown one is never in it.
+// fillFirst is the part of usable that fill prefers: the accounts whose weekly reset comes first,
+// among those with a real reading (an estimate made after a reset is not one) and at least
+// fill.min_room of room under their cap. Only a usable account has a fresh reading, so an account
+// with an unknown one is never in it. Empty when none qualifies: then the balancing rule decides.
 // Callers hold e.mu.
 func (e *Engine) fillFirst(usable []string, now time.Time) []string {
 	var first time.Time
 	resets := map[string]time.Time{}
 	for _, a := range usable {
 		r, ok := e.snaps[a].Readings[quota.Main]
-		if !ok || r.ResetsAt == nil || e.standing(a, quota.Main, now) != policy.Usable {
+		if !ok || r.ResetsAt == nil || r.Source == "estimate" || e.standing(a, quota.Main, now) != policy.Usable {
+			continue
+		}
+		if why := e.fillWhy(a, now); why == nil || why.Room < e.cfg.Fill.MinRoom {
 			continue
 		}
 		resets[a] = *r.ResetsAt
@@ -68,11 +73,12 @@ func (e *Engine) pastReset(h *state.Home) bool {
 	return ok && r.ResetsAt != nil && r.ResetsAt.Add(-week).After(h.Since)
 }
 
-// usableAccounts are the accounts that can take a request of the main bucket now. Callers hold e.mu.
-func (e *Engine) usableAccounts(now time.Time) []string {
+// usableAccounts are the accounts CPA offers (all of them for a nil offer) that can take a
+// request of the main bucket now. Callers hold e.mu.
+func (e *Engine) usableAccounts(offered map[string]bool, now time.Time) []string {
 	var out []string
 	for _, a := range e.cfg.Accounts {
-		if e.standing(a.AuthFile, quota.Main, now) == policy.Usable {
+		if (offered == nil || offered[a.AuthFile]) && e.standing(a.AuthFile, quota.Main, now) == policy.Usable {
 			out = append(out, a.AuthFile)
 		}
 	}
@@ -84,7 +90,7 @@ func (e *Engine) usableAccounts(now time.Time) []string {
 // project's home while that account is usable and has not reset since the project was placed;
 // otherwise fill places the project again, and why says what it saw. "" when there is no account.
 // Callers hold e.mu.
-func (e *Engine) sessionHome(root, project string, now time.Time) (account string, why *state.Fill) {
+func (e *Engine) sessionHome(root, project string, offered map[string]bool, now time.Time) (account string, why *state.Fill) {
 	if s, ok := e.starts[root]; ok && e.standing(s.account, quota.Main, now) != policy.Full {
 		e.startOn(root, s.account, now)
 		e.st.TouchHome(project, now)
@@ -96,14 +102,22 @@ func (e *Engine) sessionHome(root, project string, now time.Time) (account strin
 		e.startOn(root, h.Account, now)
 		return h.Account, nil
 	}
-	best := e.balanced(project, e.fillFirst(e.usableAccounts(now), now), now)
+	usable := e.usableAccounts(offered, now)
+	first := e.fillFirst(usable, now)
+	byFill := len(first) > 0
+	if !byFill {
+		first = usable // no account has fill's room: the balancing rule places the project
+	}
+	best := e.balanced(project, first, now)
 	if best == "" {
 		if h != nil {
 			return h.Account, nil // nothing can take it: the request takes a detour, the home stays
 		}
 		return "", nil
 	}
-	why = e.fillWhy(best, now)
+	if byFill {
+		why = e.fillWhy(best, now)
+	}
 	e.st.PlaceHome(project, best, why, now)
 	e.dirty = true
 	if h != nil && h.Account != best {

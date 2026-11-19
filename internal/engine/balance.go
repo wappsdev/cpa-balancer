@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -254,6 +255,10 @@ func (e *Engine) Rebalance(apply bool) RebalanceResult {
 		e.loads, e.loadsAt = loads, now
 	}
 	res := e.plan(now)
+	var fillTo []string // the accounts the plan placed by fill
+	if e.cfg.Fill.Enabled {
+		fillTo = e.fillFirst(e.usableAccounts(nil, now), now)
+	}
 	moved := 0
 	if apply {
 		res.Applied = true
@@ -261,7 +266,7 @@ func (e *Engine) Rebalance(apply bool) RebalanceResult {
 			switch {
 			case m.From == m.To:
 				continue
-			case e.cfg.Fill.Enabled:
+			case slices.Contains(fillTo, m.To):
 				e.st.PlaceHome(m.Project, m.To, e.fillWhy(m.To, now), now)
 			default:
 				e.st.SetHome(m.Project, m.To, now)
@@ -337,9 +342,11 @@ func (e *Engine) plan(now time.Time) (res RebalanceResult) {
 				usable = append(usable, a)
 			}
 		}
-		b.only = map[string]bool{}
-		for _, a := range e.fillFirst(usable, now) {
-			b.only[a] = true
+		if first := e.fillFirst(usable, now); len(first) > 0 { // else the balancing rule, as for a session
+			b.only = map[string]bool{}
+			for _, a := range first {
+				b.only[a] = true
+			}
 		}
 	}
 	var total float64

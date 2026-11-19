@@ -2,6 +2,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/wappsdev/cpa-balancer/internal/config"
 )
@@ -123,5 +124,16 @@ func TestOnlyReservesHoldingThePinnedAccountsBackUsesOneWithRoomUnderTheFinalCap
 	// W and X are over their reserve (50 more than 48 h before the reset), still under the final cap
 	if got := w.pinnedPick(0); got != X {
 		t.Fatalf("the first reset with room under the final cap takes it, got %q", got)
+	}
+}
+
+func TestAnEstimateAfterAResetIsInTheNoReadingTier(t *testing.T) {
+	w := pinnedWorld(t)
+	w.use(X, 80, 20, 0)
+	w.clock.t = w.clock.t.Add(21 * time.Hour) // X reset: its reading is now an estimate
+	w.use(W, 99, 119, 0)                      // full
+	w.use(G, 86, 69, 0)                       // over its reserve's cap only
+	if got := w.pinnedPick(0); got != G {
+		t.Fatalf("an account held by its reserve comes before one with only an estimate, got %q", got)
 	}
 }
