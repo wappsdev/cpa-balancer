@@ -1,10 +1,13 @@
 package config
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 // DefaultAdvisorBeta starts the anthropic-beta value Claude Code sends with a request that carries
@@ -54,8 +57,9 @@ func (c Config) validateAdvisorPin() error {
 // AdvisorMarker is the header the plugin's request interceptor adds, before an account is chosen,
 // to a request whose body carries the advisor. CPA adds the advisor beta itself, after the pick,
 // when the body declares an advisor tool or lists the beta in "betas", so the header alone would
-// let such a request pass the pin. The interceptor removes the marker again once the account is
-// chosen, so it never reaches the upstream.
+// let such a request pass the pin. The marker stays in the request's headers (CPA's plugin host
+// drops an after-auth interceptor's ClearHeaders), but CPA's claude executor forwards only its own
+// list of client headers, so it never reaches the upstream.
 const AdvisorMarker = "X-Cpa-Balancer-Advisor"
 
 // AdvisorModel is the extra model whose accounts a request must use because it carries the advisor
@@ -89,41 +93,73 @@ func AdvisorRequested(headers map[string][]string, prefix string) bool {
 	return false
 }
 
-// AdvisorInBody reports whether a request body carries the advisor as CPA's claude executor finds
-// it: a tool whose type starts with "advisor_" (trimmed, in any case), or a value of "betas" (a
-// list, or one string) that starts with prefix.
+// AdvisorInBody reports whether a request body carries the advisor. It reads the body as CPA's
+// claude executor does (internal/runtime/executor/claude_executor_request.go, with gjson): a tool in
+// "tools" whose "type", trimmed and in lower case, starts with "advisor_", or a value of "betas" (a
+// list, whose string values count, or one string) that starts with prefix in any case. It fails
+// closed, reporting the advisor, for a body it cannot read the way CPA would: one that is not valid
+// JSON, has "tools" or "betas" twice or under an escaped name, has a tool with two "type" keys, or
+// has "tools" or "betas" of another type. An empty body, and null, carry nothing.
 func AdvisorInBody(body []byte, prefix string) bool {
-	var payload struct {
-		Tools []struct {
-			Type string `json:"type"`
-		} `json:"tools"`
-		Betas json.RawMessage `json:"betas"`
+	if len(bytes.TrimSpace(body)) == 0 {
+		return false
 	}
-	if json.Unmarshal(body, &payload) != nil {
-		// a body whose tools are not a list is read field by field below
-		var loose map[string]json.RawMessage
-		if json.Unmarshal(body, &loose) != nil {
-			return false
+	if !gjson.ValidBytes(body) {
+		return true
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
+		return false
+	}
+	if ambiguous(root, "tools", "betas") {
+		return true
+	}
+	switch tools := root.Get("tools"); {
+	case !tools.Exists() || tools.Type == gjson.Null:
+	case !tools.IsArray():
+		return true
+	default:
+		for _, tool := range tools.Array() {
+			if tool.IsObject() && ambiguous(tool, "type") {
+				return true
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(tool.Get("type").String())), "advisor_") {
+				return true
+			}
 		}
-		payload.Betas = loose["betas"]
 	}
-	for _, t := range payload.Tools {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(t.Type)), "advisor_") {
-			return true
-		}
+	starts := func(v gjson.Result) bool {
+		return v.Type == gjson.String && strings.HasPrefix(strings.ToLower(strings.TrimSpace(v.String())), prefix)
 	}
-	var betas []string
-	if json.Unmarshal(payload.Betas, &betas) != nil {
-		var one string
-		if json.Unmarshal(payload.Betas, &one) != nil {
-			return false
-		}
-		betas = []string{one}
-	}
-	for _, b := range betas {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(b)), prefix) {
-			return true
+	switch betas := root.Get("betas"); {
+	case !betas.Exists() || betas.Type == gjson.Null:
+		return false
+	case betas.Type == gjson.String:
+		return starts(betas)
+	case !betas.IsArray():
+		return true
+	default:
+		for _, b := range betas.Array() {
+			if starts(b) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// ambiguous reports whether an object holds one of the names twice, or under an escaped spelling:
+// readers then disagree on which value counts.
+func ambiguous(object gjson.Result, names ...string) bool {
+	seen := map[string]int{}
+	odd := false
+	object.ForEach(func(key, _ gjson.Result) bool {
+		name := key.String()
+		if slices.Contains(names, name) {
+			seen[name]++
+			odd = odd || key.Raw != `"`+name+`"` || seen[name] > 1
+		}
+		return !odd
+	})
+	return odd
 }

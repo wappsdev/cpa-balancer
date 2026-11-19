@@ -71,13 +71,13 @@ func TestTheInterceptorLeavesRequestsAloneWithoutAnAdvisorPin(t *testing.T) {
 	}
 }
 
-func TestTheMarkerIsRemovedOnceTheAccountIsChosen(t *testing.T) {
+func TestTheInterceptorChangesNothingAfterThePick(t *testing.T) {
 	configureYAML(t, extraConfig(t, extraYAML+"advisor_pin: {model: claude-mythos-9-1}\n"))
 	t.Cleanup(shutdown)
-	raw, _ := json.Marshal(pluginapi.RequestInterceptRequest{Model: "claude-opus-5-5", Headers: map[string][]string{config.AdvisorMarker: {"1"}}})
+	raw, _ := json.Marshal(pluginapi.RequestInterceptRequest{Model: "claude-opus-5-5", Headers: map[string][]string{config.AdvisorMarker: {"1"}}, Body: []byte(advisorBody)})
 	got := envelope[pluginapi.RequestInterceptResponse](t, dispatch(pluginabi.MethodRequestInterceptAfter, raw))
-	if len(got.ClearHeaders) != 1 || got.ClearHeaders[0] != config.AdvisorMarker || len(got.Headers) != 0 || got.Terminate {
-		t.Fatalf("after the pick = %+v, want the marker cleared", got)
+	if len(got.Headers) != 0 || len(got.ClearHeaders) != 0 || len(got.Body) != 0 || got.Terminate {
+		t.Fatalf("after the pick = %+v, want no change", got)
 	}
 }
 

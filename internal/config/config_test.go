@@ -196,3 +196,18 @@ func TestFillIsOnByDefaultAndCanBeTurnedOff(t *testing.T) {
 		t.Fatal("fill.enabled: false turns fill off")
 	}
 }
+
+func TestFillHasAMinimumRoom(t *testing.T) {
+	cfg, err := Parse([]byte(minimal))
+	if err != nil || cfg.Fill.MinRoom != 10 {
+		t.Fatalf("min_room defaults to 10: %v %v", cfg.Fill.MinRoom, err)
+	}
+	if cfg, err = Parse([]byte(minimal + "fill: {min_room: 0}\n")); err != nil || cfg.Fill.MinRoom != 0 || !cfg.Fill.Enabled {
+		t.Fatalf("min_room 0 is kept and fill stays on: %+v %v", cfg.Fill, err)
+	}
+	for _, bad := range []string{"fill: {min_room: -1}\n", "fill: {min_room: 101}\n"} {
+		if _, err := Parse([]byte(minimal + bad)); err == nil {
+			t.Fatalf("%q must be refused", bad)
+		}
+	}
+}

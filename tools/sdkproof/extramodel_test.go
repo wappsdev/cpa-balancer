@@ -9,7 +9,7 @@
 //   - a scheduler Reject or error ends the request; a pick the scheduler does not handle falls
 //     back to the built-in selector, which may choose any claude auth;
 //   - the model stays listed while the plugin is loaded, whatever the pinned auth's state;
-//   - the client's anthropic-beta header reaches the scheduler for a catalog model, so the advisor
+//   - the headers the auth manager is given reach the scheduler for a catalog model, so the advisor
 //     pin can hold for it (streams included), and its reject ends that request too.
 package cliproxy
 
@@ -113,7 +113,9 @@ func (e *proofExecutor) ExecuteStream(_ context.Context, auth *coreauth.Auth, _ 
 	close(ch)
 	return &cliproxyexecutor.StreamResult{Chunks: ch}, nil
 }
-func (e *proofExecutor) Refresh(_ context.Context, a *coreauth.Auth) (*coreauth.Auth, error) { return a, nil }
+func (e *proofExecutor) Refresh(_ context.Context, a *coreauth.Auth) (*coreauth.Auth, error) {
+	return a, nil
+}
 func (e *proofExecutor) CountTokens(context.Context, *coreauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	return cliproxyexecutor.Response{}, errorString("not used")
 }
@@ -197,9 +199,10 @@ func TestProofExtraModelThroughRegistrarAndScheduler(t *testing.T) {
 		t.Fatalf("stream served by %v, want only auth-b", got)
 	}
 
-	// The advisor pin: a request for a catalog model reaches the scheduler with the client's
-	// anthropic-beta header, so a pin by that header holds, for streams too; without it the same
-	// model goes elsewhere.
+	// The advisor pin, from the auth manager down: the headers of a request for a catalog model reach
+	// the scheduler, so a pin by the anthropic-beta header holds, for streams too; without it the
+	// same model goes elsewhere. This starts below the API handler; advisor_handler_test.go proves
+	// the handler's path, with the advisor only in the body.
 	sched.mode = "advisor"
 	advisor := cliproxyexecutor.Options{Headers: http.Header{"Anthropic-Beta": {"oauth-2025-04-20, Advisor-Tool-2026-03-01"}}}
 	runAdvisor := func() error {

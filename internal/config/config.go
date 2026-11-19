@@ -108,6 +108,9 @@ type Config struct {
 // with the most room against its load.
 type Fill struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
+	// MinRoom is the least room under its cap, in percent of the weekly window, that makes an
+	// account a fill target: one with less would take new sessions only to fill up within minutes.
+	MinRoom float64 `yaml:"min_room" json:"min_room"`
 }
 
 func Default() Config {
@@ -122,7 +125,7 @@ func Default() Config {
 		},
 		Anchor:   Anchor{Enabled: true, Model: "claude-haiku-4-5-20251001", FallbackModel: "claude-sonnet-5-5"},
 		Affinity: Affinity{ProjectsDir: "~/.claude/projects"},
-		Fill:     Fill{Enabled: true},
+		Fill:     Fill{Enabled: true, MinRoom: 10},
 	}
 }
 
@@ -180,6 +183,9 @@ func (c Config) Validate() error {
 	}
 	if th.StaleHours <= 0 {
 		return fmt.Errorf("stale_hours must be positive")
+	}
+	if c.Fill.MinRoom < 0 || c.Fill.MinRoom > 100 {
+		return fmt.Errorf("fill.min_room must be within 0-100, got %v", c.Fill.MinRoom)
 	}
 	if len(c.Accounts) == 0 {
 		return fmt.Errorf("at least one account is required")

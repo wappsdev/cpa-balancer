@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -59,23 +61,29 @@ func TestTheAdvisorMarkerPinsARequestLikeTheBeta(t *testing.T) {
 	}
 }
 
-func TestTheAdvisorIsFoundInTheBodyAsCPAFindsIt(t *testing.T) {
-	for _, body := range []string{
-		`{"model":"claude-opus-5-5","tools":[{"type":"advisor_20260301","name":"advisor","model":"claude-mythos-5-2"}]}`,
-		`{"tools":[{"type":"web_search_20250305"},{"type":" Advisor_20270101 "}]}`, // CPA trims and lowers the type
-		`{"betas":["oauth-2025-04-20","Advisor-Tool-2026-03-01"]}`,
-		`{"betas":"advisor-tool-2026-03-01"}`, // CPA takes a single string too
-	} {
-		if !AdvisorInBody([]byte(body), DefaultAdvisorBeta) {
-			t.Fatalf("%s: the advisor is in the body", body)
-		}
+// advisorBodies is the corpus tools/sdkproof checks against CPA's own reading of a body (`cpa`: CPA
+// adds the advisor beta). The plugin marks (`marked`) every body CPA would, and fails closed on a
+// body it cannot read as CPA does: invalid JSON, duplicate or escaped keys, an unexpected type.
+func TestTheAdvisorIsFoundInTheBodyWhereverCPAWouldFindIt(t *testing.T) {
+	raw, err := os.ReadFile("../../tools/sdkproof/advisor_bodies.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, body := range []string{
-		``, `not json`, `{}`, `{"tools":[{"type":"web_search_20250305"}]}`, `{"tools":{"type":"advisor_x"}}`,
-		`{"betas":["oauth-2025-04-20"]}`, `{"tools":[{"name":"advisor_like","type":"custom"}]}`,
-	} {
-		if AdvisorInBody([]byte(body), DefaultAdvisorBeta) {
-			t.Fatalf("%s: no advisor in the body", body)
+	var cases []struct {
+		Name   string `json:"name"`
+		Body   string `json:"body"`
+		CPA    bool   `json:"cpa"`
+		Marked bool   `json:"marked"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil || len(cases) < 20 {
+		t.Fatalf("corpus: %d cases, %v", len(cases), err)
+	}
+	for _, c := range cases {
+		if c.CPA && !c.Marked {
+			t.Fatalf("%s: the corpus must mark every body CPA enables the advisor for", c.Name)
+		}
+		if got := AdvisorInBody([]byte(c.Body), DefaultAdvisorBeta); got != c.Marked {
+			t.Fatalf("%s: marked = %v, want %v", c.Name, got, c.Marked)
 		}
 	}
 }

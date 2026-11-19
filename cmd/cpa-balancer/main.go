@@ -151,9 +151,6 @@ func dispatch(method string, req []byte) (raw []byte) {
 			return ok(markAdvisor)
 		}
 		return ok(interceptBefore(r))
-	case pluginabi.MethodRequestInterceptAfter:
-		// the marker is for the scheduler only: it never reaches the upstream
-		return ok(pluginapi.RequestInterceptResponse{ClearHeaders: []string{config.AdvisorMarker}})
 	case pluginabi.MethodUsageHandle:
 		var r pluginapi.UsageRecord
 		if err := json.Unmarshal(req, &r); err != nil {

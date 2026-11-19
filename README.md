@@ -143,8 +143,12 @@ pin those requests to the accounts of its extra model:
   advisor. CPA adds the advisor beta itself, after the account is chosen, when the body declares a
   tool whose type starts with `advisor_` or lists the beta in `betas`. So the plugin's request
   interceptor reads the body before the pick: for such a body it adds the header
-  `X-Cpa-Balancer-Advisor: 1`, which the pin matches like the beta, and it removes the header again
-  once the account is chosen, so it never reaches the upstream. A body it cannot read is marked.
+  `X-Cpa-Balancer-Advisor: 1`, which the pin matches like the beta. It reads the body as CPA does
+  (gjson, the same fields) and marks a body it cannot read the same way: invalid JSON, `tools` or
+  `betas` twice or under an escaped name, a tool with two `type` keys, or `tools` or `betas` of
+  another type. CPA's plugin host cannot remove a header after the pick (it drops an after-auth
+  interceptor's `ClearHeaders`), so the marker stays in the request; CPA's claude executor
+  forwards only its own list of client headers, and the marker is not on it.
 - A pinned request goes to one of the extra model's accounts, chosen by the same tiers, reset
   order and session stickiness as the model itself, or is refused (`extra_model_unavailable`),
   and never falls back. CPA answers a scheduler refusal with HTTP 500; a scheduler cannot set the
