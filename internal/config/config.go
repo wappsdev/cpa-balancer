@@ -96,6 +96,8 @@ type Config struct {
 	Thresholds Thresholds `yaml:"thresholds" json:"thresholds"`
 	Anchor     Anchor     `yaml:"anchor" json:"anchor"`
 	Affinity   Affinity   `yaml:"affinity" json:"affinity"`
+	// ExtraModels are models outside CPA's catalog, each pinned to its own accounts.
+	ExtraModels []ExtraModel `yaml:"extra_models,omitempty" json:"extra_models,omitempty"`
 }
 
 func Default() Config {
@@ -204,6 +206,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("accounts %s and %s are both named %q; give one a label", other, file, name)
 		}
 		taken[strings.ToLower(name)] = file
+	}
+	if err := c.validateExtraModels(); err != nil {
+		return err
 	}
 	return c.validateAffinity()
 }

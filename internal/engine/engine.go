@@ -169,6 +169,9 @@ func isClaude(req pluginapi.SchedulerPickRequest) bool {
 
 // Pick answers scheduler.pick. Its only I/O is the directory-name lookup of a session not seen before.
 func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
+	if m, ok := e.cfg.ExtraModel(req.Model); ok {
+		return pickExtra(m, req)
+	}
 	candidates := map[string]bool{}
 	for _, c := range req.Candidates {
 		candidates[c.ID] = true
