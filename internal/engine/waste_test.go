@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/wappsdev/cpa-balancer/internal/probe"
+	"github.com/wappsdev/cpa-balancer/internal/quota"
 	"github.com/wappsdev/cpa-balancer/internal/state"
 )
 
@@ -62,6 +63,26 @@ func TestTheWasteOfAResetMissedWhileTheEngineWasDownIsRecordedOnce(t *testing.T)
 	w.start()
 	if got := len(w.waste(X).Resets); got != 1 {
 		t.Fatalf("and records it once, got %d", got)
+	}
+}
+
+func TestTheWasteOfAResetSeenFromTwoSourcesTakesTheNewestReading(t *testing.T) {
+	w := newWorld(t, W, X)
+	// the headers give whole seconds and the probe fractions, so one reset shows at two times
+	reset := t0.Add(10 * time.Hour)
+	probeReset := reset.Add(500 * time.Millisecond)
+	st := state.New()
+	acc := st.Account(X)
+	acc.Headers = quota.Readings{quota.Main: {Util: 40, ResetsAt: &reset, ObservedAt: t0, Source: "header"}}
+	acc.Probe = quota.Readings{quota.Main: {Util: 60, ResetsAt: &probeReset, ObservedAt: t0.Add(time.Hour), Source: "probe"}}
+	if err := st.Save(w.cfg.StatePath); err != nil {
+		t.Fatal(err)
+	}
+	w.clock.t = t0.Add(11 * time.Hour)
+	w.start()
+	v := w.waste(X)
+	if len(v.Resets) != 1 || v.Resets[0].Util != 60 || v.Resets[0].Wasted != 40 {
+		t.Fatalf("one reset, from the newest reading: %+v", v.Resets)
 	}
 }
 

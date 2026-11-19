@@ -51,10 +51,10 @@ func TestFillNeverPrefersAnAccountWithoutAReading(t *testing.T) {
 	w := fillWorld(t)
 	w.folder("-work-alpha", 1)
 	w.start()
-	w.use(W, 30, 144, 0)
-	w.use(G, 5, 18, 0) // X has no reading at all
-	if got := w.pick(1); got != G {
-		t.Fatalf("an account with no reading is never preferred, got %q", got)
+	w.use(W, 0, 144, 0) // W has the most room: only fill puts the project on G
+	w.use(G, 5, 18, 0)  // X has no reading at all
+	if got := w.pick(1); got != G || w.home("-work-alpha") != G || w.reason(sidN(1)) != ReasonFill {
+		t.Fatalf("an account with no reading is never preferred: %q, home %q (%s)", got, w.home("-work-alpha"), w.reason(sidN(1)))
 	}
 }
 
@@ -64,10 +64,10 @@ func TestFillNeverPrefersAnAccountWithAStaleReading(t *testing.T) {
 	w.start()
 	w.use(X, 10, 20, 0)
 	w.clock.t = w.clock.t.Add(7 * time.Hour) // X's reading is older than stale_hours
-	w.use(W, 30, 144, 0)
+	w.use(W, 0, 144, 0)
 	w.use(G, 5, 18, 0)
-	if got := w.pick(1); got != G {
-		t.Fatalf("a stale reading is never preferred, got %q", got)
+	if got := w.pick(1); got != G || w.home("-work-alpha") != G || w.reason(sidN(1)) != ReasonFill {
+		t.Fatalf("a stale reading is never preferred: %q, home %q (%s)", got, w.home("-work-alpha"), w.reason(sidN(1)))
 	}
 }
 

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"maps"
 	"slices"
 	"time"
 
@@ -45,23 +44,30 @@ func wasteView(acc *state.Account, now time.Time) *WasteView {
 // restart there is no snapshot, and a request's headers replace the stored one before this runs).
 // Callers hold e.mu.
 func (e *Engine) noteResets(name string, acc *state.Account, now time.Time) {
-	last := map[time.Time]quota.Reading{}
+	var closed []quota.Reading
 	for _, r := range []quota.Reading{e.snaps[name].Readings[quota.Main], acc.Headers[quota.Main], acc.Probe[quota.Main]} {
-		if r.ResetsAt == nil || r.ResetsAt.After(now) || r.Source == "estimate" || r.ObservedAt.IsZero() {
-			continue
-		}
-		if seen, ok := last[*r.ResetsAt]; !ok || r.ObservedAt.After(seen.ObservedAt) {
-			last[*r.ResetsAt] = r
+		if r.ResetsAt != nil && !r.ResetsAt.After(now) && r.Source != "estimate" && !r.ObservedAt.IsZero() {
+			closed = append(closed, r)
 		}
 	}
+	slices.SortFunc(closed, func(x, y quota.Reading) int { return x.ResetsAt.Compare(*y.ResetsAt) })
 	weight := probe.WeightOf(acc.Plan.Name)
 	if weight == 0 {
 		weight = 1 // as Headroom counts an unknown plan
 	}
-	for _, at := range slices.SortedFunc(maps.Keys(last), time.Time.Compare) {
-		r := last[at]
-		if acc.AddReset(state.Reset{ResetsAt: at, Util: r.Util, ObservedAt: r.ObservedAt, Weight: weight, Wasted: max(0, 100-r.Util) * weight}) {
+	// Sources give one reset at slightly different times (whole seconds, fractions): readings within
+	// sameReset of a group's first are one window, and its newest reading is the last one.
+	for i := 0; i < len(closed); {
+		last, j := closed[i], i+1
+		for ; j < len(closed) && closed[j].ResetsAt.Sub(*closed[i].ResetsAt) < sameReset; j++ {
+			if closed[j].ObservedAt.After(last.ObservedAt) {
+				last = closed[j]
+			}
+		}
+		at := *closed[i].ResetsAt
+		if acc.AddReset(state.Reset{ResetsAt: at, Util: last.Util, ObservedAt: last.ObservedAt, Weight: weight, Wasted: max(0, 100-last.Util) * weight}) {
 			e.dirty = true
 		}
+		i = j
 	}
 }
