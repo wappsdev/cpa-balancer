@@ -119,7 +119,7 @@ func dispatch(method string, req []byte) (raw []byte) {
 		if r := recover(); r != nil {
 			host.Log("error", fmt.Sprintf("cpa-balancer: panic in %s: %v\n%s", method, r, debug.Stack()))
 			if method == pluginabi.MethodSchedulerPick {
-				raw = ok(pluginapi.SchedulerPickResponse{DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Handled: true})
+				raw = failedPick(req)
 				return
 			}
 			raw = fail(fmt.Errorf("panic: %v", r))
@@ -146,6 +146,8 @@ func dispatch(method string, req []byte) (raw []byte) {
 			e.OnUsage(r)
 		}
 		return ok(map[string]any{})
+	case pluginabi.MethodModelRegister:
+		return ok(registration())
 	case pluginabi.MethodManagementRegister:
 		return ok(web.Registration())
 	case pluginabi.MethodManagementHandle:
@@ -159,6 +161,28 @@ func dispatch(method string, req []byte) (raw []byte) {
 		return ok(map[string]any{})
 	}
 	return ok(map[string]any{})
+}
+
+// failedPick answers a pick that panicked. CPA's own order may choose any account, so an extra
+// model is refused instead.
+func failedPick(req []byte) []byte {
+	var r pluginapi.SchedulerPickRequest
+	if e := engineNow(); e != nil && json.Unmarshal(req, &r) == nil {
+		if refusal, isExtra := engine.RefuseExtra(e.Config(), r.Model); isExtra {
+			return ok(refusal)
+		}
+	}
+	return ok(pluginapi.SchedulerPickResponse{DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Handled: true})
+}
+
+// registration lists the extra models for CPA's claude provider. CPA asks when it loads the
+// plugin and after each configuration change.
+func registration() pluginapi.ModelRegistrationResponse {
+	resp := pluginapi.ModelRegistrationResponse{Provider: "claude"}
+	if e := engineNow(); e != nil {
+		resp.Models = engine.ModelInfos(e.Config().ExtraModels)
+	}
+	return resp
 }
 
 type lifecycleRequest struct {
@@ -220,7 +244,7 @@ func configure(req []byte) []byte {
 		"metadata": pluginapi.Metadata{Name: web.PluginID, Version: "0.2.0", Author: "Adnan Kurt",
 			GitHubRepository: "https://github.com/wappsdev/cpa-balancer"},
 		"capabilities": map[string]bool{"scheduler": true, "scheduler_across_priorities": true,
-			"usage_plugin": true, "management_api": true},
+			"usage_plugin": true, "management_api": true, "model_registrar": true},
 	})
 }
 
