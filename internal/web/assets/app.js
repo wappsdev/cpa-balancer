@@ -124,6 +124,7 @@ function renderStatus(v) {
        <div class="reason">Every request uses CPA's own order. No probes or anchors run until balancing is turned back on.</div></div>`
     : choice("Main bucket", v.decision.main, v.decision.main_order) + choice("Fable bucket", v.decision.fable, v.decision.fable_order);
 
+  $("fable-warnings").innerHTML = fableWarningsHtml(v.fable_warnings);
   $("accounts").innerHTML = (v.accounts || []).map(a => accountCard(a, v)).join("");
   $("waste").innerHTML = wasteHtml(v.accounts, short);
   $("extra-models-head").hidden = $("extra-models").hidden = !v.extra_models?.length;
@@ -178,6 +179,12 @@ function accountCard(a, v) {
       <button type="button" class="button" data-recheck="${esc(a.auth_file)}"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Recheck</span></button>
     </div>
   </article>`;
+}
+
+// One line per account whose Mythos/Fable weekly share is at thresholds.fable_warn. It only
+// informs; the plugin writes the text.
+function fableWarningsHtml(warnings) {
+  return (warnings || []).map(w => `<p class="banner warn">${esc(w.message)}</p>`).join("");
 }
 
 // The models outside CPA's catalog, each with the accounts it is pinned to, in the order they are
@@ -1596,6 +1603,7 @@ function validate(c) {
   }
   if ("min_dwell_minutes" in t && !(Number.isInteger(t.min_dwell_minutes) && t.min_dwell_minutes >= 0)) errors.push("minimum dwell must be a whole number ≥ 0");
   if ("stale_hours" in t && !(t.stale_hours > 0)) errors.push("stale after must be more than 0 hours");
+  if ("fable_warn" in t && !(t.fable_warn > 0 && t.fable_warn <= 100)) errors.push("the Mythos/Fable warning must be above 0 and at most 100%");
   if (!c.accounts.length) errors.push("at least one account is required");
   for (const a of c.accounts) if (a.label && !/^[\p{L}\p{N}_-]{1,20}$/u.test(a.label)) errors.push(`name "${a.label}" must be one word of up to 20 letters, digits, - or _`);
   const final = t.final_cap ?? 100;

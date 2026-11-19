@@ -57,6 +57,7 @@ The config lives in CPA's config file under `plugins.configs.cpa-balancer`:
             session_cap: 98        # 5-hour window
             min_dwell_minutes: 60
             stale_hours: 6
+            fable_warn: 80         # warn at this Mythos/Fable weekly share
           anchor:
             enabled: true
             model: claude-haiku-4-5-20251001
@@ -115,6 +116,23 @@ A Claude Mythos model that CPA's catalog does not have can be served through cho
   then gets the refusal. The page lists each extra model with the state of its accounts.
 - After an upstream error CPA cools the account down; requests for the model are refused until
   the cooldown ends.
+- Mythos and Fable draw on one weekly share on the plans that have it. Every extra model is a
+  Mythos model, so its requests count like a Fable bucket model's: the response's unified 7-day
+  header updates the account's all-models week, its model lines are marked `Fable limit`, and the
+  usage endpoint's Fable reading (the share itself) is kept fresh by the probes, even without a
+  Fable bucket. No config is needed for this. The pin is unchanged.
+
+### Mythos/Fable share warning
+
+          thresholds:
+            fable_warn: 80   # percent of the Mythos/Fable weekly share; the default
+
+When an account's Fable reading from the usage endpoint reaches `fable_warn`, the Overview shows
+one line for it: "Mythos/Fable share on <account> at 82% — consider switching the advisor to a
+non-Fable model until the reset". `/status` carries it as `fable_warnings` (`auth_file`, `name`,
+`util`, `resets_at`, `message`). It only informs and changes no routing. The reading counts what
+Anthropic counts, so an advisor's iterations are inside it. It is only as fresh as the last probe
+(`stale_hours`); an estimate after a reset never warns.
 
 **Limits: in these cases the pin does not hold and a request can reach any claude account.**
 The plugin cannot see any of them, so neither the config check nor the page can warn about them.
@@ -237,7 +255,11 @@ as `no session`.
 
 Advisor models' calls are not seen live: CPA reports only the top-level `usage` of a response,
 which leaves the advisor iterations out. Claude Code's transcripts hold them; see the transcript
-section. The percent below does not count them either.
+section. The percent below does not count them either. CPA's response and stream-chunk
+interceptors could show the plugin the response body, but the plugin does not use them: a stream
+interceptor would be called for every chunk of every response, and a panic there fuses the
+plugin, scheduler included. Anthropic's own Fable reading includes the advisor's use, and the
+Mythos/Fable share warning reads it.
 
 ### Use of an Ultra account's limit window (`~% Ultra`)
 

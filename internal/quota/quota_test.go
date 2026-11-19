@@ -26,20 +26,18 @@ func TestFromHeadersSplitsBuckets(t *testing.T) {
 		"Anthropic-Ratelimit-Unified-7d-Utilization", "0.35", "Anthropic-Ratelimit-Unified-7d-Reset", reset(100*time.Hour),
 		"Anthropic-Ratelimit-Unified-5h-Utilization", "0.07", "Anthropic-Ratelimit-Unified-5h-Reset", reset(3*time.Hour),
 	)
-	main, fable := []string{"claude-opus-5-5"}, []string{"claude-fable-5-1"}
-	out := FromHeaders(h, "claude-opus-5-5", main, fable, now)
+	out := FromHeaders(h, true, now)
 	if int(out[Main].Util+0.5) != 35 || int(out[Session].Util+0.5) != 7 || !out[Main].ResetsAt.Equal(*at(100 * time.Hour)) {
 		t.Fatalf("main model: %+v", out)
 	}
 	// The unified 7d header is the all-models weekly window on a Fable request too (Fable use
 	// counts toward it); Fable's own weekly limit comes only from the usage endpoint.
-	fableOut := FromHeaders(h, "claude-fable-5-1", main, fable, now)
-	if _, ok := fableOut[Fable]; ok || int(fableOut[Main].Util+0.5) != 35 {
-		t.Fatalf("fable model must fill the all-models window, not Fable's: %+v", fableOut)
+	if _, ok := out[Fable]; ok {
+		t.Fatalf("the headers never fill Fable's own window: %+v", out)
 	}
-	other := FromHeaders(h, "claude-haiku-4-5-20251001", main, fable, now)
+	other := FromHeaders(h, false, now)
 	if _, ok := other[Main]; ok || len(other) != 1 {
-		t.Fatalf("unknown model must only update the session window: %+v", other)
+		t.Fatalf("a model of no bucket must only update the session window: %+v", other)
 	}
 	if out[Main].Source != "header" {
 		t.Fatal("source")

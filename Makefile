@@ -16,6 +16,7 @@ test:
 	node internal/web/extramodels_test.mjs
 	node internal/web/fill_test.mjs
 	node internal/web/advisor_test.mjs
+	node internal/web/fablewarn_test.mjs
 
 # Runs tools/sdkproof against the CPA host code (a scratch copy of the module): what the extra
 # models rely on. Slower than test; run it after changing extra models or the CPA version.

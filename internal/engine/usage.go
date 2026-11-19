@@ -231,7 +231,7 @@ func byProject(projects map[string]*ProjectUsage) (top map[string][]AccountProje
 // added to each Ultra account (its meter) and to each project; the rows have it already.
 func (e *Engine) AddSessions(v *View, s history.Sessions) {
 	v.Sessions = &s
-	v.Meter = &MeterView{Label: probe.DisplayName(meteredPlan), Basis: history.BasisText, FableModels: e.cfg.Buckets.Fable}
+	v.Meter = &MeterView{Label: probe.DisplayName(meteredPlan), Basis: history.BasisText, FableModels: e.cfg.FableShareModels()}
 	for i := range v.Accounts {
 		if v.Accounts[i].Plan != meteredPlan {
 			continue

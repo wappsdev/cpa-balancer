@@ -4,7 +4,6 @@ package quota
 import (
 	"encoding/json"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,15 +43,16 @@ func headerReading(h http.Header, window string, now time.Time) (Reading, bool) 
 	return Reading{Util: util * 100, ResetsAt: &at, ObservedAt: now, Source: "header"}, true
 }
 
-// FromHeaders reads the shared 5-hour window and, for a model of a configured bucket, the
-// all-models weekly window. The unified 7d header is that window on a Fable request too (Fable
-// use counts toward it); Fable's own weekly limit is only in the usage endpoint (FromProbe).
-func FromHeaders(h http.Header, model string, mainModels, fableModels []string, now time.Time) Readings {
+// FromHeaders reads the shared 5-hour window and, when weekly is set, the all-models weekly window.
+// The caller sets weekly for a model of a configured bucket or of the Fable/Mythos share: the
+// unified 7d header is the all-models window on a Fable or Mythos request too (their use counts
+// toward it); the Fable/Mythos share's own weekly limit is only in the usage endpoint (FromProbe).
+func FromHeaders(h http.Header, weekly bool, now time.Time) Readings {
 	out := Readings{}
 	if r, ok := headerReading(h, "5h", now); ok {
 		out[Session] = r
 	}
-	if r, ok := headerReading(h, "7d", now); ok && (slices.Contains(mainModels, model) || slices.Contains(fableModels, model)) {
+	if r, ok := headerReading(h, "7d", now); ok && weekly {
 		out[Main] = r
 	}
 	return out

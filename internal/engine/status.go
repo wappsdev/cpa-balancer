@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"github.com/wappsdev/cpa-balancer/internal/config"
 	"time"
 
@@ -85,6 +86,19 @@ type View struct {
 	ExtraModels []ExtraModelView `json:"extra_models,omitempty"`
 	// AdvisorPin is the pin of the requests that carry the advisor tool; absent when none is set.
 	AdvisorPin *AdvisorPinView `json:"advisor_pin,omitempty"`
+	// FableWarnings are the accounts whose Fable/Mythos weekly share has reached
+	// thresholds.fable_warn, in the accounts' order. They only inform.
+	FableWarnings []FableWarning `json:"fable_warnings,omitempty"`
+}
+
+// FableWarning: an account's share of the weekly limit Fable and Mythos share (the advisor
+// included) is at or above the warning threshold.
+type FableWarning struct {
+	AuthFile string     `json:"auth_file"`
+	Name     string     `json:"name"`
+	Util     float64    `json:"util"`
+	ResetsAt *time.Time `json:"resets_at"`
+	Message  string     `json:"message"`
 }
 
 // AdvisorPinView is the advisor pin and where its requests can go now.
@@ -162,6 +176,11 @@ func (e *Engine) Status() View {
 		}
 		av.Waste = wasteView(e.st.Accounts[a.AuthFile], now)
 		v.Accounts = append(v.Accounts, av)
+		// An estimate is a week after its reset that no reading has reached yet: it reads 0.
+		if r, ok := snap.Readings[quota.Fable]; ok && r.Source != "estimate" && r.Util >= e.cfg.Thresholds.FableWarn {
+			v.FableWarnings = append(v.FableWarnings, FableWarning{AuthFile: a.AuthFile, Name: av.Name, Util: r.Util, ResetsAt: r.ResetsAt,
+				Message: fmt.Sprintf("Mythos/Fable share on %s at %.0f%% — consider switching the advisor to a non-Fable model until the reset", av.Name, r.Util)})
+		}
 	}
 	v.Affinity = e.affinityView(now)
 	v.ExtraModels = e.extraModelViews(now)

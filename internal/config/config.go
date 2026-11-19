@@ -51,6 +51,9 @@ type Thresholds struct {
 	SessionCap      float64       `yaml:"session_cap" json:"session_cap"`
 	MinDwellMinutes int           `yaml:"min_dwell_minutes" json:"min_dwell_minutes"`
 	StaleHours      float64       `yaml:"stale_hours" json:"stale_hours"`
+	// FableWarn is the share of the Fable/Mythos weekly limit, in percent, at which the page warns
+	// about an account. It only informs: it changes no routing.
+	FableWarn float64 `yaml:"fable_warn" json:"fable_warn"`
 }
 
 func (t Thresholds) MinDwell() time.Duration { return time.Duration(t.MinDwellMinutes) * time.Minute }
@@ -121,7 +124,7 @@ func Default() Config {
 		Thresholds: Thresholds{
 			Reserve:  []ReserveStep{{Cap: 85, Hours: 48}, {Cap: 90, Hours: 12}},
 			FinalCap: 99, SessionCap: 98,
-			MinDwellMinutes: 60, StaleHours: 6,
+			MinDwellMinutes: 60, StaleHours: 6, FableWarn: 80,
 		},
 		Anchor:   Anchor{Enabled: true, Model: "claude-haiku-4-5-20251001", FallbackModel: "claude-sonnet-5-5"},
 		Affinity: Affinity{ProjectsDir: "~/.claude/projects"},
@@ -183,6 +186,9 @@ func (c Config) Validate() error {
 	}
 	if th.StaleHours <= 0 {
 		return fmt.Errorf("stale_hours must be positive")
+	}
+	if th.FableWarn <= 0 || th.FableWarn > 100 {
+		return fmt.Errorf("fable_warn must be above 0 and at most 100, got %v", th.FableWarn)
 	}
 	if c.Fill.MinRoom < 0 || c.Fill.MinRoom > 100 {
 		return fmt.Errorf("fill.min_room must be within 0-100, got %v", c.Fill.MinRoom)

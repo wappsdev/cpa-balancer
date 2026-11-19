@@ -154,7 +154,8 @@ func (e *Engine) OnUsage(rec pluginapi.UsageRecord) {
 	}
 	session, parent := history.CanonicalSession(rec.SessionID, rec.ParentSessionID)
 	e.rec.AddTraffic(now, history.Source{Account: rec.AuthID, Model: rec.Model, Session: session, Parent: parent}, traffic)
-	readings := quota.FromHeaders(rec.ResponseHeaders, rec.Model, e.cfg.Buckets.Main, e.cfg.Buckets.Fable, now)
+	_, bucketed := e.bucketOf(rec.Model)
+	readings := quota.FromHeaders(rec.ResponseHeaders, bucketed || e.cfg.InFableShare(rec.Model), now)
 	if len(readings) == 0 {
 		return
 	}
@@ -264,7 +265,7 @@ func (e *Engine) probeDue(now time.Time, onlySwitched map[string]bool) bool {
 	type job struct{ name, index string }
 	var jobs []job
 	weekly := []quota.Bucket{quota.Main}
-	if len(e.cfg.Buckets.Fable) > 0 {
+	if len(e.cfg.FableShareModels()) > 0 { // the Fable/Mythos share is read only here
 		weekly = append(weekly, quota.Fable)
 	}
 	e.mu.RLock()

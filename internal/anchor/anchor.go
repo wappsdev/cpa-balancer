@@ -27,7 +27,7 @@ func Request(authID string, useMainModel bool, model, fallbackModel string) plug
 
 // WindowReading reads the 5-hour window from the anchor response headers.
 func WindowReading(resp pluginapi.HostModelExecutionResponse, now time.Time) (quota.Reading, bool) {
-	r, ok := quota.FromHeaders(resp.Headers, "", nil, nil, now)[quota.Session]
+	r, ok := quota.FromHeaders(resp.Headers, false, now)[quota.Session]
 	r.Source = "anchor"
 	return r, ok
 }

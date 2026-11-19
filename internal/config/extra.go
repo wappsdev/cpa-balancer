@@ -56,6 +56,27 @@ func (c Config) ExtraModel(requested string) (ExtraModel, bool) {
 	return ExtraModel{}, false
 }
 
+// InFableShare: a request for the model draws on the weekly limit Fable and Mythos share. That is
+// a model of the Fable bucket, and every extra model: an extra model's id is a Mythos id (see
+// extraIDPattern), matched by the name CPA routes.
+func (c Config) InFableShare(model string) bool {
+	if slices.Contains(c.Buckets.Fable, model) {
+		return true
+	}
+	_, extra := c.ExtraModel(model)
+	return extra
+}
+
+// FableShareModels are the models of the shared Fable/Mythos limit: the Fable bucket's, then the
+// extra models'.
+func (c Config) FableShareModels() []string {
+	out := append([]string(nil), c.Buckets.Fable...)
+	for _, m := range c.ExtraModels {
+		out = append(out, m.ID)
+	}
+	return out
+}
+
 // extraIDPattern keeps extra models to the Mythos family. Every request for an extra model is
 // pinned, so an id that is also a catalog model (claude-opus-5-5, say) would pin all its traffic
 // to a few accounts. The plugin cannot read CPA's catalog, and CPA updates it from the network,
