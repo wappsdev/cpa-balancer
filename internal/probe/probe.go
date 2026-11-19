@@ -93,8 +93,9 @@ func ProfileRequest(accessToken string) pluginapi.HTTPRequest {
 	return r
 }
 
-// Plan is a subscription and its weekly limit in Pro plans: a Max 20x has ten times a Pro's weekly
-// limit (its 20x is the 5-hour limit), a Max 5x five times.
+// Plan is a subscription and its weekly limit in Pro plans. The ids are Anthropic's rate-limit tiers:
+// max_20x is the plan sold as Ultra (ten times a Pro's weekly limit), max_5x the plan sold as Max
+// (five times). DisplayName gives the names the owner sees.
 type Plan struct {
 	Name   string  `json:"name"`
 	Weight float64 `json:"weight"`
@@ -131,7 +132,7 @@ func DisplayName(name string) string {
 	case "max_20x":
 		return "Ultra"
 	case "max_5x":
-		return "Max 5x"
+		return "Max"
 	case "pro":
 		return "Pro"
 	}
