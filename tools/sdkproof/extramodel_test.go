@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -68,20 +69,39 @@ type errorString string
 
 func (e errorString) Error() string { return string(e) }
 
+// proofExecutor records which auth each call reached; failStatus makes it answer with that
+// upstream status instead.
 type proofExecutor struct {
-	mu    sync.Mutex
-	calls []string
+	mu         sync.Mutex
+	calls      []string
+	failStatus int
+}
+
+func (e *proofExecutor) record(auth *coreauth.Auth) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls = append(e.calls, auth.ID)
+	if e.failStatus != 0 {
+		return &coreauth.Error{HTTPStatus: e.failStatus, Message: "upstream failed"}
+	}
+	return nil
 }
 
 func (e *proofExecutor) Identifier() string { return "claude" }
 func (e *proofExecutor) Execute(_ context.Context, auth *coreauth.Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.calls = append(e.calls, auth.ID)
+	if err := e.record(auth); err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
 	return cliproxyexecutor.Response{Payload: []byte(`{}`)}, nil
 }
-func (e *proofExecutor) ExecuteStream(context.Context, *coreauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
-	return nil, errorString("not used")
+func (e *proofExecutor) ExecuteStream(_ context.Context, auth *coreauth.Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	if err := e.record(auth); err != nil {
+		return nil, err
+	}
+	ch := make(chan cliproxyexecutor.StreamChunk, 1)
+	ch <- cliproxyexecutor.StreamChunk{Payload: []byte(`{}`)}
+	close(ch)
+	return &cliproxyexecutor.StreamResult{Chunks: ch}, nil
 }
 func (e *proofExecutor) Refresh(_ context.Context, a *coreauth.Auth) (*coreauth.Auth, error) { return a, nil }
 func (e *proofExecutor) CountTokens(context.Context, *coreauth.Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
@@ -152,7 +172,43 @@ func TestProofExtraModelThroughRegistrarAndScheduler(t *testing.T) {
 		t.Fatalf("execute with a thinking suffix: %v", err)
 	}
 	exec.take()
-	t.Logf("models the scheduler saw: %q", sched.models)
+	if last := sched.models[len(sched.models)-1]; last != proofModel+"(high)" {
+		t.Fatalf("the scheduler saw %q: the plugin must match the model with its suffix", last)
+	}
+
+	// Streaming reaches the same scheduler.
+	stream, err := service.coreManager.ExecuteStream(ctx, []string{"claude"}, cliproxyexecutor.Request{Model: proofModel}, cliproxyexecutor.Options{Stream: true})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	for range stream.Chunks {
+	}
+	if got := exec.take(); !slices.Equal(got, []string{"auth-b"}) {
+		t.Fatalf("stream served by %v, want only auth-b", got)
+	}
+
+	// An upstream failure on the pinned auth is not retried on another auth.
+	// 429 comes last: the cooldown it starts outlives the reset below.
+	for _, status := range []int{http.StatusInternalServerError, http.StatusNotFound, http.StatusTooManyRequests} {
+		exec.failStatus = status
+		err := run(proofModel)
+		got := exec.take()
+		if err == nil || slices.Contains(got, "auth-a") {
+			t.Fatalf("upstream %d: served by %v, err %v; want auth-b only and an error", status, got, err)
+		}
+		if len(got) == 0 && !strings.Contains(err.Error(), "pinned auth not available") {
+			t.Fatalf("upstream %d: no auth tried and err %v", status, err)
+		}
+		t.Logf("upstream %d: tried %v, error %q", status, got, err)
+		exec.failStatus = 0
+		// a failure may cool auth-b down; register it again so the next case starts clean
+		b, _ := service.coreManager.GetByID("auth-b")
+		b.Status, b.Unavailable, b.ModelStates, b.NextRetryAfter = coreauth.StatusActive, false, nil, time.Time{}
+		if _, err := service.coreManager.Update(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		service.registerModelsForAuth(ctx, b)
+	}
 
 	// The pinned auth disabled: the scheduler rejects, nothing is served, the model stays listed.
 	b, _ := service.coreManager.GetByID("auth-b")
@@ -161,7 +217,7 @@ func TestProofExtraModelThroughRegistrarAndScheduler(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.registerModelsForAuth(ctx, b)
-	err := run(proofModel)
+	err = run(proofModel)
 	if err == nil || !strings.Contains(err.Error(), "pinned auth not available") {
 		t.Fatalf("with the pinned auth disabled: err = %v, want the scheduler's reject", err)
 	}
@@ -172,7 +228,9 @@ func TestProofExtraModelThroughRegistrarAndScheduler(t *testing.T) {
 	for _, m := range reg.GetAvailableModels("openai") {
 		listed = listed || m["id"] == proofModel
 	}
-	t.Logf("listed with the pinned auth disabled: %v", listed)
+	if !listed {
+		t.Fatal("the model left the list when the pinned auth was disabled")
+	}
 
 	// A scheduler error ends the request too.
 	sched.mode = "error"
@@ -188,5 +246,7 @@ func TestProofExtraModelThroughRegistrarAndScheduler(t *testing.T) {
 	if err := run(proofModel); err != nil {
 		t.Fatalf("unhandled pick: %v", err)
 	}
-	t.Logf("an unhandled pick was served by %v", exec.take())
+	if got := exec.take(); !slices.Equal(got, []string{"auth-a"}) {
+		t.Fatalf("an unhandled pick was served by %v, want auth-a (the fallback the plugin must never cause)", got)
+	}
 }
