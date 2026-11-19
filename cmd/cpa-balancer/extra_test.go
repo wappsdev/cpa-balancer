@@ -12,7 +12,7 @@ import (
 )
 
 const extraYAML = `extra_models:
-  - id: claude-extra-1
+  - id: claude-mythos-9-1
     display_name: Claude Extra 1
     accounts: [b.json]
     context_length: 1000000
@@ -56,7 +56,7 @@ func TestTheRegistrarListsTheExtraModelsForClaude(t *testing.T) {
 		t.Fatalf("registration = %+v", got)
 	}
 	m := got.Models[0]
-	if m.ID != "claude-extra-1" || m.DisplayName != "Claude Extra 1" || m.Object != "model" || m.OwnedBy != "anthropic" || m.Type != "claude" ||
+	if m.ID != "claude-mythos-9-1" || m.DisplayName != "Claude Extra 1" || m.Object != "model" || m.OwnedBy != "anthropic" || m.Type != "claude" ||
 		m.ContextLength != 1000000 || m.MaxCompletionTokens != 128000 || m.InputTokenLimit != 1000000 || m.OutputTokenLimit != 128000 {
 		t.Fatalf("model = %+v", m)
 	}
@@ -75,10 +75,10 @@ func TestTheRegistrarListsNothingWithoutExtraModels(t *testing.T) {
 }
 
 func TestAModelWithoutThinkingLevelsHasNoThinking(t *testing.T) {
-	configureYAML(t, extraConfig(t, "extra_models: [{id: claude-extra-2, accounts: [b.json], context_length: 200000, max_completion_tokens: 8192}]\n"))
+	configureYAML(t, extraConfig(t, "extra_models: [{id: claude-mythos-9-2, accounts: [b.json], context_length: 200000, max_completion_tokens: 8192}]\n"))
 	t.Cleanup(shutdown)
 	got := envelope[pluginapi.ModelRegistrationResponse](t, dispatch(pluginabi.MethodModelRegister, []byte(`{}`)))
-	if len(got.Models) != 1 || got.Models[0].Thinking != nil || got.Models[0].DisplayName != "claude-extra-2" {
+	if len(got.Models) != 1 || got.Models[0].Thinking != nil || got.Models[0].DisplayName != "claude-mythos-9-2" {
 		t.Fatalf("registration = %+v", got)
 	}
 }
@@ -91,16 +91,32 @@ func TestAFailedPickRefusesAnExtraModelAndDelegatesTheRest(t *testing.T) {
 			Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "a.json", Provider: "claude"}, {ID: "b.json", Provider: "claude"}}})
 		return raw
 	}
-	got := envelope[pluginapi.SchedulerPickResponse](t, failedPick(pickReq("claude-extra-1(high)")))
+	// The pick panics inside dispatch, which recovers and answers.
+	panics := 0
+	enginePick = func(*engine.Engine, pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
+		panics++
+		panic("pick failed")
+	}
+	t.Cleanup(func() { enginePick = (*engine.Engine).Pick })
+	got := envelope[pluginapi.SchedulerPickResponse](t, dispatch(pluginabi.MethodSchedulerPick, pickReq(" Claude-Mythos-9-1 (high)")))
 	if !got.Handled || !got.Reject || got.RejectCode != engine.ExtraModelUnavailable || got.AuthID != "" || got.DelegateBuiltin != "" {
-		t.Fatalf("a failed pick of an extra model = %+v, want a refusal", got)
+		t.Fatalf("a panicked pick of an extra model = %+v, want a refusal", got)
 	}
-	got = envelope[pluginapi.SchedulerPickResponse](t, failedPick(pickReq("m")))
+	got = envelope[pluginapi.SchedulerPickResponse](t, dispatch(pluginabi.MethodSchedulerPick, pickReq("m")))
 	if !got.Handled || got.Reject || got.DelegateBuiltin != pluginapi.SchedulerBuiltinFillFirst {
-		t.Fatalf("a failed pick of another model = %+v, want CPA's own order", got)
+		t.Fatalf("a panicked pick of another model = %+v, want CPA's own order", got)
 	}
-	got = envelope[pluginapi.SchedulerPickResponse](t, failedPick([]byte("not json")))
-	if !got.Handled || got.Reject || got.DelegateBuiltin != pluginapi.SchedulerBuiltinFillFirst {
-		t.Fatalf("an unreadable pick = %+v, want CPA's own order", got)
+	if panics != 2 {
+		t.Fatalf("the pick panicked %d times, want 2: the test did not reach the recovery", panics)
+	}
+}
+
+func TestAPickThatDoesNotPanicIsTheEnginesPick(t *testing.T) {
+	configureYAML(t, extraConfig(t, extraYAML))
+	t.Cleanup(shutdown)
+	raw, _ := json.Marshal(pluginapi.SchedulerPickRequest{Providers: []string{"claude"}, Model: "claude-mythos-9-1",
+		Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "a.json", Provider: "claude"}, {ID: "b.json", Provider: "claude"}}})
+	if got := envelope[pluginapi.SchedulerPickResponse](t, dispatch(pluginabi.MethodSchedulerPick, raw)); got.AuthID != "b.json" {
+		t.Fatalf("pick = %+v, want the pinned account", got)
 	}
 }

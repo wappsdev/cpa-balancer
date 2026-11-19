@@ -8,7 +8,7 @@ import (
 	"github.com/wappsdev/cpa-balancer/internal/config"
 )
 
-const Extra = "claude-extra-1"
+const Extra = "claude-mythos-9-1"
 
 // extraWorld pins Extra to G, the account the balancer would not choose (W has the most room).
 func extraWorld(t *testing.T) *world {
@@ -27,7 +27,7 @@ func refused(r pluginapi.SchedulerPickResponse) bool {
 
 func TestAnExtraModelGoesOnlyToItsAccount(t *testing.T) {
 	w := extraWorld(t)
-	for _, model := range []string{Extra, Extra + "(high)", "p/" + Extra} {
+	for _, model := range []string{Extra, Extra + "(high)", "p/" + Extra, " " + Extra + " ", Extra + " (high)", "Claude-Mythos-9-1 (max)"} {
 		if got := w.e.Pick(w.req(model, 0, "", W, G, X)); got.AuthID != G || !got.Handled || got.Reject {
 			t.Fatalf("%s: pick = %+v, want %s", model, got, G)
 		}

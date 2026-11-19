@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-const extraBase = "accounts: [{auth_file: claude-w.json}, {auth_file: claude-g.json}]\nbuckets: {main: [claude-opus-5-5], fable: [claude-fable-5-2]}\n"
+const extraBase = "accounts: [{auth_file: claude-w.json}, {auth_file: claude-g.json}]\nbuckets: {main: [claude-opus-5-5], fable: [claude-fable-5-2, claude-mythos-9-5]}\n"
 
 const extraOne = `extra_models:
-  - id: claude-extra-1
+  - id: claude-mythos-9-1
     display_name: Claude Extra 1
     accounts: [claude-g.json]
     context_length: 1000000
@@ -22,12 +22,12 @@ func TestExtraModelsAreParsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ExtraModel{ID: "claude-extra-1", DisplayName: "Claude Extra 1", Accounts: []string{"claude-g.json"},
+	want := ExtraModel{ID: "claude-mythos-9-1", DisplayName: "Claude Extra 1", Accounts: []string{"claude-g.json"},
 		ContextLength: 1000000, MaxCompletionTokens: 128000, ThinkingLevels: []string{"low", "high"}}
 	if len(cfg.ExtraModels) != 1 || !equalExtra(cfg.ExtraModels[0], want) {
 		t.Fatalf("extra models = %+v", cfg.ExtraModels)
 	}
-	if m, ok := cfg.ExtraModel("claude-extra-1"); !ok || m.ID != "claude-extra-1" {
+	if m, ok := cfg.ExtraModel("claude-mythos-9-1"); !ok || m.ID != "claude-mythos-9-1" {
 		t.Fatalf("ExtraModel lookup = %+v, %v", m, ok)
 	}
 	if _, ok := cfg.ExtraModel("claude-opus-5-5"); ok {
@@ -47,10 +47,15 @@ func TestNoExtraModelsByDefault(t *testing.T) {
 
 func TestExtraModelsAreValidated(t *testing.T) {
 	for _, c := range []struct{ name, yaml, want string }{
-		{"no id", strings.Replace(extraOne, "id: claude-extra-1", `id: ""`, 1), "id"},
-		{"an id with a suffix", strings.Replace(extraOne, "id: claude-extra-1", `id: "claude-extra-1(high)"`, 1), "id"},
-		{"an id with a prefix", strings.Replace(extraOne, "id: claude-extra-1", "id: p/claude-extra-1", 1), "id"},
-		{"a bucket model", strings.Replace(extraOne, "id: claude-extra-1", "id: claude-fable-5-2", 1), "bucket"},
+		{"no id", strings.Replace(extraOne, "id: claude-mythos-9-1", `id: ""`, 1), "id"},
+		{"an id with a suffix", strings.Replace(extraOne, "id: claude-mythos-9-1", `id: "claude-mythos-9-1(high)"`, 1), "id"},
+		{"an id with a prefix", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: p/claude-mythos-9-1", 1), "id"},
+		{"a bucket model", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-mythos-9-5", 1), "bucket"},
+		{"a built-in claude model", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-opus-5-5", 1), "claude-mythos-"},
+		{"a model of the catalog's newer list", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-fable-5-2", 1), "claude-mythos-"},
+		{"a name of another family", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-new-1", 1), "claude-mythos-"},
+		{"upper case", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: Claude-Mythos-9-1", 1), "claude-mythos-"},
+		{"the bare prefix", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-mythos-", 1), "claude-mythos-"},
 		{"twice", extraOne + strings.TrimPrefix(extraOne, "extra_models:\n"), "twice"},
 		{"no account", strings.Replace(extraOne, "accounts: [claude-g.json]", "accounts: []", 1), "account"},
 		{"an account not configured", strings.Replace(extraOne, "accounts: [claude-g.json]", "accounts: [claude-x.json]", 1), "not configured"},
@@ -71,12 +76,20 @@ func TestExtraModelNamesTheModelARequestCarries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"claude-extra-1", "claude-extra-1(high)", "claude-extra-1[1m]", "p/claude-extra-1", "p/claude-extra-1(8192)"} {
+	for _, name := range []string{"claude-mythos-9-1", "claude-mythos-9-1(high)", "claude-mythos-9-1[1m]", "p/claude-mythos-9-1", "p/claude-mythos-9-1(8192)"} {
 		if _, ok := cfg.ExtraModel(name); !ok {
 			t.Errorf("%q is the extra model", name)
 		}
 	}
-	for _, name := range []string{"claude-extra-10", "claude-extra", ""} {
+	// CPA trims the name, cuts a "(...)" suffix at the last "(", trims again, and matches the
+	// provider and the auth's models without regard to case. Each of these routes to the model.
+	for _, name := range []string{" claude-mythos-9-1", "claude-mythos-9-1 ", "\tclaude-mythos-9-1\n", "Claude-Mythos-9-1", "CLAUDE-MYTHOS-9-1(high)",
+		"claude-mythos-9-1 (high)", " claude-mythos-9-1 (high) ", "P/Claude-Mythos-9-1 (8192)"} {
+		if _, ok := cfg.ExtraModel(name); !ok {
+			t.Errorf("%q routes to the extra model and must be pinned", name)
+		}
+	}
+	for _, name := range []string{"claude-mythos-9-10", "claude-mythos-9", "", "claude-mythos-9-1x(high)"} {
 		if _, ok := cfg.ExtraModel(name); ok {
 			t.Errorf("%q is not the extra model", name)
 		}

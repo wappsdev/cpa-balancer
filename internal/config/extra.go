@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -25,30 +26,48 @@ type ExtraModel struct {
 }
 
 // ExtraModel finds the extra model a request names. CPA hands the scheduler the model as the
-// client sent it, so a thinking suffix ("(high)"), a context marker ("[1m]") and an auth prefix
-// ("p/") are dropped first: an exact match would miss them and let the request go to any account.
+// client sent it, but routes it by a normalized name; a request that routes to the model and is
+// not matched here would go to any account. So the name is normalized as CPA does, then a bit
+// further (a miss is the unsafe side):
+//   - trimmed, and a thinking suffix cut at the last "(" when the name ends in ")", then trimmed
+//     again (CPA's thinking.ParseSuffix and canonicalModelKey);
+//   - compared without regard to case (CPA's provider lookup falls back to lower case, and its
+//     check that an auth serves a model uses strings.EqualFold);
+//   - an auth prefix ("p/") and a context marker ("[1m]") dropped as well.
 func (c Config) ExtraModel(requested string) (ExtraModel, bool) {
-	name := requested
+	name := strings.TrimSpace(requested)
+	if strings.HasSuffix(name, ")") {
+		if i := strings.LastIndexByte(name, '('); i >= 0 {
+			name = strings.TrimSpace(name[:i])
+		}
+	}
 	if i := strings.LastIndexByte(name, '/'); i >= 0 {
 		name = name[i+1:]
 	}
-	if i := strings.IndexAny(name, "(["); i >= 0 {
+	if i := strings.IndexByte(name, '['); i >= 0 {
 		name = name[:i]
 	}
+	name = strings.TrimSpace(name)
 	for _, m := range c.ExtraModels {
-		if m.ID == name {
+		if strings.EqualFold(m.ID, name) {
 			return m, true
 		}
 	}
 	return ExtraModel{}, false
 }
 
+// extraIDPattern keeps extra models to the Mythos family. Every request for an extra model is
+// pinned, so an id that is also a catalog model (claude-opus-5-5, say) would pin all its traffic
+// to a few accounts. The plugin cannot read CPA's catalog, and CPA updates it from the network,
+// so no list kept here could be complete; the family name is the rule instead.
+var extraIDPattern = regexp.MustCompile(`^claude-mythos-[a-z0-9][a-z0-9.-]*$`)
+
 func (c Config) validateExtraModels() error {
 	seen := map[string]bool{}
 	for _, m := range c.ExtraModels {
 		switch {
-		case m.ID == "" || strings.ContainsAny(m.ID, "()[]/ \t"):
-			return fmt.Errorf("extra_models: an id must be a plain model name, got %q", m.ID)
+		case !extraIDPattern.MatchString(m.ID):
+			return fmt.Errorf("extra_models: an id must be claude-mythos- followed by lower-case letters, digits, dots or dashes, got %q", m.ID)
 		case seen[m.ID]:
 			return fmt.Errorf("extra_models: %s is listed twice", m.ID)
 		case slices.Contains(c.Buckets.Main, m.ID) || slices.Contains(c.Buckets.Fable, m.ID):
