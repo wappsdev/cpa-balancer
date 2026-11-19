@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -20,10 +21,13 @@ const (
 	agentHeader   = "X-Claude-Code-Agent-Id"
 	mainAgent     = "main"
 
-	missTTL    = 5 * time.Second  // a new session's transcript file appears after its first request; short, so its project home applies within seconds
-	recheckTTL = 60 * time.Second // a hit is looked up again after this long, so a session resumed from another directory moves to its current folder
-	maxCached  = 1000             // sessions remembered, hits and misses each
-	maxName    = 255              // the longest file name
+	// indexTTL is how old the projects index may be. A new session's transcript file appears after
+	// its first request, and its project home must apply within seconds; a session resumed from
+	// another directory must move to its current folder soon. A pass over about 400 folders and 1000
+	// transcripts costs about 10 to 20 ms on a warm cache (see BenchmarkFolderForAWeekOfSessions), so
+	// one pass every 5 s is well under 1 % of one core, while an answer is never more than 5 s old.
+	indexTTL = 5 * time.Second
+	maxName  = 255 // the longest file name
 )
 
 // header is the first non-empty value of a header, whatever the case of its name.
@@ -85,98 +89,129 @@ func ValidProject(name string) bool {
 
 // Projects finds a session's project folder: the directory under the projects directory that holds
 // `<sid>.jsonl`. When a session was resumed from another directory, several folders hold one, and
-// the folder whose file was written last is the current one. It only lists directory names and
-// stats files; it never opens one.
+// the folder whose file was written last is the current one (the first by name when two have the
+// same time). It only lists directory names and reads file metadata; it never opens a transcript.
+//
+// The answers come from one index of the whole projects directory, `session -> folder`, built in a
+// single pass over every folder's entries and rebuilt when it is older than indexTTL. A lookup is a
+// map read, so a page that asks for hundreds of sessions costs one pass, not one per session. The
+// index holds one entry per session that has a transcript file, so its size is bounded by the
+// number of transcript files on disk; a lookup for an unknown session adds nothing to it.
 type Projects struct {
 	dir string
 	now func() time.Time
 
-	mu     sync.Mutex
-	found  map[string]hit       // session -> its folder
-	missed map[string]time.Time // session -> when it was not found
+	mu       sync.Mutex
+	index    map[string]indexed // nil until the first pass ends
+	builtAt  time.Time          // when the pass that made index began
+	building chan struct{}      // open while a pass runs; closed when it ends
+
+	passes atomic.Int64 // passes started, for the tests
 }
 
-// hit is the folder a session was found in, and when that was looked up.
-type hit struct {
+// indexed is the folder that holds a session's newest transcript file, and that file's time.
+type indexed struct {
 	folder string
 	at     time.Time
 }
 
 func NewProjects(dir string, now func() time.Time) *Projects {
-	return &Projects{dir: dir, now: now, found: map[string]hit{}, missed: map[string]time.Time{}}
+	return &Projects{dir: dir, now: now}
 }
 
-// Folder is the project folder of a root session, found by name. An unknown session has none. A
-// hit is kept for recheckTTL, then looked up again (the session may have been resumed from another
-// folder); a miss is kept for a short while only, as the transcript is written after the
-// session's first request. A lookup that finds nothing keeps the earlier answer.
+// Folder is the project folder of a root session, found by name. An unknown session has none. The
+// answer is as old as the index (at most indexTTL, plus the length of a pass), so a session resumed
+// from another folder moves to its current folder within that time, and a new session, whose
+// transcript is written after its first request, has its project within that time too.
 func (p *Projects) Folder(sid string) (string, bool) {
 	if p.dir == "" || !ValidSID(sid) {
 		return "", false
 	}
+	e, ok := p.current()[sid]
+	return e.folder, ok
+}
+
+// current is the index, rebuilt first when it is too old. At most one pass runs at a time. While a
+// pass runs, the other callers use the index they have: an answer a few seconds old is what they
+// would get one moment earlier anyway, and none of them waits for the directory reads. Only the
+// very first caller has no index, so the others wait for that first pass. The lock is never held
+// during the directory reads.
+func (p *Projects) current() map[string]indexed {
 	now := p.now()
 	p.mu.Lock()
-	prev, hadHit := p.found[sid]
-	if hadHit && now.Sub(prev.at) < recheckTTL {
-		p.mu.Unlock()
-		return prev.folder, true
+	if p.index != nil && now.Sub(p.builtAt) < indexTTL {
+		defer p.mu.Unlock()
+		return p.index
 	}
-	if at, ok := p.missed[sid]; ok && now.Sub(at) < missTTL {
+	if running := p.building; running != nil {
+		stale := p.index
 		p.mu.Unlock()
-		return "", false
+		if stale != nil {
+			return stale
+		}
+		<-running
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.index
 	}
+	done := make(chan struct{})
+	p.building = done
 	p.mu.Unlock()
 
-	folder, ok := p.scan(sid) // directory reads happen outside the lock
+	fresh, ok := p.build()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
 	case ok:
-		delete(p.missed, sid)
-		p.found[sid] = hit{folder, now}
-	case hadHit:
-		folder, ok = prev.folder, true
-		p.found[sid] = hit{folder, now}
-	default:
-		p.missed[sid] = now
-	}
-	if len(p.found) > maxCached {
-		clear(p.found)
-	}
-	if len(p.missed) > maxCached {
-		clear(p.missed)
-	}
-	return folder, ok
+		p.index = fresh
+	case p.index == nil:
+		p.index = map[string]indexed{} // nothing is known yet; try again after indexTTL
+	} // else an unreadable directory keeps the earlier index
+	p.builtAt = now
+	p.building = nil
+	close(done)
+	return p.index
 }
 
-// scan is the folder whose `<sid>.jsonl` was modified last; the first by name when two have the
-// same time.
-func (p *Projects) scan(sid string) (string, bool) {
-	entries, err := os.ReadDir(p.dir)
+// build reads the entries of every project folder once and maps each session to the folder whose
+// `<sid>.jsonl` was modified last (the first by name when two have the same time). It reports false
+// when the projects directory cannot be read.
+func (p *Projects) build() (map[string]indexed, bool) {
+	p.passes.Add(1)
+	folders, err := os.ReadDir(p.dir) // sorted by name, so the first of equal times wins below
 	if err != nil {
-		return "", false
+		return nil, false
 	}
-	var best string
-	var bestAt time.Time
-	found := false
-	for _, e := range entries {
-		if !e.IsDir() || !ValidProject(e.Name()) {
+	index := map[string]indexed{}
+	for _, f := range folders {
+		if !f.IsDir() || !ValidProject(f.Name()) {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(p.dir, e.Name(), sid+".jsonl"))
-		if err != nil || !info.Mode().IsRegular() {
+		files, err := os.ReadDir(filepath.Join(p.dir, f.Name()))
+		if err != nil {
 			continue
 		}
-		if at := info.ModTime(); !found || at.After(bestAt) {
-			best, bestAt, found = e.Name(), at, true
+		for _, e := range files {
+			session, ok := strings.CutSuffix(e.Name(), ".jsonl")
+			if !ok || !ValidSID(session) || !e.Type().IsRegular() {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if prev, seen := index[session]; !seen || info.ModTime().After(prev.at) {
+				index[session] = indexed{f.Name(), info.ModTime()}
+			}
 		}
 	}
-	return best, found
+	return index, true
 }
 
-// size is the number of sessions remembered, for the tests.
+// size is the number of sessions in the index, for the tests.
 func (p *Projects) size() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.found) + len(p.missed)
+	return len(p.index)
 }

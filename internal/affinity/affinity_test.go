@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -85,7 +87,7 @@ func TestProjectsNeverOpensATranscript(t *testing.T) {
 	}
 }
 
-func TestProjectsCachesAHitAndRetriesAMissAfterAShortWhile(t *testing.T) {
+func TestProjectsReadsTheDirectoryAgainOnlyAfterTheIndexTime(t *testing.T) {
 	dir := t.TempDir()
 	clock := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
 	p := NewProjects(dir, func() time.Time { return clock })
@@ -94,9 +96,9 @@ func TestProjectsCachesAHitAndRetriesAMissAfterAShortWhile(t *testing.T) {
 	}
 	transcript(t, dir, "-work-alpha", sid) // Claude Code writes the file after the first request
 	if _, ok := p.Folder(sid); ok {
-		t.Fatal("a recent miss is remembered, so a burst of requests does not scan the directory each time")
+		t.Fatal("the index is not rebuilt within its time, so a burst of requests does not read the directory each time")
 	}
-	clock = clock.Add(missTTL + time.Second)
+	clock = clock.Add(indexTTL + time.Second)
 	if folder, ok := p.Folder(sid); !ok || folder != "-work-alpha" {
 		t.Fatalf("after the wait the file is found: %q %v", folder, ok)
 	}
@@ -104,7 +106,7 @@ func TestProjectsCachesAHitAndRetriesAMissAfterAShortWhile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if folder, ok := p.Folder(sid); !ok || folder != "-work-alpha" {
-		t.Fatalf("a hit is cached: %q %v", folder, ok)
+		t.Fatalf("the index keeps its answer until it is rebuilt: %q %v", folder, ok)
 	}
 }
 
@@ -130,7 +132,7 @@ func TestProjectsChoosesTheFolderWhoseTranscriptWasWrittenLast(t *testing.T) {
 	}
 }
 
-func TestProjectsFollowsAResumedSessionAfterTheRecheckTime(t *testing.T) {
+func TestProjectsFollowsAResumedSessionAfterTheIndexTime(t *testing.T) {
 	dir := t.TempDir()
 	clock := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
 	transcript(t, dir, "-work-alpha", sid)
@@ -142,13 +144,13 @@ func TestProjectsFollowsAResumedSessionAfterTheRecheckTime(t *testing.T) {
 		t.Fatalf("setup: %q", folder)
 	}
 	touch(t, dir, "-work-beta", sid, clock.Add(time.Second)) // resumed from the other folder
-	clock = clock.Add(recheckTTL / 2)
+	clock = clock.Add(indexTTL / 2)
 	if folder, _ := p.Folder(sid); folder != "-work-alpha" {
-		t.Fatalf("within the time the answer is the cached one: %q", folder)
+		t.Fatalf("within the index time the answer is the indexed one: %q", folder)
 	}
-	clock = clock.Add(recheckTTL)
+	clock = clock.Add(indexTTL)
 	if folder, ok := p.Folder(sid); !ok || folder != "-work-beta" {
-		t.Fatalf("after the time the session moves to its current folder: %q %v", folder, ok)
+		t.Fatalf("after the index time the session moves to its current folder: %q %v", folder, ok)
 	}
 }
 
@@ -161,18 +163,80 @@ func TestProjectsKeepsAnAnswerWhoseTranscriptStaysInOneFolder(t *testing.T) {
 		if folder, ok := p.Folder(sid); !ok || folder != "-work-alpha" {
 			t.Fatalf("%d: %q %v", i, folder, ok)
 		}
-		clock = clock.Add(recheckTTL + time.Second)
+		clock = clock.Add(indexTTL + time.Second)
 	}
 }
 
-func TestProjectsCachesAreBounded(t *testing.T) {
+func TestProjectsIndexHoldsOneEntryPerSessionFileNotPerLookup(t *testing.T) {
 	dir := t.TempDir()
+	transcript(t, dir, "-work-alpha", sid)
+	transcript(t, dir, "-work-beta", sid) // the same session in two folders is one entry
 	p := NewProjects(dir, time.Now)
-	for i := 0; i < 3*maxCached; i++ {
+	for i := 0; i < 3000; i++ {
 		p.Folder(fmt.Sprintf("missing-%d", i))
 	}
-	if n := p.size(); n > maxCached {
-		t.Fatalf("cache grew to %d", n)
+	if n := p.size(); n != 1 {
+		t.Fatalf("the index holds %d entries for one session", n)
+	}
+}
+
+func TestProjectsLookupsOfAWeekShareOneDirectoryPass(t *testing.T) {
+	dir, sids := weekDir(t)
+	p := NewProjects(dir, time.Now)
+	for _, s := range sids {
+		if _, ok := p.Folder(s); !ok {
+			t.Fatal("session not found")
+		}
+	}
+	if n := p.passes.Load(); n != 1 {
+		t.Fatalf("%d lookups made %d directory passes, want 1", len(sids), n)
+	}
+}
+
+func TestProjectsConcurrentLookupsAtExpiryShareOnePass(t *testing.T) {
+	dir, sids := weekDir(t)
+	clock := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	var now atomic.Int64
+	now.Store(clock.UnixNano())
+	p := NewProjects(dir, func() time.Time { return time.Unix(0, now.Load()).UTC() })
+	if _, ok := p.Folder(sids[0]); !ok {
+		t.Fatal("setup")
+	}
+	now.Add(int64(indexTTL + time.Second))
+	var wg sync.WaitGroup
+	for g := 0; g < 32; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for _, s := range sids[:100] {
+				if _, ok := p.Folder(s); !ok {
+					t.Error("session not found")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := p.passes.Load(); n != 2 {
+		t.Fatalf("made %d directory passes, want 1 at the start and 1 at the expiry", n)
+	}
+}
+
+func TestProjectsKeepsTheIndexWhenTheDirectoryCannotBeRead(t *testing.T) {
+	dir := t.TempDir()
+	clock := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	transcript(t, dir, "-work-alpha", sid)
+	p := NewProjects(dir, func() time.Time { return clock })
+	if _, ok := p.Folder(sid); !ok {
+		t.Fatal("setup")
+	}
+	if err := os.Rename(dir, dir+"-gone"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Rename(dir+"-gone", dir) })
+	clock = clock.Add(indexTTL + time.Second)
+	if folder, ok := p.Folder(sid); !ok || folder != "-work-alpha" {
+		t.Fatalf("a failed rebuild must not empty the index: %q %v", folder, ok)
 	}
 }
 
