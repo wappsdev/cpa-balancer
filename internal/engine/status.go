@@ -80,6 +80,22 @@ type View struct {
 	Affinity *AffinityView `json:"affinity,omitempty"`
 	// Meter is added with the history's sessions (see AddSessions).
 	Meter *MeterView `json:"meter,omitempty"`
+	// ExtraModels are the models outside CPA's catalog and the accounts each is pinned to.
+	ExtraModels []ExtraModelView `json:"extra_models,omitempty"`
+}
+
+type ExtraModelView struct {
+	ID          string              `json:"id"`
+	DisplayName string              `json:"display_name"`
+	Accounts    []ExtraModelAccount `json:"accounts"` // in the order they are tried
+}
+
+type ExtraModelAccount struct {
+	AuthFile string `json:"auth_file"`
+	Name     string `json:"name"`
+	// State is "ready", "held back" (CPA cools it down), "disabled" (switched off by hand) or
+	// "not loaded" (CPA does not list it).
+	State string `json:"state"`
 }
 
 // Config is the configuration the engine runs on; it never changes for one engine.
@@ -133,5 +149,6 @@ func (e *Engine) Status() View {
 		v.Accounts = append(v.Accounts, av)
 	}
 	v.Affinity = e.affinityView(now)
+	v.ExtraModels = e.extraModelViews()
 	return v
 }

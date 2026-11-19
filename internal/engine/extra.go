@@ -53,6 +53,36 @@ func ModelInfos(models []config.ExtraModel) []pluginapi.ModelInfo {
 	return out
 }
 
+// extraModelViews says, for the status page, where each extra model can go now; callers hold e.mu.
+func (e *Engine) extraModelViews() []ExtraModelView {
+	if len(e.cfg.ExtraModels) == 0 {
+		return nil
+	}
+	names := e.cfg.Names()
+	out := make([]ExtraModelView, 0, len(e.cfg.ExtraModels))
+	for _, m := range e.cfg.ExtraModels {
+		v := ExtraModelView{ID: m.ID, DisplayName: m.DisplayName}
+		if v.DisplayName == "" {
+			v.DisplayName = m.ID
+		}
+		for _, a := range m.Accounts {
+			cred, listed := e.credentials[a]
+			state := "ready"
+			switch {
+			case !listed:
+				state = "not loaded"
+			case cred.disabled:
+				state = "disabled"
+			case cred.unavailable:
+				state = "held back"
+			}
+			v.Accounts = append(v.Accounts, ExtraModelAccount{AuthFile: a, Name: names[a], State: state})
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 // RefuseExtra is the answer for a pick the plugin could not make (a panic): an extra model is
 // refused, anything else is left to the caller.
 func RefuseExtra(cfg config.Config, model string) (pluginapi.SchedulerPickResponse, bool) {

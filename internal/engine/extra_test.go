@@ -106,6 +106,45 @@ func TestAnExtraModelIsPinnedWhilePausedAndInShadowMode(t *testing.T) {
 	}
 }
 
+func TestStatusListsEachExtraModelWithTheStateOfItsAccounts(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts = append(cfg.Accounts, config.Account{AuthFile: X, Label: "spare"})
+	cfg.ExtraModels = []config.ExtraModel{{ID: Extra, DisplayName: "Extra One", Accounts: []string{G, X, W}, ContextLength: 1000, MaxCompletionTokens: 100}}
+	h := newHost()
+	h.files[0].Disabled = true // W
+	e := New(cfg, h, (&clock{t0}).now, nil)
+	e.refreshCredentials()
+	got := e.Status().ExtraModels
+	want := []ExtraModelView{{ID: Extra, DisplayName: "Extra One", Accounts: []ExtraModelAccount{
+		{AuthFile: G, Name: e.cfg.Names()[G], State: "ready"},
+		{AuthFile: X, Name: "spare", State: "not loaded"},
+		{AuthFile: W, Name: e.cfg.Names()[W], State: "disabled"},
+	}}}
+	if len(got) != 1 || got[0].ID != want[0].ID || got[0].DisplayName != want[0].DisplayName || len(got[0].Accounts) != 3 {
+		t.Fatalf("extra models = %+v", got)
+	}
+	for i, a := range got[0].Accounts {
+		if a != want[0].Accounts[i] {
+			t.Fatalf("account %d = %+v, want %+v", i, a, want[0].Accounts[i])
+		}
+	}
+	if New(testConfig(t), newHost(), (&clock{t0}).now, nil).Status().ExtraModels != nil {
+		t.Fatal("no extra models, no list")
+	}
+}
+
+func TestStatusSaysWhenCPAHoldsAnExtraModelsAccountBack(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.ExtraModels = []config.ExtraModel{{ID: Extra, Accounts: []string{G}, ContextLength: 1000, MaxCompletionTokens: 100}}
+	h := newHost()
+	h.files[1].Unavailable = true // G cooling down
+	e := New(cfg, h, (&clock{t0}).now, nil)
+	e.refreshCredentials()
+	if got := e.Status().ExtraModels[0]; got.DisplayName != Extra || got.Accounts[0].State != "held back" {
+		t.Fatalf("extra model = %+v", got)
+	}
+}
+
 func TestOtherModelsAreNotTouchedByExtraModels(t *testing.T) {
 	plain := newWorld(t, W, G, X)
 	plain.folder("-work-alpha", 1)
