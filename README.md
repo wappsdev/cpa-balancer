@@ -603,6 +603,8 @@ order. To unload it entirely, disable the plugin in the Management Center's plug
 
 Under CPA's management API, at `/v0/management/plugins/cpa-balancer`, with CPA's management key:
 
+`/status` and `/outlook` are built once for all callers and kept for 5 seconds; an older view is answered at once while one rebuild runs, and none older than 60 seconds is answered. A pin, `/run`, `/recheck`, an applied `/rebalance` and a configuration change drop the kept view, so the next answer shows them.
+
 | Method | Path | |
 |---|---|---|
 | GET | `/status` | accounts, readings, caps, the decision per bucket, recent changes, the sessions of the last 5 hours and 7 days, and `affinity`: the project homes, the pins, each recent session's account and reason by session key, each project's use in both windows (`projects`) and the folder of each listed root session (`session_projects`); `project_of` maps every listed folder to its project (a git worktree to its main repository's folder), and a project in `projects` carries its worktrees' own figures in `worktrees` |

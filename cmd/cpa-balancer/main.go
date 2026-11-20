@@ -45,10 +45,50 @@ import (
 	"github.com/wappsdev/cpa-balancer/internal/history"
 	"github.com/wappsdev/cpa-balancer/internal/outlook"
 	"github.com/wappsdev/cpa-balancer/internal/transcripts"
+	"github.com/wappsdev/cpa-balancer/internal/viewcache"
 	"github.com/wappsdev/cpa-balancer/internal/web"
 )
 
 const tickInterval = 30 * time.Second
+
+// The status and the outlook are asked for by every Claude Code session's HUD, each on its own
+// timer, and building one reads about two weeks of history: tens of milliseconds on a quiet
+// machine, many seconds on a loaded one. So each is built once for all callers (see viewcache).
+//
+// viewTTL is how long a built view counts as fresh. The state moves only on a tick (every 30 s),
+// on traffic, and on a change the page asks for (which drops the view), so 5 s hides nothing the
+// page could show and still bounds the work to one build per 5 s however many sessions ask.
+// viewMaxAge is two ticks: past it a caller waits for a rebuild rather than see a view that old.
+const (
+	viewTTL    = 5 * time.Second
+	viewMaxAge = 60 * time.Second
+)
+
+var (
+	statusView  = viewcache.New(viewTTL, viewMaxAge, time.Now, buildStatus)
+	outlookView = viewcache.New(viewTTL, viewMaxAge, time.Now, buildOutlook)
+)
+
+// invalidateViews drops the cached views. Every change the next status or outlook must show calls
+// it after the change is made.
+func invalidateViews() {
+	statusView.Invalidate()
+	outlookView.Invalidate()
+}
+
+// cachedView reads a cache; a failed build is logged here, and the caller answers the error.
+func cachedView(name string, c *viewcache.Cache[any]) (any, error) {
+	v, err := c.Get()
+	if err != nil {
+		var p *viewcache.PanicError
+		if errors.As(err, &p) {
+			host.Log("error", fmt.Sprintf("cpa-balancer: panic building the %s: %v\n%s", name, p.Value, p.Stack))
+		} else {
+			host.Log("error", fmt.Sprintf("cpa-balancer: building the %s failed: %v", name, err))
+		}
+	}
+	return v, err
+}
 
 var (
 	mu         sync.Mutex
@@ -291,6 +331,7 @@ func configure(req []byte) []byte {
 		}
 		go safeTick()
 	}
+	invalidateViews() // the engine or the config error the views were built from may be gone
 	return ok(map[string]any{
 		"schema_version": pluginabi.SchemaVersion,
 		"metadata": pluginapi.Metadata{Name: web.PluginID, Version: "0.2.0", Author: "Adnan Kurt",
@@ -304,23 +345,34 @@ func configure(req []byte) []byte {
 type pluginAPI struct{}
 
 func (pluginAPI) Status() any {
+	v, err := cachedView("status", statusView)
+	if err != nil {
+		return map[string]string{"error": err.Error()}
+	}
+	return v
+}
+
+// buildStatus assembles the status view. The engine's lock is held only inside e.Status, which
+// reads memory; the history is read after it is released.
+func buildStatus() (any, error) {
 	mu.Lock()
 	e, cfgErr, rec := current, configErr, recorder
 	mu.Unlock()
 	if e == nil {
-		return map[string]string{"error": "not configured", "config_error": cfgErr}
+		return map[string]string{"error": "not configured", "config_error": cfgErr}, nil
 	}
 	v := e.Status()
 	v.ConfigError = cfgErr
 	if rec != nil {
 		e.AddSessions(&v, e.ReadSessions(time.Now()))
 	}
-	return v
+	return v, nil
 }
 
 // Pin pins a folder or a main session to an account; an empty account removes the pin. Nothing but
 // the pin itself is named in an error.
 func (pluginAPI) Pin(kind, key, account string) error {
+	defer invalidateViews()
 	e := engineNow()
 	if e == nil {
 		return errors.New("not configured")
@@ -333,6 +385,9 @@ func (pluginAPI) Pin(kind, key, account string) error {
 
 // Rebalance plans a fresh placement of the projects without a folder pin, and applies it when asked.
 func (pluginAPI) Rebalance(apply bool) (any, error) {
+	if apply {
+		defer invalidateViews()
+	}
 	e := engineNow()
 	if e == nil {
 		return nil, errors.New("not configured")
@@ -368,7 +423,9 @@ func (pluginAPI) Transcripts(rangeName string) (any, error) {
 }
 
 // Outlook looks a week ahead at all accounts together.
-func (pluginAPI) Outlook() (any, error) {
+func (pluginAPI) Outlook() (any, error) { return cachedView("outlook", outlookView) }
+
+func buildOutlook() (any, error) {
 	mu.Lock()
 	e, rec := current, recorder
 	mu.Unlock()
@@ -380,11 +437,13 @@ func (pluginAPI) Outlook() (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return outlook.Build(e.Status(), e.Config(), h, now)
+	both, err := outlook.Build(e.Status(), e.Config(), h, now)
+	return both, err
 }
 
 func (a pluginAPI) Run() any {
 	safeTick()
+	invalidateViews()
 	return a.Status()
 }
 
@@ -393,6 +452,7 @@ func (pluginAPI) Recheck(authFile string) any {
 	if e == nil {
 		return map[string]string{"error": "not configured"}
 	}
+	defer invalidateViews()
 	return e.Recheck(authFile)
 }
 
@@ -436,6 +496,7 @@ func safeTick() {
 }
 
 func shutdown() {
+	defer invalidateViews()
 	mu.Lock()
 	e, done := current, stop
 	stop = nil
