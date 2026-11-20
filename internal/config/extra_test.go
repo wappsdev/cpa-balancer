@@ -50,7 +50,6 @@ func TestExtraModelsAreValidated(t *testing.T) {
 		{"no id", strings.Replace(extraOne, "id: claude-mythos-9-1", `id: ""`, 1), "id"},
 		{"an id with a suffix", strings.Replace(extraOne, "id: claude-mythos-9-1", `id: "claude-mythos-9-1(high)"`, 1), "id"},
 		{"an id with a prefix", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: p/claude-mythos-9-1", 1), "id"},
-		{"a bucket model", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-mythos-9-5", 1), "bucket"},
 		{"a built-in claude model", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-opus-5-5", 1), "claude-mythos-"},
 		{"a model of the catalog's newer list", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-fable-5-2", 1), "claude-mythos-"},
 		{"a name of another family", strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-new-1", 1), "claude-mythos-"},
@@ -100,4 +99,26 @@ func equalExtra(a, b ExtraModel) bool {
 	return a.ID == b.ID && a.DisplayName == b.DisplayName && slices.Equal(a.Accounts, b.Accounts) &&
 		a.ContextLength == b.ContextLength && a.MaxCompletionTokens == b.MaxCompletionTokens &&
 		slices.Equal(a.ThinkingLevels, b.ThinkingLevels)
+}
+
+// An extra model may be listed in the bucket whose quota it spends: the bucket names the quota, the
+// extra model names the accounts.
+func TestAnExtraModelMayBeInTheFableBucket(t *testing.T) {
+	cfg, err := Parse([]byte(extraBase + strings.Replace(extraOne, "id: claude-mythos-9-1", "id: claude-mythos-9-5", 1)))
+	if err != nil {
+		t.Fatalf("an extra model listed in buckets.fable is valid, got %v", err)
+	}
+	if m, ok := cfg.ExtraModel("claude-mythos-9-5"); !ok || !slices.Equal(m.Accounts, []string{"claude-g.json"}) {
+		t.Fatalf("ExtraModel = %+v, %v", m, ok)
+	}
+}
+
+// A Mythos model spends the Fable/Mythos share, so listing it in the main bucket would put its use
+// in two quotas at once; the config refuses it and names the bucket to use.
+func TestAnExtraModelInTheMainBucketIsRefused(t *testing.T) {
+	cfg := strings.Replace(extraBase, "main: [claude-opus-5-5]", "main: [claude-opus-5-5, claude-mythos-9-1]", 1)
+	_, err := Parse([]byte(cfg + extraOne))
+	if err == nil || !strings.Contains(err.Error(), "main bucket") || !strings.Contains(err.Error(), "buckets.fable") {
+		t.Fatalf("err = %v, want one naming the main bucket and buckets.fable", err)
+	}
 }

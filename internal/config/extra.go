@@ -12,6 +12,9 @@ import (
 // provider, and the scheduler sends a request for it to one of these accounts or refuses it: it
 // never falls back to another account, which would answer 404 or spend its own quota.
 //
+// The model may also be listed in the Fable bucket: the bucket names the quota it spends, this entry
+// names the accounts that may serve it, and a request for it is picked among these only.
+//
 // The capabilities are set here because a plugin cannot read CPA's model registry.
 type ExtraModel struct {
 	ID          string `yaml:"id" json:"id"`
@@ -68,11 +71,14 @@ func (c Config) InFableShare(model string) bool {
 }
 
 // FableShareModels are the models of the shared Fable/Mythos limit: the Fable bucket's, then the
-// extra models'.
+// extra models' that the bucket does not list already (an extra model may be in the Fable bucket;
+// it is one model and counts once).
 func (c Config) FableShareModels() []string {
 	out := append([]string(nil), c.Buckets.Fable...)
 	for _, m := range c.ExtraModels {
-		out = append(out, m.ID)
+		if !slices.Contains(out, m.ID) {
+			out = append(out, m.ID)
+		}
 	}
 	return out
 }
@@ -91,8 +97,8 @@ func (c Config) validateExtraModels() error {
 			return fmt.Errorf("extra_models: an id must be claude-mythos- followed by lower-case letters, digits, dots or dashes, got %q", m.ID)
 		case seen[m.ID]:
 			return fmt.Errorf("extra_models: %s is listed twice", m.ID)
-		case slices.Contains(c.Buckets.Main, m.ID) || slices.Contains(c.Buckets.Fable, m.ID):
-			return fmt.Errorf("extra_models: %s is in a bucket; an extra model is pinned, not balanced", m.ID)
+		case slices.Contains(c.Buckets.Main, m.ID):
+			return fmt.Errorf("extra_models: %s is in the main bucket; a Mythos model spends the Fable/Mythos share, so list it in buckets.fable or in no bucket", m.ID)
 		case len(m.Accounts) == 0:
 			return fmt.Errorf("extra_models: %s needs at least one account", m.ID)
 		case m.ContextLength <= 0:

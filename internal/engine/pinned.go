@@ -63,8 +63,12 @@ func (e *Engine) pinTier(account string, b quota.Bucket, now time.Time) int {
 }
 
 // pinBucket is the bucket whose limits a pinned request draws on: its model's, else the all-models
-// week (an extra model is in no bucket).
+// week. An extra model that is listed in a bucket draws on that bucket's limits (it is still picked
+// among its own accounts only); it is found by its id, whatever name the request carries.
 func (e *Engine) pinBucket(model string) quota.Bucket {
+	if m, ok := e.cfg.ExtraModel(model); ok {
+		model = m.ID
+	}
 	if b, ok := e.bucketOf(model); ok {
 		return b
 	}

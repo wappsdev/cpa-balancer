@@ -181,6 +181,7 @@ func isClaude(req pluginapi.SchedulerPickRequest) bool {
 // Pick answers scheduler.pick. Its only I/O is the directory-name lookup of a session not seen before.
 func (e *Engine) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
 	e.tagProject(req) // before any early return, so the status groups the session in every mode
+	// An extra model is answered here even when a bucket lists it, so bucket balancing never sees it.
 	if resp, ok := e.pinnedPick(req); ok {
 		return resp
 	}

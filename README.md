@@ -126,7 +126,16 @@ A Claude Mythos model that CPA's catalog does not have can be served through cho
 - An id must start with `claude-mythos-` (lower case). Every request for an extra model is pinned,
   so an id that is also a catalog model would pin all of that model's traffic. The plugin cannot
   read CPA's catalog, and CPA updates the catalog from the network, so the family name is the rule.
-- Each account must be one of `accounts`. An extra model cannot also be in a bucket.
+- Each account must be one of `accounts`.
+- An extra model may also be listed in `buckets.fable`, the bucket whose quota it spends. The bucket
+  says which quota the model uses; `extra_models` says which accounts may serve it, and these are
+  still the only accounts a request for it can reach. The balancer never spreads such a request
+  over the accounts of the bucket. Listing it changes two things: a pinned account whose Fable
+  share is at its cap is skipped (the tiers read the Fable bucket's limits, with the all-models
+  week and the 5-hour window, not only the all-models week), and the model is counted once in the
+  Fable/Mythos share and the usage meter, not twice. Do not list it in `buckets.main`: a Mythos
+  model spends the Fable/Mythos share, so the config is refused with a message that names
+  `buckets.fable`. Without a listing the tiers use the all-models week.
 - CPA asks for the models when it loads the plugin and after a config change. The model stays in
   `/v1/models` while the plugin is loaded, even while none of its accounts is ready; a request
   then gets the refusal. The page lists each extra model with the state of its accounts.

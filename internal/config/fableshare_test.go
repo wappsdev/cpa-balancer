@@ -59,3 +59,18 @@ func TestWithoutExtraModelsTheFableShareIsTheFableBucket(t *testing.T) {
 		t.Fatalf("FableShareModels = %v", got)
 	}
 }
+
+// An extra model that is also in the Fable bucket is one model: it counts once in the share.
+func TestAnExtraModelInTheFableBucketCountsOnceInTheShare(t *testing.T) {
+	cfg, err := Parse([]byte(extraBase + extraOne))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Buckets.Fable = append(cfg.Buckets.Fable, "claude-mythos-9-1")
+	if got := cfg.FableShareModels(); !slices.Equal(got, []string{"claude-fable-5-2", "claude-mythos-9-5", "claude-mythos-9-1"}) {
+		t.Fatalf("FableShareModels = %v, want each model once", got)
+	}
+	if !cfg.InFableShare("claude-mythos-9-1(high)") {
+		t.Fatal("the model is in the share")
+	}
+}
